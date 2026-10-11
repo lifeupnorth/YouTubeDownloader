@@ -1,0 +1,53 @@
+name: Tests
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    name: ${{ matrix.os }} / Python ${{ matrix.python }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [windows-latest, ubuntu-latest]
+        # yt-dlp needs 3.10+; test the oldest supported and the newest.
+        python: ["3.10", "3.14"]
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 15
+    env:
+      # The tests open real Tk windows; Linux runners need a virtual display.
+      # (The runner context isn't available at job level, so go by matrix.os.)
+      DISPLAY_WRAPPER: ${{ startsWith(matrix.os, 'ubuntu') && 'xvfb-run -a' || '' }}
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: actions/setup-python@v7
+        with:
+          python-version: ${{ matrix.python }}
+          cache: pip
+          cache-dependency-path: requirements.txt
+
+      - name: Install dependencies
+        run: python -m pip install -r requirements.txt
+
+      - name: Install a virtual display
+        if: runner.os == 'Linux'
+        run: sudo apt-get update && sudo apt-get install -y xvfb
+
+      - name: Run tests
+        shell: bash
+        run: $DISPLAY_WRAPPER python -m unittest discover -s tests -v
+
+      # Same as a machine without yt-dlp: the app must still start, and the
+      # yt-dlp-dependent tests must skip rather than fail.
+      - name: Run tests without yt-dlp
+        shell: bash
+        run: >-
+          $DISPLAY_WRAPPER python -c "import sys, unittest;
+          sys.modules['yt_dlp'] = None;
+          unittest.main(module=None, argv=['tests', 'discover', '-s', 'tests', '-v'])"

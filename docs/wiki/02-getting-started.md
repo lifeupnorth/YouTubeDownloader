@@ -18,7 +18,7 @@ How to install, run and test the app. There is no `pyproject.toml` or installer:
 | `yt-dlp` | Does the actual extraction and downloading | Pinned to an exact version in `requirements.txt`. Optional at import time: if it's missing, the app offers to install that same version with pip and then asks for a restart. |
 | `ffmpeg` | Merging video and audio, remuxing to MP4, converting to MP3/M4A | Checked at startup and before every download; on Windows it's also found after an install made while the app is open |
 
-`str.removeprefix` is used in `_entry_failed`, so Python 3.9 or newer is needed.
+The pinned yt-dlp requires Python 3.10 or newer, so that's the minimum for the app. The CI tests run on 3.10 and 3.14.
 
 Sources: [README.md:1-11](https://github.com/lifeupnorth/YouTubeDownloader/blob/bd3fd4242f83ee2cf111812e71b6d2db5aa71bdf/README.md#L1-L11), [youtube_downloader.py:1-22](https://github.com/lifeupnorth/YouTubeDownloader/blob/bd3fd4242f83ee2cf111812e71b6d2db5aa71bdf/youtube_downloader.py#L1-L22), [youtube_downloader.py:516-517](https://github.com/lifeupnorth/YouTubeDownloader/blob/bd3fd4242f83ee2cf111812e71b6d2db5aa71bdf/youtube_downloader.py#L516-L517)
 
