@@ -8,14 +8,14 @@
 
 </details>
 
-How to install, run and test the app. There is no `requirements.txt`, `pyproject.toml` or installer: the app is a single script plus two external tools. For what happens once it's running, see [Overview](01-overview.md).
+How to install, run and test the app. There is no `pyproject.toml` or installer: the app is a single script, one pinned Python dependency in `requirements.txt`, and ffmpeg. For what happens once it's running, see [Overview](01-overview.md).
 
 ## Requirements
 
 | Requirement | Why | How it's handled |
 |---|---|---|
 | Python 3 with Tkinter | The UI is `tkinter`/`ttk` | Bundled with python.org installers on Windows and macOS; some Linux distros need a separate `python3-tk` package |
-| `yt-dlp` | Does the actual extraction and downloading | Optional at import time. If it's missing, the app offers to run `pip install yt-dlp` and then asks for a restart. |
+| `yt-dlp` | Does the actual extraction and downloading | Pinned to an exact version in `requirements.txt`. Optional at import time: if it's missing, the app offers to install that same version with pip and then asks for a restart. |
 | `ffmpeg` | Merging video and audio, remuxing to MP4, converting to MP3/M4A | Checked at startup and before every download; on Windows it's also found after an install made while the app is open |
 
 `str.removeprefix` is used in `_entry_failed`, so Python 3.9 or newer is needed.
@@ -25,7 +25,7 @@ Sources: [README.md:1-11](https://github.com/lifeupnorth/YouTubeDownloader/blob/
 ## Install and run
 
 ```
-pip install yt-dlp
+pip install -r requirements.txt
 winget install ffmpeg          (Windows; macOS: brew install ffmpeg)
 python youtube_downloader.py
 ```

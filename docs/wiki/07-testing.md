@@ -9,7 +9,7 @@
 
 </details>
 
-The tests use the standard library `unittest`, with no extra dependencies. They're split into two files: one drives a real Tk window through simulated downloads, and the other covers format selection and ffmpeg detection. Nothing touches the network. There's no CI configuration in the repo, so the tests only run when someone runs them locally.
+The tests use the standard library `unittest`, with no extra dependencies. They're split into three files: one drives a real Tk window through simulated downloads, one covers format selection and ffmpeg detection, and `test_requirements.py` checks that the pinned yt-dlp version in `requirements.txt` matches `YT_DLP_REQUIREMENT` and is what the in-app installer uses. Nothing touches the network. There's no CI configuration in the repo, so the tests only run when someone runs them locally.
 
 ```
 python -m unittest discover -s tests -v

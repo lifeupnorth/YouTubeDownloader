@@ -1,6 +1,12 @@
 # YouTubeDownloader
 A small app to download YouTube videos written in Python.
 
+Install the Python dependency (yt-dlp, pinned to a tested version in
+`requirements.txt`):
+```
+pip install -r requirements.txt
+```
+
 Install ffmpeg before running:
 - Press WIN+R
 - Type : Winget install ffmpeg
