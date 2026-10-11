@@ -6,6 +6,8 @@ import io
 import os
 import sys
 import tempfile
+import threading
+import time
 import unittest
 from unittest import mock
 
@@ -125,6 +127,56 @@ class FormatSelectionTest(unittest.TestCase):
             self.assertEqual([mapping(pp) for pp in extractors], [choice])
 
 
+class UpdateCheckTest(unittest.TestCase):
+    def test_newer_version(self):
+        self.assertTrue(engine.newer_version("v1.0.10", "1.0.9"))
+        self.assertTrue(engine.newer_version("2026.10.01", "2026.8.19"))
+        self.assertFalse(engine.newer_version("v1.0.0", "1.0.0"))
+        self.assertFalse(engine.newer_version("2026.08.19", "2026.8.19"))
+
+    def test_app_version_only_in_the_exe(self):
+        self.assertIsNone(engine.app_version())   # running from source
+        with (tempfile.TemporaryDirectory() as unpacked,
+              mock.patch.object(engine.sys, "frozen", True, create=True),
+              mock.patch.object(engine.sys, "_MEIPASS", unpacked, create=True)):
+            self.assertIsNone(engine.app_version(), "no VERSION file")
+            version_file = os.path.join(unpacked, "VERSION")
+            with open(version_file, "w", encoding="utf-8") as f:
+                f.write("")
+            self.assertIsNone(engine.app_version(), "a test build")
+            with open(version_file, "w", encoding="utf-8") as f:
+                f.write("1.0.3")
+            self.assertEqual(engine.app_version(), "1.0.3")
+
+    def test_exe_says_when_a_newer_release_is_out(self):
+        release = {"tag_name": "v1.0.4", "html_url": "https://github.com/r/v1.0.4"}
+        with (mock.patch.object(engine.sys, "frozen", True, create=True),
+              mock.patch.object(engine, "app_version", return_value="1.0.3"),
+              mock.patch.object(engine, "_get_json", return_value=release) as get):
+            notice = engine.check_for_update()
+            self.assertIn("1.0.4 is out (this is 1.0.3)", notice)
+            self.assertIn("https://github.com/r/v1.0.4", notice)
+            get.assert_called_once_with(engine.LATEST_RELEASE_API)
+            release["tag_name"] = "v1.0.3"
+            self.assertIsNone(engine.check_for_update())
+        with (mock.patch.object(engine.sys, "frozen", True, create=True),
+              mock.patch.object(engine, "app_version", return_value=None),
+              mock.patch.object(engine, "_get_json") as get):
+            self.assertIsNone(engine.check_for_update())   # a test build
+        get.assert_not_called()
+
+    def test_source_never_checks(self):
+        with mock.patch.object(engine, "_get_json") as get:
+            self.assertIsNone(engine.check_for_update())
+        get.assert_not_called()
+
+    def test_no_network_no_notice(self):
+        with (mock.patch.object(engine, "yt_dlp_version", return_value="2026.08.19"),
+              mock.patch.object(engine.urllib.request, "urlopen",
+                                side_effect=OSError("offline"))):
+            self.assertIsNone(engine.check_for_update())
+
+
 class FindFfmpegTest(unittest.TestCase):
     def test_bundled_ffmpeg_only_in_the_exe(self):
         self.assertIsNone(engine.bundled_ffmpeg())   # running from source
@@ -158,6 +210,36 @@ class FindFfmpegTest(unittest.TestCase):
                 mock.patch.object(engine.shutil, "which", return_value=None):
             self.assertIsNone(engine.find_ffmpeg())
         registry.assert_not_called()
+
+    def test_js_runtime_prefers_the_bundled_deno(self):
+        with tempfile.TemporaryDirectory() as unpacked:
+            name = "deno.exe" if sys.platform == "win32" else "deno"
+            open(os.path.join(unpacked, name), "wb").close()
+            with mock.patch.object(engine.sys, "frozen", True, create=True), \
+                    mock.patch.object(engine.sys, "_MEIPASS", unpacked, create=True), \
+                    mock.patch.object(engine, "_js_runtime_supported", return_value=True), \
+                    mock.patch.object(engine.shutil, "which") as which:
+                self.assertEqual(engine.find_js_runtime(),
+                                 ("deno", os.path.join(unpacked, name)))
+            which.assert_not_called()
+
+    def test_js_runtime_skips_old_versions(self):
+        found = {"node": "/bin/node", "bun": "/bin/bun"}
+        with mock.patch.object(engine.sys, "platform", "linux"), \
+                mock.patch.object(engine.shutil, "which", side_effect=found.get), \
+                mock.patch.object(engine, "_js_runtime_supported",
+                                  side_effect=lambda name, path: name == "bun"):
+            self.assertEqual(engine.find_js_runtime(), ("bun", "/bin/bun"))
+        with mock.patch.object(engine.sys, "platform", "linux"), \
+                mock.patch.object(engine.shutil, "which", return_value=None):
+            self.assertIsNone(engine.find_js_runtime())
+
+    @unittest.skipUnless(engine.YT_DLP_AVAILABLE, "needs yt-dlp")
+    def test_js_runtime_version_check(self):
+        # yt-dlp's check: a program that isn't there isn't supported.
+        self.assertFalse(engine._js_runtime_supported("deno", os.path.join("no", "deno")))
+        with mock.patch.object(engine, "yt_dlp", None):   # can't check: let yt-dlp try
+            self.assertTrue(engine._js_runtime_supported("deno", "deno"))
 
     @unittest.skipUnless(sys.platform == "win32", "Windows only")
     def test_registry_path_is_expanded(self):
@@ -437,6 +519,106 @@ class DownloadJobTest(unittest.TestCase):
             job = self.cancel_at((1, -1, 0), tmp, videos=3)
             self.assertEqual(os.listdir(tmp), ["v0.mp4"])
         self.assertEqual(job.summary(), "Download canceled (1 saved).")
+
+    def test_job_uses_the_js_runtime(self):
+        job = engine.DownloadJob("https://x", fmt="mp3", folder="dl", ffmpeg="ffmpeg",
+                                 whole_playlist=False, on_progress=None, on_log=None,
+                                 ask=None, js_runtime=("deno", "C:/deno.exe"))
+        self.assertEqual(job.options()["js_runtimes"], {"deno": {"path": "C:/deno.exe"}})
+        self.assertNotIn("js_runtimes", make_job().options())   # yt-dlp's default
+
+    def test_missing_js_runtime_warning_isnt_logged(self):
+        job = self.run_job(make_fake_ydl(
+            streams=1, warn="[youtube] No supported JavaScript runtime could be found."))
+        self.assertFalse([line for line in job.log if "JavaScript" in line])
+    def test_cancel_while_reading_a_playlist(self):
+        # yt-dlp reads a big channel's pages before the first progress
+        # update; each page is a status message, where cancel is checked.
+        pages = []
+
+        class Fake(make_fake_ydl(streams=1)):
+            def _run(self):
+                for page in range(100):
+                    pages.append(page)
+                    if page == 2:
+                        job.cancel()
+                    self.opts["logger"].debug(f"[youtube:tab] Downloading page {page}")
+                super()._run()
+
+        job = make_job(whole_playlist=True)
+        self.run_job(Fake, job=job)
+        self.assertEqual(pages, [0, 1, 2])
+        self.assertEqual(job.outcome, "canceled")
+        self.assertEqual(job.summary(), "Download canceled.")
+
+    @unittest.skipUnless(engine.YT_DLP_AVAILABLE, "needs yt-dlp")
+    def test_cancel_stops_ffmpeg(self):
+        import yt_dlp.postprocessor.ffmpeg as ffmpeg_pp
+
+        with tempfile.TemporaryDirectory() as tmp:
+            out = os.path.join(tmp, "v0.mp3")
+
+            class Fake(make_fake_ydl(streams=1)):
+                def _run(self):
+                    # Like a conversion: yt-dlp's Popen.run, output file
+                    # last. Here a process that would take 60 s.
+                    threading.Timer(0.5, job.cancel).start()
+                    ffmpeg_pp.Popen.run([sys.executable, "-c",
+                                         "import sys, time; open(sys.argv[1][5:], 'wb');"
+                                         " time.sleep(60)", "file:" + out])
+                    # yt-dlp logs the failed conversion; not a skipped video.
+                    self.opts["logger"].error("ERROR: Postprocessing: ffmpeg failed")
+
+            job = make_job()
+            start = time.monotonic()
+            self.run_job(Fake, job=job)
+            self.assertLess(time.monotonic() - start, 10)
+            self.assertEqual(os.listdir(tmp), [])
+        self.assertEqual(job.outcome, "canceled")
+        self.assertEqual(job.skipped, [])
+        self.assertEqual(job.summary(), "Download canceled (1 partial file removed).")
+
+    @unittest.skipUnless(engine.YT_DLP_AVAILABLE, "needs yt-dlp")
+    def test_cancel_keeps_a_file_from_an_earlier_run(self):
+        # e.g. ffprobe-like runs reading a finished .m4a, or ffmpeg writing to
+        # a file that's already there: canceling them removes nothing.
+        import yt_dlp.postprocessor.ffmpeg as ffmpeg_pp
+
+        with tempfile.TemporaryDirectory() as tmp:
+            old = os.path.join(tmp, "old.m4a")
+            open(old, "wb").close()
+
+            class Fake(make_fake_ydl(streams=1)):
+                def _run(self):
+                    threading.Timer(0.5, job.cancel).start()
+                    ffmpeg_pp.Popen.run([sys.executable, "-c",
+                                         "import time; time.sleep(60)", "file:" + old])
+                    self.opts["logger"].error("ERROR: Postprocessing: ffmpeg failed")
+
+            job = make_job()
+            self.run_job(Fake, job=job)
+            self.assertEqual(os.listdir(tmp), ["old.m4a"])
+        self.assertEqual(job.outcome, "canceled")
+        self.assertEqual(job.summary(), "Download canceled.")
+
+    def test_only_new_ffmpeg_outputs_count(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            new, old = os.path.join(tmp, "new.mp3"), os.path.join(tmp, "old.m4a")
+            open(old, "wb").close()
+            cases = {
+                ("ffmpeg", "-i", "file:in.webm", "-vn", "file:" + new): new,
+                ("C:/x/ffmpeg.exe", "-y", "file:" + new): new,
+                ("ffmpeg", "-i", "file:in.webm", "file:" + old): None,     # already there
+                ("ffprobe", "-show_streams", "file:" + new): None,
+                ("ffprobe.exe", "-show_streams", "file:" + new): None,
+                ("ffmpeg", "-i", "file:" + new): None,                    # only reads it
+                ("ffmpeg", "-i", "file:in.webm", "-"): None,              # stdout
+                ("aria2c", "https://example.com/v"): None,
+                ("ffmpeg",): None,
+            }
+            for args, expected in cases.items():
+                with self.subTest(args):
+                    self.assertEqual(engine._new_ffmpeg_output(list(args)), expected)
 
     def test_yt_dlp_warnings_are_logged(self):
         job = self.run_job(make_fake_ydl(streams=1, warn="[youtube] No JS runtime"))

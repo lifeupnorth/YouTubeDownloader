@@ -35,7 +35,9 @@ class SmokeDownloadTest(unittest.TestCase):
     def smoke(self, job_class):
         with (tempfile.TemporaryDirectory() as tmp,
               mock.patch.object(engine, "DownloadJob", job_class),
-              mock.patch.object(engine, "find_ffmpeg", return_value="ffmpeg")):
+              mock.patch.object(engine, "find_ffmpeg", return_value="ffmpeg"),
+              mock.patch.object(engine, "find_js_runtime",
+                                return_value=("deno", "/bin/deno"))):
             report = os.path.join(tmp, "report.json")
             ytd.smoke_download("https://x", "mp3", tmp, report)
             with open(report, encoding="utf-8") as f:
@@ -50,6 +52,10 @@ class SmokeDownloadTest(unittest.TestCase):
         options = FakeJob.last.options
         self.assertFalse(options["whole_playlist"])
         self.assertFalse(options["ask"]("Download all its videos?"))
+
+    def test_uses_the_js_runtime(self):
+        self.smoke(FakeJob)
+        self.assertEqual(FakeJob.last.options["js_runtime"], ("deno", "/bin/deno"))
 
     def test_a_crash_is_reported(self):
         report = self.smoke(CrashingJob)
