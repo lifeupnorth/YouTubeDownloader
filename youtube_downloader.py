@@ -7,6 +7,8 @@ Requirements: pip install yt-dlp
 import tkinter as tk
 from tkinter import ttk, filedialog, messagebox
 import threading
+import queue
+import functools
 import os
 import sys
 import subprocess
@@ -32,6 +34,28 @@ WARNING   = "#f59e0b"
 BORDER    = "#333333"
 
 
+@functools.lru_cache(maxsize=None)
+def _stream_counter_class(base):
+    # Defined lazily because yt_dlp may be missing at import time.
+    class StreamCounter(base):
+        """before_dl hook, run once per video (also per playlist entry).
+
+        Merged formats download video and audio as separate streams, and the
+        progress hook's info_dict no longer lists them, so count them here.
+        """
+
+        def __init__(self, app):
+            super().__init__()
+            self._app = app
+
+        def run(self, info):
+            self._app._stream_index = 0
+            self._app._stream_count = len(info.get("requested_formats") or ()) or 1
+            return [], info
+
+    return StreamCounter
+
+
 class YouTubeDownloader(tk.Tk):
     def __init__(self):
         super().__init__()
@@ -48,8 +72,16 @@ class YouTubeDownloader(tk.Tk):
         self.status_var    = tk.StringVar(value="Ready")
         self.is_running    = False
         self._after_id     = None
+        self._ui_queue     = queue.Queue()
+        self._active_workers = 0
+        self._closing      = False
+        self._latest_progress = None
+        self._shown_progress  = None
+        self._stream_index = 0
+        self._stream_count = 1
 
         self._build_ui()
+        self.protocol("WM_DELETE_WINDOW", self._on_close)
 
         if not YT_DLP_AVAILABLE:
             self.after(300, self._prompt_install)
@@ -242,6 +274,52 @@ class YouTubeDownloader(tk.Tk):
         self.status_var.set(msg)
         self.status_lbl.config(fg=color)
 
+    # Tkinter is not thread-safe: worker threads must not touch widgets or
+    # Tk variables. They _post() discrete events and overwrite
+    # _latest_progress; the main thread applies both in _poll_ui_queue().
+    def _post(self, func, *args):
+        self._ui_queue.put((func, args))
+
+    def _start_worker(self, target, *args):
+        self._active_workers += 1
+        if self._after_id is None:
+            self._after_id = self.after(50, self._poll_ui_queue)
+        threading.Thread(target=target, args=args, daemon=True).start()
+
+    def _worker_finished(self):
+        self._active_workers -= 1
+
+    def _poll_ui_queue(self):
+        self._after_id = None
+        progress = self._latest_progress
+        if progress is not None and progress is not self._shown_progress:
+            self._shown_progress = progress
+            self._set_progress(*progress)
+
+        while not self._closing:
+            try:
+                func, args = self._ui_queue.get_nowait()
+            except queue.Empty:
+                break
+            try:
+                func(*args)
+            except Exception:
+                self.report_callback_exception(*sys.exc_info())
+
+        if not self._closing and (self._active_workers or not self._ui_queue.empty()):
+            self._after_id = self.after(50, self._poll_ui_queue)
+
+    def _on_close(self):
+        self._closing = True
+        if self._after_id is not None:
+            self.after_cancel(self._after_id)
+            self._after_id = None
+        self.destroy()
+
+    def _set_progress(self, pct, msg, color):
+        self.progress_var.set(pct)
+        self._set_status(msg, color)
+
     # ── Download logic ───────────────────────────────────────────────────────
 
     def _get_ydl_opts(self, url):
@@ -284,27 +362,30 @@ class YouTubeDownloader(tk.Tk):
 
         return opts
 
+    # Runs on the download thread.
     def _progress_hook(self, d):
+        streams = self._stream_count
         if d["status"] == "downloading":
             total   = d.get("total_bytes") or d.get("total_bytes_estimate", 0)
             downloaded = d.get("downloaded_bytes", 0)
             speed   = d.get("speed", 0) or 0
             eta     = d.get("eta", 0) or 0
 
-            pct = (downloaded / total * 100) if total else 0
+            pct = min(downloaded / total * 100, 100) if total else 0
+            # Tops out at 99; only _download_done moves the bar to 100.
+            pct = (min(self._stream_index, streams - 1) * 100 + pct) / streams * 0.99
             speed_str = f"{speed/1024/1024:.1f} MB/s" if speed > 0 else ""
             eta_str   = f"ETA {eta}s" if eta > 0 else ""
             info      = " · ".join(filter(None, [speed_str, eta_str]))
 
-            self.progress_var.set(pct)
-            self._set_status(
-                f"Downloading… {pct:.1f}%  {info}", WARNING
-            )
+            self._latest_progress = (pct, f"Downloading… {pct:.1f}%  {info}",
+                                     WARNING)
 
         elif d["status"] == "finished":
-            self.progress_var.set(99)
-            self._set_status("Processing…", WARNING)
-            self._log(f"✔ Saved: {d.get('filename', '')}")
+            self._stream_index += 1
+            if self._stream_index >= streams:
+                self._latest_progress = (99, "Processing…", WARNING)
+            self._post(self._log, f"✔ Saved: {d.get('filename', '')}")
 
     def _start_download(self):
         if not YT_DLP_AVAILABLE:
@@ -319,25 +400,30 @@ class YouTubeDownloader(tk.Tk):
             messagebox.showinfo("Busy", "A download is already in progress.")
             return
 
+        opts = self._get_ydl_opts(url)
         self.is_running = True
         self.dl_btn.config(state="disabled", text="Downloading…")
         self.progress_var.set(0)
         self._set_status("Starting download…", WARNING)
         self._log(f"▶ {url}")
 
-        threading.Thread(target=self._download_thread,
-                         args=(url,), daemon=True).start()
+        self._stream_index = 0
+        self._stream_count = 1
+        self._latest_progress = self._shown_progress = None
+        self._start_worker(self._download_thread, url, opts)
 
-    def _download_thread(self, url):
+    def _download_thread(self, url, opts):
         try:
-            opts = self._get_ydl_opts(url)
             with yt_dlp.YoutubeDL(opts) as ydl:
+                counter = _stream_counter_class(yt_dlp.postprocessor.PostProcessor)(self)
+                ydl.add_post_processor(counter, when="before_dl")
                 ydl.download([url])
-            self.after(0, self._download_done, True, None)
+            self._post(self._download_done, True, None)
         except Exception as exc:
-            self.after(0, self._download_done, False, str(exc))
+            self._post(self._download_done, False, str(exc))
 
     def _download_done(self, success, error):
+        self._worker_finished()
         self.is_running = False
         self.dl_btn.config(state="normal", text="⬇  Download")
 
@@ -374,13 +460,14 @@ class YouTubeDownloader(tk.Tk):
                     [sys.executable, "-m", "pip", "install", "yt-dlp"],
                     stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL
                 )
-                self.after(0, self._install_done, True)
+                self._post(self._install_done, True)
             except Exception as e:
-                self.after(0, self._install_done, False, str(e))
+                self._post(self._install_done, False, str(e))
 
-        threading.Thread(target=run, daemon=True).start()
+        self._start_worker(run)
 
     def _install_done(self, ok, err=None):
+        self._worker_finished()
         if ok:
             self._log("✔ yt-dlp installed! Please restart the app.")
             self._set_status("✔ yt-dlp installed — please restart.", SUCCESS)
