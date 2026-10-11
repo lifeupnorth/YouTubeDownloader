@@ -13,6 +13,7 @@ import os
 import shutil
 import sys
 import subprocess
+from urllib.parse import parse_qs, urlparse
 
 # ── Try importing yt-dlp; offer to install if missing ──────────────────────
 try:
@@ -115,6 +116,44 @@ def format_opts(fmt):
     raise ValueError(f"unknown format: {fmt}")
 
 
+def has_playlist(url):
+    return "list" in parse_qs(urlparse(url).query)
+
+
+def is_playlist_link(url):
+    """A link to a playlist itself, not to a video in one (watch?v=…&list=…)."""
+    return urlparse(url).path.rstrip("/").endswith("/playlist") and has_playlist(url)
+
+
+class _YdlLogger:
+    """Hands yt-dlp's errors to on_error; with ignoreerrors they don't raise."""
+
+    def __init__(self, on_error):
+        self.error = on_error
+
+    def debug(self, msg):
+        pass
+
+    info = debug
+
+    def warning(self, msg):
+        print(msg, file=sys.stderr)
+
+
+@functools.lru_cache(maxsize=None)
+def _callback_pp_class(base):
+    class CallbackPP(base):
+        def __init__(self, fn):
+            super().__init__()
+            self._fn = fn
+
+        def run(self, info):
+            self._fn(info)
+            return [], info
+
+    return CallbackPP
+
+
 @functools.lru_cache(maxsize=None)
 def _stream_counter_class(base):
     # Defined lazily because yt_dlp may be missing at import time.
@@ -161,6 +200,8 @@ class YouTubeDownloader(tk.Tk):
         self._shown_progress  = None
         self._stream_index = 0
         self._stream_count = 1
+        self._saved = self._already = 0
+        self._skipped = []
 
         self._build_ui()
         self.protocol("WM_DELETE_WINDOW", self._on_close)
@@ -418,17 +459,24 @@ class YouTubeDownloader(tk.Tk):
     def _get_ydl_opts(self, url, ffmpeg):
         fmt = self.format_var.get()
         out_dir = self.download_path.get()
-        outtmpl = os.path.join(out_dir, "%(title)s.%(ext)s")
+        playlist = self.playlist_var.get() and has_playlist(url)
+        name = "%(title)s.%(ext)s"
+        if playlist:
+            # A folder per playlist; the index keeps same-title videos apart.
+            name = os.path.join("%(playlist_title)s", "%(playlist_index)03d - " + name)
 
         opts = {
-            "outtmpl": outtmpl,
+            "outtmpl": os.path.join(out_dir, name),
             "progress_hooks": [self._progress_hook],
-            "post_hooks": [self._saved_hook],
             # Only affects links to a video in a playlist (watch?v=…&list=…).
-            "noplaylist": not self.playlist_var.get(),
+            "noplaylist": not playlist,
             "quiet": True,
             "no_warnings": False,
         }
+        if playlist:
+            # Like the yt-dlp CLI: skip unavailable entries instead of stopping.
+            opts["ignoreerrors"] = "only_download"
+            opts["logger"] = _YdlLogger(self._entry_failed)
 
         opts.update(format_opts(fmt))
         opts["ffmpeg_location"] = ffmpeg
@@ -438,6 +486,9 @@ class YouTubeDownloader(tk.Tk):
     # Runs on the download thread.
     def _progress_hook(self, d):
         streams = self._stream_count
+        entry = d.get("info_dict") or {}
+        index, count = entry.get("playlist_index"), entry.get("n_entries")
+        video = f"Video {index}/{count} · " if index and count else ""
         if d["status"] == "downloading":
             total   = d.get("total_bytes") or d.get("total_bytes_estimate", 0)
             downloaded = d.get("downloaded_bytes", 0)
@@ -451,18 +502,31 @@ class YouTubeDownloader(tk.Tk):
             eta_str   = f"ETA {eta}s" if eta > 0 else ""
             info      = " · ".join(filter(None, [speed_str, eta_str]))
 
-            self._latest_progress = (pct, f"Downloading… {pct:.1f}%  {info}",
-                                     WARNING)
+            self._latest_progress = (
+                pct, f"{video}Downloading… {pct:.1f}%  {info}", WARNING)
 
         elif d["status"] == "finished":
             self._stream_index += 1
             if self._stream_index >= streams:
-                self._latest_progress = (99, "Processing…", WARNING)
+                self._latest_progress = (99, f"{video}Processing…", WARNING)
 
-    # Runs on the download thread, once per video after ffmpeg has finished;
-    # the progress hook only sees the temporary per-stream files.
-    def _saved_hook(self, filepath):
-        self._post(self._log, f"✔ Saved: {filepath}")
+    # Runs on the download thread as an after_move post-processor: once per
+    # video, with its final file (the progress hook only sees the temporary
+    # per-stream files).
+    def _file_done(self, info):
+        path = info.get("filepath", "")
+        if info.get("__real_download"):
+            self._saved += 1
+            self._post(self._log, f"✔ Saved: {path}")
+        else:
+            self._already += 1
+            self._post(self._log, f"• Already downloaded: {path}")
+
+    # Runs on the download thread (yt-dlp's logger, playlist mode only).
+    def _entry_failed(self, msg):
+        msg = msg.removeprefix("ERROR: ")
+        self._skipped.append(msg)
+        self._post(self._log, f"✘ Skipped: {msg}")
 
     def _start_download(self):
         if not YT_DLP_AVAILABLE:
@@ -483,6 +547,12 @@ class YouTubeDownloader(tk.Tk):
             messagebox.showinfo("Busy", "A download is already in progress.")
             return
 
+        if is_playlist_link(url) and not self.playlist_var.get():
+            if not messagebox.askyesno(
+                    "Playlist link", "This is a playlist link. Download all videos?"):
+                return
+            self.playlist_var.set(True)
+
         opts = self._get_ydl_opts(url, ffmpeg)
         self.is_running = True
         self.dl_btn.config(state="disabled", text="Downloading…")
@@ -492,14 +562,19 @@ class YouTubeDownloader(tk.Tk):
 
         self._stream_index = 0
         self._stream_count = 1
+        self._saved = self._already = 0
+        self._skipped = []
         self._latest_progress = self._shown_progress = None
         self._start_worker(self._download_thread, url, opts)
 
     def _download_thread(self, url, opts):
         try:
             with yt_dlp.YoutubeDL(opts) as ydl:
-                counter = _stream_counter_class(yt_dlp.postprocessor.PostProcessor)(self)
-                ydl.add_post_processor(counter, when="before_dl")
+                base = yt_dlp.postprocessor.PostProcessor
+                ydl.add_post_processor(_stream_counter_class(base)(self),
+                                       when="before_dl")
+                ydl.add_post_processor(_callback_pp_class(base)(self._file_done),
+                                       when="after_move")
                 ydl.download([url])
             self._post(self._download_done, True, None)
         except Exception as exc:
@@ -510,7 +585,20 @@ class YouTubeDownloader(tk.Tk):
         self.is_running = False
         self.dl_btn.config(state="normal", text="⬇  Download")
 
-        if success:
+        if success and self._skipped and not (self._saved or self._already):
+            success, error = False, self._skipped[0]
+        if success and (self._skipped or self._saved + self._already > 1):
+            parts = [f"{self._saved} saved"]
+            if self._already:
+                parts.append(f"{self._already} already downloaded")
+            if self._skipped:
+                parts.append(f"{len(self._skipped)} skipped")
+            summary = "Done: " + ", ".join(parts)
+            self.progress_var.set(100)
+            self._set_status(f"✔ {summary}", WARNING if self._skipped else SUCCESS)
+            self._log(f"✔ {summary}" + chr(10))
+            messagebox.showinfo("Done", summary)
+        elif success:
             self.progress_var.set(100)
             self._set_status("✔ Download complete!", SUCCESS)
             self._log("✔ Done!\n")
