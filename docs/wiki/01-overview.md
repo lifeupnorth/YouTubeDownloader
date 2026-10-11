@@ -104,7 +104,7 @@ Sources: [requirements.txt](https://github.com/lifeupnorth/YouTubeDownloader/blo
 | `requirements.txt` / `requirements-dev.txt` | 9 / 3 | Pinned yt-dlp and Pillow / ruff |
 | `ruff.toml` | 8 | Lint rules |
 | `.github/workflows/tests.yml` | 73 | Tests (Windows and Ubuntu, Python 3.10 and 3.14) and lint on every push to `main` and every PR |
-| `packaging/build_exe.py` | 138 | Builds the one-file Windows app with PyInstaller and the bundled ffmpeg |
+| `packaging/build_exe.py` | 138 | Builds the one-file Windows app with PyInstaller and the bundled ffmpeg and deno |
 | `.github/workflows/build-exe.yml` | 73 | Builds and checks the .exe; attaches it to releases for version tags |
 | `.github/dependabot.yml` | 27 | Weekly Dependabot checks for pip packages (including PyInstaller) and GitHub Actions |
 | `README.md` | 101 | Requirements, install, run and usage, tests, disclaimer, license |

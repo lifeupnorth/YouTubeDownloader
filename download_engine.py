@@ -159,21 +159,58 @@ def _registry_path():
     return os.pathsep.join(parts)
 
 
-def bundled_ffmpeg():
-    """The ffmpeg packed into the one-file .exe (packaging/build_exe.py), when
-    running from it; PyInstaller unpacks it into sys._MEIPASS."""
+def _bundled(name):
+    # A program packed into the one-file .exe (packaging/build_exe.py), when
+    # running from it; PyInstaller unpacks it into sys._MEIPASS.
     if not getattr(sys, "frozen", False):
         return None
-    name = "ffmpeg.exe" if sys.platform == "win32" else "ffmpeg"
-    path = os.path.join(getattr(sys, "_MEIPASS", ""), name)
+    exe = f"{name}.exe" if sys.platform == "win32" else name
+    path = os.path.join(getattr(sys, "_MEIPASS", ""), exe)
     return path if os.path.isfile(path) else None
 
 
-def find_ffmpeg():
-    found = bundled_ffmpeg() or shutil.which("ffmpeg")
+def bundled_ffmpeg():
+    return _bundled("ffmpeg")
+
+
+def bundled_deno():
+    return _bundled("deno")
+
+
+def _which(name):
+    found = shutil.which(name)
     if found is None and sys.platform == "win32":
-        found = shutil.which("ffmpeg", path=_registry_path())
+        found = shutil.which(name, path=_registry_path())
     return found
+
+
+def find_ffmpeg():
+    return bundled_ffmpeg() or _which("ffmpeg")
+
+
+# yt-dlp needs a JavaScript runtime for YouTube (without one some formats are
+# missing). It supports these; deno is its default and is bundled in the .exe.
+JS_RUNTIMES = ("deno", "node", "bun")
+
+
+def _js_runtime_supported(name, path):
+    # yt-dlp's own check ("<path> --version" against its minimum versions).
+    # If its internals change, let yt-dlp decide when it runs.
+    try:
+        info = yt_dlp.globals.supported_js_runtimes.value[name](path=path).info
+    except Exception:
+        return True
+    return bool(info and info.supported)
+
+
+def find_js_runtime():
+    """(name, path) of the JavaScript runtime yt-dlp should use: the bundled
+    deno, else the first new enough one in JS_RUNTIMES found on PATH; or None."""
+    for name in JS_RUNTIMES:
+        path = (name == "deno" and bundled_deno()) or _which(name)
+        if path and _js_runtime_supported(name, path):
+            return name, path
+    return None
 
 
 # ── yt-dlp plumbing ──────────────────────────────────────────────────────────
@@ -314,9 +351,10 @@ class DownloadJob:
     """
 
     def __init__(self, url, *, fmt, folder, ffmpeg, whole_playlist,
-                 on_progress, on_log, ask, cancel_event=None):
+                 on_progress, on_log, ask, cancel_event=None, js_runtime=None):
         self.url = url
         self.fmt, self.folder, self.ffmpeg = fmt, folder, ffmpeg
+        self.js_runtime = js_runtime   # (name, path) from find_js_runtime()
         self.whole_playlist = whole_playlist
         self.on_progress, self.on_log, self.ask = on_progress, on_log, ask
         self._cancel = cancel_event or threading.Event()
@@ -361,6 +399,9 @@ class DownloadJob:
         }
         opts.update(format_opts(self.fmt))
         opts["ffmpeg_location"] = self.ffmpeg
+        if self.js_runtime:
+            name, path = self.js_runtime
+            opts["js_runtimes"] = {name: {"path": path}}
         return opts
 
     def run(self):
@@ -475,6 +516,8 @@ class DownloadJob:
         self.on_log(f"✘ {msg}")
 
     def _entry_warning(self, msg):
+        if "No supported JavaScript runtime" in msg:
+            return   # the window says so once, at startup
         self.on_log(f"⚠ {msg.removeprefix('WARNING: ')}")
 
     # After a cancel: removes what this run wrote for the unfinished video

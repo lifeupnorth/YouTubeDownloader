@@ -116,6 +116,18 @@ def _ffmpeg_install_hint():
     return "Install it with your package manager, e.g.:\n    sudo apt install ffmpeg"
 
 
+def js_runtime_help():
+    if sys.platform == "win32":
+        install = "winget install DenoLand.Deno"
+    elif sys.platform == "darwin":
+        install = "brew install deno"
+    else:
+        install = "curl -fsSL https://deno.land/install.sh | sh"
+    return ("⚠ No JavaScript runtime found. yt-dlp uses one (deno) for YouTube; "
+            "without it some formats may be missing. Install it from a terminal:"
+            f"\n    {install}\nThe app picks it up on the next download.")
+
+
 def ffmpeg_help(startup=False):
     then = ("Once it's installed, the app detects it (restart it if it doesn't)."
             if startup else
@@ -164,6 +176,9 @@ class YouTubeDownloader(tk.Tk):
         if self._ffmpeg_missing:
             self._set_status(FFMPEG_MISSING_STATUS, WARNING)
             self._log(ffmpeg_help(startup=True))
+        self._js_runtime = engine.find_js_runtime() if engine.YT_DLP_AVAILABLE else None
+        if engine.YT_DLP_AVAILABLE and self._js_runtime is None:
+            self._log(js_runtime_help())
         self._note_yt_dlp_version()
         self.bind("<FocusIn>", self._recheck_ffmpeg, add="+")
 
@@ -529,6 +544,8 @@ class YouTubeDownloader(tk.Tk):
         if self._ffmpeg_missing:
             messagebox.showerror("ffmpeg not found", ffmpeg_help())
             return
+        if self._js_runtime is None:   # installed since the app started?
+            self._js_runtime = engine.find_js_runtime()
 
         urls = self._urls()
         if not urls:
@@ -543,6 +560,7 @@ class YouTubeDownloader(tk.Tk):
         self._queue = engine.DownloadQueue(
             urls, fmt=self.format_var.get(), folder=self.download_path.get(),
             ffmpeg=ffmpeg, whole_playlist=self.playlist_var.get(),
+            js_runtime=self._js_runtime,
             on_progress=self._job_progress, on_log=self._job_log,
             ask=self._job_ask)
         self._save_settings()
@@ -774,11 +792,20 @@ def self_check(path):
         run = subprocess.run([ffmpeg, "-version"], capture_output=True, text=True,
                              creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0))
         ffmpeg_version = run.stdout.splitlines()[0] if run.stdout else None
+    js_runtime = engine.find_js_runtime()
+    js_runtime_version = None
+    if js_runtime:
+        run = subprocess.run([js_runtime[1], "--version"], capture_output=True, text=True,
+                             creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0))
+        js_runtime_version = run.stdout.splitlines()[0] if run.stdout else None
     result = {"frozen": bool(getattr(sys, "frozen", False)),
               "yt_dlp": engine.yt_dlp_version(),
               "yt_dlp_pin": engine.pinned_yt_dlp_version(),
               "ffmpeg": ffmpeg, "ffmpeg_bundled": engine.bundled_ffmpeg() is not None,
               "ffmpeg_version": ffmpeg_version,
+              "js_runtime": js_runtime and js_runtime[1],
+              "js_runtime_version": js_runtime_version,
+              "deno_bundled": engine.bundled_deno() is not None,
               "thumbnails": ImageTk is not None and engine.Image is not None}
     try:
         app = YouTubeDownloader()   # also checks that Tk works in this build

@@ -159,6 +159,36 @@ class FindFfmpegTest(unittest.TestCase):
             self.assertIsNone(engine.find_ffmpeg())
         registry.assert_not_called()
 
+    def test_js_runtime_prefers_the_bundled_deno(self):
+        with tempfile.TemporaryDirectory() as unpacked:
+            name = "deno.exe" if sys.platform == "win32" else "deno"
+            open(os.path.join(unpacked, name), "wb").close()
+            with mock.patch.object(engine.sys, "frozen", True, create=True), \
+                    mock.patch.object(engine.sys, "_MEIPASS", unpacked, create=True), \
+                    mock.patch.object(engine, "_js_runtime_supported", return_value=True), \
+                    mock.patch.object(engine.shutil, "which") as which:
+                self.assertEqual(engine.find_js_runtime(),
+                                 ("deno", os.path.join(unpacked, name)))
+            which.assert_not_called()
+
+    def test_js_runtime_skips_old_versions(self):
+        found = {"node": "/bin/node", "bun": "/bin/bun"}
+        with mock.patch.object(engine.sys, "platform", "linux"), \
+                mock.patch.object(engine.shutil, "which", side_effect=found.get), \
+                mock.patch.object(engine, "_js_runtime_supported",
+                                  side_effect=lambda name, path: name == "bun"):
+            self.assertEqual(engine.find_js_runtime(), ("bun", "/bin/bun"))
+        with mock.patch.object(engine.sys, "platform", "linux"), \
+                mock.patch.object(engine.shutil, "which", return_value=None):
+            self.assertIsNone(engine.find_js_runtime())
+
+    @unittest.skipUnless(engine.YT_DLP_AVAILABLE, "needs yt-dlp")
+    def test_js_runtime_version_check(self):
+        # yt-dlp's check: a program that isn't there isn't supported.
+        self.assertFalse(engine._js_runtime_supported("deno", os.path.join("no", "deno")))
+        with mock.patch.object(engine, "yt_dlp", None):   # can't check: let yt-dlp try
+            self.assertTrue(engine._js_runtime_supported("deno", "deno"))
+
     @unittest.skipUnless(sys.platform == "win32", "Windows only")
     def test_registry_path_is_expanded(self):
         path = engine._registry_path().lower()
@@ -437,6 +467,18 @@ class DownloadJobTest(unittest.TestCase):
             job = self.cancel_at((1, -1, 0), tmp, videos=3)
             self.assertEqual(os.listdir(tmp), ["v0.mp4"])
         self.assertEqual(job.summary(), "Download canceled (1 saved).")
+
+    def test_job_uses_the_js_runtime(self):
+        job = engine.DownloadJob("https://x", fmt="mp3", folder="dl", ffmpeg="ffmpeg",
+                                 whole_playlist=False, on_progress=None, on_log=None,
+                                 ask=None, js_runtime=("deno", "C:/deno.exe"))
+        self.assertEqual(job.options()["js_runtimes"], {"deno": {"path": "C:/deno.exe"}})
+        self.assertNotIn("js_runtimes", make_job().options())   # yt-dlp's default
+
+    def test_missing_js_runtime_warning_isnt_logged(self):
+        job = self.run_job(make_fake_ydl(
+            streams=1, warn="[youtube] No supported JavaScript runtime could be found."))
+        self.assertFalse([line for line in job.log if "JavaScript" in line])
 
     def test_yt_dlp_warnings_are_logged(self):
         job = self.run_job(make_fake_ydl(streams=1, warn="[youtube] No JS runtime"))

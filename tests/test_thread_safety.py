@@ -65,6 +65,7 @@ class ThreadSafetyTest(unittest.TestCase):
         for patcher in (
                 mock.patch.object(engine, "YT_DLP_AVAILABLE", True),
                 mock.patch.object(engine, "find_ffmpeg", return_value="ffmpeg"),
+                mock.patch.object(engine, "find_js_runtime", return_value=("deno", "deno")),
                 mock.patch.object(ytd, "settings_path",
                                   return_value=self.settings_file),
                 mock.patch.object(ytd.messagebox, "askyesno",
@@ -291,8 +292,8 @@ class ThreadSafetyTest(unittest.TestCase):
 
     def test_yt_dlp_warnings_reach_the_log(self):
         self.run_download(make_fake_ydl(
-            streams=1, warn="[youtube] No supported JavaScript runtime"))
-        self.assertIn("⚠ [youtube] No supported JavaScript runtime", self.log())
+            streams=1, warn="[youtube] Some formats are missing"))
+        self.assertIn("⚠ [youtube] Some formats are missing", self.log())
         self.assertEqual(self.violations, [])
 
     def test_placeholder_is_not_a_url(self):

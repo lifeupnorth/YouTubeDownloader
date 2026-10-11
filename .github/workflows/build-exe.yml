@@ -40,7 +40,7 @@ jobs:
       - name: Build the .exe
         run: python packaging/build_exe.py
 
-      # Runs the .exe: yt-dlp, the bundled ffmpeg, Pillow and the window must work.
+      # Runs the .exe: yt-dlp, the bundled ffmpeg and deno, Pillow and the window must work.
       - name: Check the .exe
         run: python packaging/build_exe.py --check
 
@@ -51,6 +51,7 @@ jobs:
             dist/YT-Downloader.exe
             dist/THIRD-PARTY-NOTICES.txt
             dist/FFMPEG-LICENSE.txt
+            dist/DENO-LICENSE.txt
           if-no-files-found: error
 
   release:
@@ -70,4 +71,4 @@ jobs:
         run: >-
           gh release create "$GITHUB_REF_NAME" --repo "$GITHUB_REPOSITORY"
           --title "YT Downloader $GITHUB_REF_NAME" --generate-notes
-          YT-Downloader.exe THIRD-PARTY-NOTICES.txt FFMPEG-LICENSE.txt
+          YT-Downloader.exe THIRD-PARTY-NOTICES.txt FFMPEG-LICENSE.txt DENO-LICENSE.txt
