@@ -1,24 +1,22 @@
 name: Windows app
 
-# Builds dist/YT-Downloader.exe with packaging/build_exe.py and checks it.
-# Run it by hand (Actions tab → "Windows app" → Run workflow) to get the .exe
-# as a downloadable artifact. It also runs on pull requests that change the
-# build or the pinned versions (e.g. Dependabot's). Pushing a version tag
-# (v1.0.0, ...) also attaches the .exe to a GitHub release for that tag. A
-# push to main that changes the yt-dlp pin in requirements.txt (e.g. a merged
-# Dependabot PR) releases too, as the next patch version (v1.0.0 -> v1.0.1),
-# so users of the .exe get the new yt-dlp; the app tells them it's out.
+# Builds dist/YT-Downloader.exe with packaging/build_exe.py and checks it, on
+# every pull request and every push to main, so a change that breaks the
+# .exe (a module PyInstaller misses, say) shows up before a release. Run it by
+# hand (Actions tab → "Windows app" → Run workflow) to get the .exe as a
+# downloadable artifact.
+#
+# Releases: pushing a version tag (v1.0.0, ...) releases that version. A push
+# to main whose yt-dlp pin (requirements.txt) differs from the latest
+# release's releases too, as the next patch version (v1.0.0 -> v1.0.1), so
+# users of the .exe get the new yt-dlp; the app tells them it's out. A release
+# build waits for approval in the "code-signing" environment.
 
 on:
   workflow_dispatch:
   pull_request:
-    paths:
-      - "packaging/**"
-      - "requirements.txt"
-      - ".github/workflows/build-exe.yml"
   push:
     branches: [main]
-    paths: ["requirements.txt"]
     tags: ["v[0-9]+.[0-9]+.[0-9]+"]
 
 # One run per branch or tag at a time, so two merges can't pick the same
@@ -32,34 +30,43 @@ permissions:
 
 jobs:
   # The version to release, if any: the pushed tag, or the next patch version
-  # when a push to main changed the yt-dlp pin. Empty otherwise.
+  # when main pins another yt-dlp than the latest release. Empty otherwise.
   version:
     runs-on: ubuntu-latest
     outputs:
       tag: ${{ steps.pick.outputs.tag }}
     steps:
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
-          fetch-depth: 0   # the tags and the commits before this push
+          fetch-depth: 0   # the tags
+          persist-credentials: false
 
       - id: pick
-        env:
-          BEFORE: ${{ github.event.before }}
         run: |
           tag=""
           semver='^v[0-9]+[.][0-9]+[.][0-9]+$'
+          # The version in a requirements.txt's yt-dlp line ("yt-dlp==..." or
+          # "yt-dlp[default]==...").
+          pin() { grep -oiE '^yt-dlp(\[[^]]*\])?==[^ #]+' | sed -E 's/.*==//' | head -n 1; }
           if [[ "$GITHUB_REF" == refs/tags/* ]]; then
             if [[ "$GITHUB_REF_NAME" =~ $semver ]]; then tag="$GITHUB_REF_NAME"; fi
           elif [[ "$GITHUB_EVENT_NAME" == push ]]; then
-            # A force push or a new branch has no usable "before" commit; say
-            # so rather than silently skip a release.
-            if [[ -z "$BEFORE" || "$BEFORE" =~ ^0+$ ]] ||
-                ! git cat-file -e "$BEFORE^{commit}" 2>/dev/null; then
-              echo "::error::No commit before this push ($BEFORE), so it can't tell whether the yt-dlp pin changed. Release by pushing a vX.Y.Z tag."
+            # Compared with the latest release rather than with the commit
+            # before this push: a release isn't lost when pushes queue up or
+            # main is force-pushed, and a run that's repeated doesn't release
+            # twice.
+            last=$(git tag -l 'v*' | grep -E "$semver" | sort -V | tail -n 1 || true)
+            now=$(pin < requirements.txt)
+            released=""
+            if [[ -n "$last" ]]; then
+              released=$(git show "$last:requirements.txt" | pin)
+            fi
+            echo "yt-dlp pinned: $now; in the latest release (${last:-none}): ${released:-none}"
+            if [[ -z "$now" ]]; then
+              echo "::error::No yt-dlp pin found in requirements.txt"
               exit 1
             fi
-            if git diff "$BEFORE" "$GITHUB_SHA" -- requirements.txt | grep -qiE '^\+yt-dlp(\[[^]]*\])?=='; then
-              last=$(git tag -l 'v*' | grep -E "$semver" | sort -V | tail -n 1)
+            if [[ "$now" != "$released" ]]; then
               IFS=. read -r major minor patch <<< "${last:-v0.0.0}"
               tag="${major}.${minor}.$((patch + 1))"
             fi
@@ -71,13 +78,16 @@ jobs:
     needs: version
     runs-on: windows-latest
     timeout-minutes: 20
-    # The signing secrets live in the "code-signing" environment; restrict its
-    # deployment branches to main and v* tags. Pull requests never use it.
-    environment: ${{ github.event_name != 'pull_request' && 'code-signing' || '' }}
+    # Only a release build uses the "code-signing" environment (its secrets,
+    # and your approval; it's limited to main and v* tags), so other builds
+    # never wait. Pull requests never get it.
+    environment: ${{ needs.version.outputs.tag != '' && 'code-signing' || '' }}
     steps:
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
 
-      - uses: actions/setup-python@v7
+      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
         with:
           python-version: "3.14"
           cache: pip
@@ -85,25 +95,29 @@ jobs:
             requirements.txt
             packaging/requirements-build.txt
 
+      # The build tools are checked against their pinned hashes; a separate
+      # step, since pip would then want hashes for requirements.txt too.
       - name: Install dependencies
-        run: python -m pip install -r requirements.txt -r packaging/requirements-build.txt
+        run: |
+          python -m pip install -r requirements.txt
+          python -m pip install --require-hashes -r packaging/requirements-build.txt
 
       - name: Build the .exe
         run: python packaging/build_exe.py
         env:
           APP_VERSION: ${{ needs.version.outputs.tag }}
 
-      # Optional code signing, so Windows doesn't show the .exe's publisher as
-      # unknown. Runs only if the secrets WINDOWS_SIGNING_CERT (the .pfx,
-      # base64-encoded) and WINDOWS_SIGNING_PASSWORD are set, and never for a
-      # pull request; see packaging/sign_exe.py.
+      # Optional code signing of a release, so Windows doesn't show the .exe's
+      # publisher as unknown. Runs only if the "code-signing" environment has
+      # the secrets WINDOWS_SIGNING_CERT (the .pfx, base64-encoded) and
+      # WINDOWS_SIGNING_PASSWORD; see packaging/sign_exe.py.
       - name: Check for a signing certificate
         id: signing
         shell: bash
         run: echo "enabled=${{ secrets.WINDOWS_SIGNING_CERT != '' }}" >> "$GITHUB_OUTPUT"
 
       - name: Sign the .exe
-        if: steps.signing.outputs.enabled == 'true' && github.event_name != 'pull_request'
+        if: steps.signing.outputs.enabled == 'true' && needs.version.outputs.tag != ''
         env:
           WINDOWS_SIGNING_CERT: ${{ secrets.WINDOWS_SIGNING_CERT }}
           WINDOWS_SIGNING_PASSWORD: ${{ secrets.WINDOWS_SIGNING_PASSWORD }}
@@ -116,7 +130,7 @@ jobs:
         env:
           APP_VERSION: ${{ needs.version.outputs.tag }}
 
-      - uses: actions/upload-artifact@v7
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: YT-Downloader
           path: |
@@ -131,17 +145,44 @@ jobs:
     needs: [version, build]
     runs-on: ubuntu-latest
     permissions:
-      contents: write   # to create the release
+      contents: write       # to create the release
+      id-token: write       # to sign the build provenance
+      attestations: write   # to store it
     steps:
-      - uses: actions/download-artifact@v8
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
         with:
           name: YT-Downloader
 
+      # Lets anyone check that a YT-Downloader.exe was built here, by this
+      # workflow, from this commit:  gh attestation verify YT-Downloader.exe
+      # --repo lifeupnorth/YouTubeDownloader
+      - name: Record the build's provenance
+        uses: actions/attest-build-provenance@4d101475d8b20a2381f78447822ac1eab6504dd8 # v4.2.2
+        with:
+          subject-path: YT-Downloader.exe
+
+      - name: Write the checksums
+        run: >-
+          sha256sum YT-Downloader.exe THIRD-PARTY-NOTICES.txt FFMPEG-LICENSE.txt
+          DENO-LICENSE.txt > SHA256SUMS.txt
+
+      # Created as a draft with all its files, then published: with immutable
+      # releases turned on, files can't be added after publishing.
       - name: Create the release with the .exe
         env:
           GH_TOKEN: ${{ github.token }}
           TAG: ${{ needs.version.outputs.tag }}
-        run: >-
-          gh release create "$TAG" --repo "$GITHUB_REPOSITORY" --target "$GITHUB_SHA"
-          --title "YT Downloader $TAG" --generate-notes
-          YT-Downloader.exe THIRD-PARTY-NOTICES.txt FFMPEG-LICENSE.txt DENO-LICENSE.txt
+        run: |
+          gh release create "$TAG" --repo "$GITHUB_REPOSITORY" --target "$GITHUB_SHA" \
+            --draft --title "YT Downloader $TAG" --generate-notes \
+            YT-Downloader.exe THIRD-PARTY-NOTICES.txt FFMPEG-LICENSE.txt \
+            DENO-LICENSE.txt SHA256SUMS.txt
+          sha=$(sha256sum YT-Downloader.exe | cut -d' ' -f1)
+          {
+            echo "**YT-Downloader.exe** SHA-256: \`$sha\` (all files: SHA256SUMS.txt)."
+            echo "To check that this .exe was built by this repository's workflow:"
+            echo "\`gh attestation verify YT-Downloader.exe --repo $GITHUB_REPOSITORY\`"
+            echo
+            gh release view "$TAG" --repo "$GITHUB_REPOSITORY" --json body -q .body
+          } > notes.md
+          gh release edit "$TAG" --repo "$GITHUB_REPOSITORY" --notes-file notes.md --draft=false
