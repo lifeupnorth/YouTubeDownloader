@@ -12,9 +12,21 @@ ffmpeg
   ffmpeg's own source: https://ffmpeg.org/download.html
   ffmpeg is a separate program that the app runs; it isn't linked into the app.
 
+deno
+  The official Windows build of deno (https://deno.com/), the JavaScript
+  runtime yt-dlp uses for YouTube. MIT license; the full license is in
+  DENO-LICENSE.txt next to this file. Source: https://github.com/denoland/deno
+  deno is a separate program that yt-dlp runs; it isn't linked into the app.
+
 yt-dlp
   https://github.com/yt-dlp/yt-dlp
   Released into the public domain (The Unlicense).
+
+yt-dlp-ejs
+  https://github.com/yt-dlp/ejs
+  The script deno runs to solve YouTube's JavaScript challenges. Released
+  into the public domain (The Unlicense); it includes astring (MIT license)
+  and meriyah (ISC license).
 
 Pillow
   https://python-pillow.github.io/

@@ -65,6 +65,7 @@ class ThreadSafetyTest(unittest.TestCase):
         for patcher in (
                 mock.patch.object(engine, "YT_DLP_AVAILABLE", True),
                 mock.patch.object(engine, "find_ffmpeg", return_value="ffmpeg"),
+                mock.patch.object(engine, "find_js_runtime", return_value=("deno", "deno")),
                 mock.patch.object(engine, "check_for_update", return_value=None),
                 mock.patch.object(ytd, "settings_path",
                                   return_value=self.settings_file),
@@ -127,6 +128,24 @@ class ThreadSafetyTest(unittest.TestCase):
                 self.app.after_cancel(timeout)
             except tkinter.TclError:
                 pass
+
+    def test_js_runtime_is_looked_up_on_a_worker(self):
+        threads = []
+
+        def find():
+            threads.append(threading.current_thread())
+            return ("node", "node")
+
+        with mock.patch.object(engine, "find_js_runtime", find):
+            self.app._js_runtime = None
+            self.app._start_worker(self.app._find_js_runtime_thread)
+            deadline = time.monotonic() + 5
+            while self.app._js_runtime is None and time.monotonic() < deadline:
+                self.app.update()
+                time.sleep(0.01)
+        self.assertEqual(self.app._js_runtime, ("node", "node"))
+        self.assertIsNot(threads[0], threading.main_thread())
+        self.assertEqual(self.violations, [])
 
     def test_successful_download(self):
         self.run_download(make_fake_ydl(streams=2))
@@ -292,8 +311,8 @@ class ThreadSafetyTest(unittest.TestCase):
 
     def test_yt_dlp_warnings_reach_the_log(self):
         self.run_download(make_fake_ydl(
-            streams=1, warn="[youtube] No supported JavaScript runtime"))
-        self.assertIn("⚠ [youtube] No supported JavaScript runtime", self.log())
+            streams=1, warn="[youtube] Some formats are missing"))
+        self.assertIn("⚠ [youtube] Some formats are missing", self.log())
         self.assertEqual(self.violations, [])
 
     def test_update_notice_is_logged(self):
@@ -457,7 +476,7 @@ class ThreadSafetyTest(unittest.TestCase):
     def test_newer_link_cancels_the_older_lookup(self):
         events = {}
 
-        def preview_link(url, whole_playlist, cancel_event):
+        def preview_link(url, whole_playlist, cancel_event, js_runtime=None):
             events[url] = cancel_event
             if url.endswith("old") and cancel_event.wait(5):
                 return None
@@ -486,7 +505,7 @@ class ThreadSafetyTest(unittest.TestCase):
     def test_answering_no_to_close_keeps_the_lookup(self):
         started, release = threading.Event(), threading.Event()
 
-        def preview_link(url, whole_playlist, cancel_event):
+        def preview_link(url, whole_playlist, cancel_event, js_runtime=None):
             started.set()
             release.wait(5)
             return None if cancel_event.is_set() else ("T", None, True)

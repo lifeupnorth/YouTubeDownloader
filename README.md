@@ -7,6 +7,7 @@ A small app to download YouTube videos written in Python.
 - **yt-dlp**, pinned to a tested version in `requirements.txt`.
 - **Pillow** (optional, also in `requirements.txt`), for thumbnails in the link preview.
 - **ffmpeg**, used to merge video and audio and to convert to MP3/M4A.
+- **A JavaScript runtime** for YouTube: deno (yt-dlp's default; `winget install DenoLand.Deno`), node or bun, plus **yt-dlp-ejs** (in `requirements.txt`), the challenge solver it runs. Without them some formats may be missing. The .exe includes both.
 
 ## Install
 
