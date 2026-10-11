@@ -61,6 +61,23 @@ GPL "essentials" build) and checks it against a pinned checksum; its license and
 the other third-party notices are in `packaging/THIRD-PARTY-NOTICES.txt` and go
 next to the .exe.
 
+The .exe is unsigned unless you add a code-signing certificate, so Windows
+shows its publisher as unknown. Signing names you as the publisher; SmartScreen
+may still warn until the certificate (or the file) has built up reputation. To
+sign it in the workflow, create an environment named `code-signing` (Settings →
+Environments), limit its deployment branches to `main` and `v*` tags, and add two
+secrets to it: `WINDOWS_SIGNING_CERT` (the certificate's `.pfx` file,
+base64-encoded; in PowerShell:
+`[Convert]::ToBase64String([IO.File]::ReadAllBytes('cert.pfx'))`) and
+`WINDOWS_SIGNING_PASSWORD`. Pull requests are never signed. A timestamp server
+other than DigiCert's can be set in the `SIGNING_TIMESTAMP_URL` variable. This
+needs a certificate you can export as a `.pfx`; publicly trusted code-signing
+certificates issued since June 2023 keep the key on a hardware token or a cloud
+service (Azure Trusted Signing, SSL.com eSigner, DigiCert KeyLocker), which need
+that provider's own signing step instead. Locally, set the
+same environment variables and run `python packaging/sign_exe.py dist/YT-Downloader.exe`
+(it needs `signtool.exe` from the Windows SDK).
+
 ## Use
 
 1. Paste a link into **YouTube URLs**, or click **Paste**. A preview with the

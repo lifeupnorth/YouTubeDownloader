@@ -94,23 +94,25 @@ Sources: [requirements.txt](https://github.com/lifeupnorth/YouTubeDownloader/blo
 
 | Path | Lines | Contents |
 |---|---|---|
-| `youtube_downloader.py` | 926 | The window: UI, settings, dialogs, worker plumbing, entry point |
-| `download_engine.py` | 849 | Downloading without Tk: yt-dlp and ffmpeg, formats, previews, `DownloadJob`, `DownloadQueue` |
-| `tests/test_engine.py` | 754 | The engine with a fake yt-dlp; needs no display |
-| `tests/test_thread_safety.py` | 626 | The real window driven through simulated downloads |
+| `youtube_downloader.py` | 935 | The window: UI, settings, dialogs, worker plumbing, entry point |
+| `download_engine.py` | 867 | Downloading without Tk: yt-dlp and ffmpeg, formats, previews, `DownloadJob`, `DownloadQueue` |
+| `tests/test_engine.py` | 801 | The engine with a fake yt-dlp; needs no display |
+| `tests/test_thread_safety.py` | 687 | The real window driven through simulated downloads |
 | `tests/test_app.py` | 240 | Settings file, Open folder, ffmpeg help and checks |
 | `tests/test_requirements.py` | 72 | The yt-dlp pin is what the installer uses |
 | `tests/test_smoke.py` | 123 | The smoke test's report, retries, timeouts and bot check, with a fake job |
+| `tests/test_sign_exe.py` | 108 | Code signing with a fake signtool |
 | `tests/fakes.py` | 118 | The fake yt-dlp shared by the tests |
 | `requirements.txt` / `requirements-dev.txt` | 14 / 3 | Pinned yt-dlp, yt-dlp-ejs and Pillow / ruff |
 | `ruff.toml` | 8 | Lint rules |
 | `.github/workflows/tests.yml` | 73 | Tests (Windows and Ubuntu, Python 3.10 and 3.14) and lint on every push to `main` and every PR |
 | `packaging/build_exe.py` | 182 | Builds the one-file Windows app with PyInstaller and the bundled ffmpeg and deno (deno's version is pinned there by `DENO_VERSION`/`DENO_SHA256`; Dependabot doesn't update it) |
-| `.github/workflows/build-exe.yml` | 127 | Builds and checks the .exe; releases it for version tags and for yt-dlp pin bumps on `main` |
+| `.github/workflows/build-exe.yml` | 147 | Builds and checks the .exe; releases it for version tags and for yt-dlp pin bumps on `main` |
+| `packaging/sign_exe.py` | 92 | Signs and verifies the .exe with signtool when a certificate is set up |
 | `packaging/smoke_test.py` | 107 | One real MP4 and MP3 download via `--smoke-download`, from source or with the .exe |
 | `.github/workflows/smoke.yml` | 75 | Runs the smoke test nightly, by hand, and on PRs that change it |
 | `.github/dependabot.yml` | 27 | Weekly Dependabot checks for pip packages (including PyInstaller) and GitHub Actions |
-| `README.md` | 115 | Requirements, install, run and usage, tests, disclaimer, license |
+| `README.md` | 132 | Requirements, install, run and usage, tests, disclaimer, license |
 | `LICENSE` | 21 | MIT |
 
 Sources: [.github/workflows/tests.yml](https://github.com/lifeupnorth/YouTubeDownloader/blob/fed021846b04c093d045f0ec3de2b53d5ea42060/.github/workflows/tests.yml), [ruff.toml](https://github.com/lifeupnorth/YouTubeDownloader/blob/fed021846b04c093d045f0ec3de2b53d5ea42060/ruff.toml), [README.md](https://github.com/lifeupnorth/YouTubeDownloader/blob/fed021846b04c093d045f0ec3de2b53d5ea42060/README.md)

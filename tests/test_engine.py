@@ -338,6 +338,20 @@ class HelpersTest(unittest.TestCase):
                                return_value=io.BytesIO(b"not an image")):
             self.assertIsNone(engine.fetch_thumbnail("https://t/x.png"))
 
+    @unittest.skipIf(engine.Image is None, "Pillow not installed")
+    def test_fetch_thumbnail_stops_when_canceled(self):
+        reads = []
+
+        class Response(io.BytesIO):
+            def read(self, size=-1):
+                reads.append(size)
+                return super().read(size)
+
+        with mock.patch.object(engine.urllib.request, "urlopen",
+                               return_value=Response(b"x" * 1_000_000)):
+            self.assertIsNone(engine.fetch_thumbnail("https://t/x.png", lambda: True))
+        self.assertEqual(len(reads), 1)
+
     def test_logger_sends_warnings_and_errors_apart(self):
         errors, warnings = [], []
         logger = engine._YdlLogger(errors.append, warnings.append)
@@ -645,6 +659,39 @@ class DownloadJobTest(unittest.TestCase):
                 mock.patch.object(engine, "fetch_thumbnail", return_value=None):
             self.assertEqual(engine.preview_link("https://link", False),
                              ("T\n1:01 · c", None, True))
+
+    def test_canceled_preview(self):
+        import threading
+
+        cancel, pages = threading.Event(), []
+
+        class FakeYDL:
+            def __init__(self, opts):
+                self.opts = opts
+
+            def __enter__(self):
+                return self
+
+            def __exit__(self, *exc):
+                return False
+
+            def extract_info(self, url, download=True, process=True, ie_key=None):
+                for page in range(10):   # yt-dlp's status messages
+                    pages.append(page)
+                    if url == "https://slow" and page == 1:
+                        cancel.set()
+                    self.opts["logger"].debug(f"Downloading page {page}")
+                if url == "https://late":
+                    cancel.set()
+                return {"title": "T", "thumbnail": "https://t/x.jpg"}
+
+        with mock.patch.object(engine, "yt_dlp", fake_yt_dlp(FakeYDL)), \
+                mock.patch.object(engine, "fetch_thumbnail") as fetch:
+            self.assertIsNone(engine.preview_link("https://slow", False, cancel))
+            self.assertEqual(pages, [0, 1])
+            cancel.clear()
+            self.assertIsNone(engine.preview_link("https://late", False, cancel))
+        fetch.assert_not_called()
 
 
 class DownloadQueueTest(unittest.TestCase):

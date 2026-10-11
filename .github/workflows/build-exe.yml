@@ -71,6 +71,9 @@ jobs:
     needs: version
     runs-on: windows-latest
     timeout-minutes: 20
+    # The signing secrets live in the "code-signing" environment; restrict its
+    # deployment branches to main and v* tags. Pull requests never use it.
+    environment: ${{ github.event_name != 'pull_request' && 'code-signing' || '' }}
     steps:
       - uses: actions/checkout@v7
 
@@ -89,6 +92,23 @@ jobs:
         run: python packaging/build_exe.py
         env:
           APP_VERSION: ${{ needs.version.outputs.tag }}
+
+      # Optional code signing, so Windows doesn't show the .exe's publisher as
+      # unknown. Runs only if the secrets WINDOWS_SIGNING_CERT (the .pfx,
+      # base64-encoded) and WINDOWS_SIGNING_PASSWORD are set, and never for a
+      # pull request; see packaging/sign_exe.py.
+      - name: Check for a signing certificate
+        id: signing
+        shell: bash
+        run: echo "enabled=${{ secrets.WINDOWS_SIGNING_CERT != '' }}" >> "$GITHUB_OUTPUT"
+
+      - name: Sign the .exe
+        if: steps.signing.outputs.enabled == 'true' && github.event_name != 'pull_request'
+        env:
+          WINDOWS_SIGNING_CERT: ${{ secrets.WINDOWS_SIGNING_CERT }}
+          WINDOWS_SIGNING_PASSWORD: ${{ secrets.WINDOWS_SIGNING_PASSWORD }}
+          SIGNING_TIMESTAMP_URL: ${{ vars.SIGNING_TIMESTAMP_URL }}
+        run: python packaging/sign_exe.py dist/YT-Downloader.exe
 
       # Runs the .exe: yt-dlp, the bundled ffmpeg and deno, Pillow and the window must work.
       - name: Check the .exe

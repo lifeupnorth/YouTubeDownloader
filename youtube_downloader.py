@@ -173,6 +173,7 @@ class YouTubeDownloader(tk.Tk):
         self._preview_after = None     # pending lookup (waits for typing to pause)
         self._preview_key   = None     # (links, whole playlist) last looked up
         self._preview_token = 0        # newest lookup; older answers are dropped
+        self._preview_cancel = threading.Event()   # set to stop the running lookup
         self._preview_image = None     # keeps the PhotoImage alive
         self.update_check_var = tk.BooleanVar(value=True)
         self._apply_saved_settings()
@@ -553,11 +554,13 @@ class YouTubeDownloader(tk.Tk):
                     "Cancel it and close the app?"):
                 return
             self._close_when_stopped = True
+            self._preview_cancel.set()
             if not self._queue.canceled:
                 self._cancel_download()
             self._set_status("Canceling… the app closes when it has stopped.",
                              WARNING)
             return
+        self._preview_cancel.set()
         self._save_settings()
         self._closing = True
         for pending in (self._after_id, self._preview_after):
@@ -724,17 +727,23 @@ class YouTubeDownloader(tk.Tk):
             return
         self._preview_key = key
         self._preview_token += 1
+        self._preview_cancel.set()
+        self._preview_cancel = threading.Event()
         if not url:
             return self._set_preview(PREVIEW_HINT, dim=True)
         if not url.startswith(("https://", "http://")) or not engine.YT_DLP_AVAILABLE:
             return self._set_preview("No preview for this link.", dim=True)
         self._set_preview("Loading preview…", dim=True)
         self._start_worker(self._preview_thread, url, self.playlist_var.get(),
-                           self._preview_token, len(urls) - 1, self._js_runtime)
+                           self._preview_token, len(urls) - 1, self._preview_cancel,
+                           self._js_runtime)
 
     # Runs on a worker thread.
-    def _preview_thread(self, url, whole_playlist, token, more, js_runtime=None):
-        text, image, found = engine.preview_link(url, whole_playlist, js_runtime)
+    def _preview_thread(self, url, whole_playlist, token, more, cancel, js_runtime=None):
+        result = engine.preview_link(url, whole_playlist, cancel, js_runtime)
+        if result is None:   # a newer link replaced this one
+            return self._post(self._worker_finished)
+        text, image, found = result
         if more:   # several links: the preview shows the first one
             text += f"\n+ {more} more link{'s' * (more != 1)}"
         self._post(self._preview_done, text, image, found, token)
