@@ -7,6 +7,7 @@ Requirements: pip install yt-dlp
 import tkinter as tk
 from tkinter import ttk, filedialog, messagebox
 import threading
+import queue
 import os
 import sys
 import subprocess
@@ -48,8 +49,10 @@ class YouTubeDownloader(tk.Tk):
         self.status_var    = tk.StringVar(value="Ready")
         self.is_running    = False
         self._after_id     = None
+        self._ui_queue     = queue.Queue()
 
         self._build_ui()
+        self._poll_ui_queue()
 
         if not YT_DLP_AVAILABLE:
             self.after(300, self._prompt_install)
@@ -242,6 +245,25 @@ class YouTubeDownloader(tk.Tk):
         self.status_var.set(msg)
         self.status_lbl.config(fg=color)
 
+    # Tkinter is not thread-safe: worker threads must only call _post(),
+    # and the main loop applies the queued UI updates.
+    def _post(self, func, *args):
+        self._ui_queue.put((func, args))
+
+    def _poll_ui_queue(self):
+        try:
+            while True:
+                func, args = self._ui_queue.get_nowait()
+                func(*args)
+        except queue.Empty:
+            pass
+        finally:
+            self._after_id = self.after(50, self._poll_ui_queue)
+
+    def _set_progress(self, pct, msg, color):
+        self.progress_var.set(pct)
+        self._set_status(msg, color)
+
     # ── Download logic ───────────────────────────────────────────────────────
 
     def _get_ydl_opts(self, url):
@@ -296,15 +318,12 @@ class YouTubeDownloader(tk.Tk):
             eta_str   = f"ETA {eta}s" if eta > 0 else ""
             info      = " · ".join(filter(None, [speed_str, eta_str]))
 
-            self.progress_var.set(pct)
-            self._set_status(
-                f"Downloading… {pct:.1f}%  {info}", WARNING
-            )
+            self._post(self._set_progress, pct,
+                       f"Downloading… {pct:.1f}%  {info}", WARNING)
 
         elif d["status"] == "finished":
-            self.progress_var.set(99)
-            self._set_status("Processing…", WARNING)
-            self._log(f"✔ Saved: {d.get('filename', '')}")
+            self._post(self._set_progress, 99, "Processing…", WARNING)
+            self._post(self._log, f"✔ Saved: {d.get('filename', '')}")
 
     def _start_download(self):
         if not YT_DLP_AVAILABLE:
@@ -333,9 +352,9 @@ class YouTubeDownloader(tk.Tk):
             opts = self._get_ydl_opts(url)
             with yt_dlp.YoutubeDL(opts) as ydl:
                 ydl.download([url])
-            self.after(0, self._download_done, True, None)
+            self._post(self._download_done, True, None)
         except Exception as exc:
-            self.after(0, self._download_done, False, str(exc))
+            self._post(self._download_done, False, str(exc))
 
     def _download_done(self, success, error):
         self.is_running = False
@@ -374,9 +393,9 @@ class YouTubeDownloader(tk.Tk):
                     [sys.executable, "-m", "pip", "install", "yt-dlp"],
                     stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL
                 )
-                self.after(0, self._install_done, True)
+                self._post(self._install_done, True)
             except Exception as e:
-                self.after(0, self._install_done, False, str(e))
+                self._post(self._install_done, False, str(e))
 
         threading.Thread(target=run, daemon=True).start()
 
