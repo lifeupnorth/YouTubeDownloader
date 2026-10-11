@@ -81,8 +81,6 @@ def main(argv):
         app = [sys.executable, os.path.join(ROOT, "youtube_downloader.py")]
     else:
         sys.exit(__doc__)
-    # The app logs ✔/⚠/✘, which a Windows console's code page can't print.
-    sys.stdout.reconfigure(encoding="utf-8", errors="replace")
     url = os.environ.get("SMOKE_URL") or URL
     failures = []
     for fmt in EXTENSIONS:
@@ -104,4 +102,7 @@ def main(argv):
 
 
 if __name__ == "__main__":
+    # The app logs ✔/⚠/✘, which a Windows console's code page can't print.
+    # (Here, not in main(), so tests can capture the output.)
+    sys.stdout.reconfigure(encoding="utf-8", errors="replace")
     main(sys.argv[1:])
