@@ -3,6 +3,7 @@
 Run: python -m unittest discover -s tests -v
 """
 import gc
+import json
 import os
 import sys
 import tempfile
@@ -158,9 +159,15 @@ class ThreadSafetyTest(unittest.TestCase):
 
         # The fake yt_dlp module makes the real one unnecessary; without this
         # __init__ would schedule a real (blocking) install prompt.
+        # Remembered settings go to a temporary file, never the real one.
+        settings_dir = tempfile.TemporaryDirectory()
+        self.addCleanup(settings_dir.cleanup)
+        self.settings_file = os.path.join(settings_dir.name, "settings.json")
         for patcher in (
                 mock.patch.object(ytd, "YT_DLP_AVAILABLE", True),
                 mock.patch.object(ytd, "find_ffmpeg", return_value="ffmpeg"),
+                mock.patch.object(ytd, "settings_path",
+                                  return_value=self.settings_file),
                 mock.patch.object(ytd.messagebox, "askyesno",
                                   side_effect=lambda *a, **k:
                                   self._on_dialog("askyesno"))):
@@ -472,6 +479,36 @@ class ThreadSafetyTest(unittest.TestCase):
             widths.append(int(self.app.status_lbl.cget("wraplength")))
         self.assertGreater(widths[0], widths[1])
         self.assertLess(widths[1], 620)
+
+    def test_folder_and_format_are_remembered(self):
+        with tempfile.TemporaryDirectory() as folder:
+            self.app.download_path.set(folder)
+            self.app.format_var.set("mp3")
+            self.run_download(make_fake_ydl(streams=1))
+            again = ytd.YouTubeDownloader()   # the next time the app starts
+            try:
+                self.assertEqual(again.download_path.get(), folder)
+                self.assertEqual(again.format_var.get(), "mp3")
+                self.assertFalse(again.playlist_var.get())
+            finally:
+                again.destroy()
+
+    def test_settings_are_saved_on_close(self):
+        self.app.format_var.set("m4a")
+        self.app._on_close()
+        with open(self.settings_file, encoding="utf-8") as f:
+            self.assertEqual(json.load(f)["format"], "m4a")
+
+    def test_bad_saved_settings_fall_back_to_defaults(self):
+        with open(self.settings_file, "w", encoding="utf-8") as f:
+            json.dump({"folder": "/no/such/folder", "format": "bogus"}, f)
+        again = ytd.YouTubeDownloader()
+        try:
+            self.assertEqual(again.download_path.get(),
+                             os.path.expanduser("~/Downloads"))
+            self.assertEqual(again.format_var.get(), "mp4_best")
+        finally:
+            again.destroy()
 
     def test_open_folder_after_download(self):
         with tempfile.TemporaryDirectory() as tmp:

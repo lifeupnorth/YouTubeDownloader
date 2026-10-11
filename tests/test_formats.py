@@ -3,14 +3,18 @@
 Run with:  python -m unittest discover -s tests -v
 """
 import gc
+import json
 import os
 import sys
+import tempfile
 import tkinter
 import unittest
 from unittest import mock
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 import youtube_downloader as ytd  # noqa: E402
+
+REAL_SETTINGS_PATH = ytd.settings_path   # before any test patches it
 
 try:
     import yt_dlp
@@ -144,6 +148,39 @@ class FindFfmpegTest(unittest.TestCase):
         self.assertNotIn("%systemroot%", path)
 
 
+class SettingsFileTest(unittest.TestCase):
+    def setUp(self):
+        folder = tempfile.TemporaryDirectory()
+        self.addCleanup(folder.cleanup)
+        self.path = os.path.join(folder.name, "sub", "settings.json")
+        patcher = mock.patch.object(ytd, "settings_path", return_value=self.path)
+        patcher.start()
+        self.addCleanup(patcher.stop)
+
+    def test_round_trip(self):
+        self.assertEqual(ytd.load_settings(), {})   # no file yet
+        ytd.save_settings({"folder": "x", "format": "mp3"})
+        self.assertEqual(ytd.load_settings(), {"folder": "x", "format": "mp3"})
+        self.assertFalse(os.path.exists(self.path + ".tmp"))
+
+    def test_bad_files_are_ignored(self):
+        os.makedirs(os.path.dirname(self.path))
+        for content in ("not json", "[1, 2]", ""):
+            with open(self.path, "w", encoding="utf-8") as f:
+                f.write(content)
+            self.assertEqual(ytd.load_settings(), {}, content)
+
+    def test_default_locations(self):
+        with mock.patch.object(ytd.sys, "platform", "win32"), \
+                mock.patch.dict(os.environ, {"APPDATA": "appdata"}):
+            self.assertEqual(REAL_SETTINGS_PATH(), os.path.join(
+                "appdata", "YT Downloader", "settings.json"))
+        with mock.patch.object(ytd.sys, "platform", "linux"), \
+                mock.patch.dict(os.environ, {"XDG_CONFIG_HOME": "cfg"}):
+            self.assertEqual(REAL_SETTINGS_PATH(), os.path.join(
+                "cfg", "YT Downloader", "settings.json"))
+
+
 class SmallHelpersTest(unittest.TestCase):
     def test_eta_as_minutes_and_seconds(self):
         self.assertEqual(ytd.format_eta(5), "0:05")
@@ -198,9 +235,13 @@ class FfmpegCheckTest(unittest.TestCase):
     def make_app(self, ffmpeg):
         gc.collect()
         self.find = mock.Mock(return_value=ffmpeg)
+        settings_dir = tempfile.TemporaryDirectory()
+        self.addCleanup(settings_dir.cleanup)
         for patcher in (
                 mock.patch.object(ytd, "YT_DLP_AVAILABLE", True),
                 mock.patch.object(ytd, "find_ffmpeg", self.find),
+                mock.patch.object(ytd, "settings_path", return_value=os.path.join(
+                    settings_dir.name, "settings.json")),
                 mock.patch.object(ytd.messagebox, "showerror"),
                 mock.patch.object(ytd, "yt_dlp", None, create=True)):
             patcher.start()

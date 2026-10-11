@@ -10,6 +10,7 @@ import threading
 import queue
 import functools
 import glob
+import json
 import os
 import re
 import shutil
@@ -67,6 +68,48 @@ URL_PLACEHOLDER = "https://www.youtube.com/watch?v=..."
 VIDEO_MAX_RES = {"mp4_best": None, "1080p": 1080, "720p": 720, "480p": 480}
 
 FFMPEG_MISSING_STATUS = "ffmpeg not found, see the log below"
+
+# The Format radio buttons: (label, value for format_opts).
+FORMATS = [
+    ("Best MP4 (Video+Audio)", "mp4_best"),
+    ("1080p MP4",              "1080p"),
+    ("720p MP4",               "720p"),
+    ("480p MP4",               "480p"),
+    ("Audio Only (MP3)",       "mp3"),
+    ("Audio Only (M4A)",       "m4a"),
+]
+
+
+def settings_path():
+    """Where the last folder and format are remembered between runs."""
+    if sys.platform == "win32":
+        base = os.environ.get("APPDATA") or os.path.expanduser("~")
+    elif sys.platform == "darwin":
+        base = os.path.expanduser("~/Library/Application Support")
+    else:
+        base = os.environ.get("XDG_CONFIG_HOME") or os.path.expanduser("~/.config")
+    return os.path.join(base, "YT Downloader", "settings.json")
+
+
+def load_settings():
+    try:
+        with open(settings_path(), encoding="utf-8") as f:
+            data = json.load(f)
+    except (OSError, ValueError):   # missing, unreadable or not JSON
+        return {}
+    return data if isinstance(data, dict) else {}
+
+
+def save_settings(data):
+    path = settings_path()
+    try:
+        os.makedirs(os.path.dirname(path), exist_ok=True)
+        # Write a temporary file first so a crash can't leave half a file.
+        with open(path + ".tmp", "w", encoding="utf-8") as f:
+            json.dump(data, f, indent=2)
+        os.replace(path + ".tmp", path)
+    except OSError:
+        pass   # not being able to remember settings isn't worth an error
 
 
 def format_eta(seconds):
@@ -259,6 +302,7 @@ class YouTubeDownloader(tk.Tk):
         self._close_when_stopped = False
         self._placeholder_shown = False
         self._last_file = None
+        self._apply_saved_settings()
 
         self._build_ui()
         self._fit_window()
@@ -331,15 +375,7 @@ class YouTubeDownloader(tk.Tk):
         fmt_frame = tk.Frame(card, bg=SURFACE)
         fmt_frame.grid(row=row, column=0, columnspan=2, sticky="ew", pady=(0, 16))
 
-        formats = [
-            ("Best MP4 (Video+Audio)", "mp4_best"),
-            ("1080p MP4",              "1080p"),
-            ("720p MP4",               "720p"),
-            ("480p MP4",               "480p"),
-            ("Audio Only (MP3)",       "mp3"),
-            ("Audio Only (M4A)",       "m4a"),
-        ]
-        for i, (label, val) in enumerate(formats):
+        for i, (label, val) in enumerate(FORMATS):
             col, rrow = divmod(i, 3)
             rb = tk.Radiobutton(fmt_frame, text=label, variable=self.format_var,
                                 value=val, font=(UI_FONT, 10),
@@ -437,6 +473,20 @@ class YouTubeDownloader(tk.Tk):
         sb = tk.Scrollbar(log_frame, command=self.log_box.yview, bg=SURFACE)
         sb.grid(row=1, column=1, sticky="ns")
         self.log_box.configure(yscrollcommand=sb.set)
+
+    # The last folder and format are remembered (when a download starts and
+    # when the app closes). The "Whole playlist" box always starts unticked.
+    def _apply_saved_settings(self):
+        saved = load_settings()
+        if saved.get("format") in {value for _, value in FORMATS}:
+            self.format_var.set(saved["format"])
+        folder = saved.get("folder")
+        if isinstance(folder, str) and os.path.isdir(folder):
+            self.download_path.set(folder)
+
+    def _save_settings(self):
+        save_settings({"folder": self.download_path.get(),
+                       "format": self.format_var.get()})
 
     def _fit_window(self):
         # Open tall enough to show everything (but no taller than the screen).
@@ -550,6 +600,7 @@ class YouTubeDownloader(tk.Tk):
             self._set_status("Canceling… the app closes when it has stopped.",
                              WARNING)
             return
+        self._save_settings()
         self._closing = True
         if self._after_id is not None:
             self.after_cancel(self._after_id)
@@ -686,6 +737,7 @@ class YouTubeDownloader(tk.Tk):
             return
 
         opts = self._get_ydl_opts(ffmpeg)
+        self._save_settings()
         self.is_running = True
         self.dl_btn.config(text="✖  Cancel", command=self._cancel_download)
         self.progress_var.set(0)
