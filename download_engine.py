@@ -97,7 +97,6 @@ def same_version(a, b):
 
 RELEASES_URL = "https://github.com/lifeupnorth/YouTubeDownloader/releases/latest"
 LATEST_RELEASE_API = "https://api.github.com/repos/lifeupnorth/YouTubeDownloader/releases/latest"
-PYPI_YT_DLP_API = "https://pypi.org/pypi/yt-dlp/json"
 
 
 def app_version():
@@ -128,27 +127,19 @@ def _get_json(url):
 
 
 def check_for_update():
-    """A one-line notice when something newer is out, else None. In a release
-    .exe: a newer release of the app (which bundles a newer yt-dlp). From
-    source: a newer yt-dlp than the installed one. None without a network."""
+    """A one-line notice when a newer release of the app is out, else None.
+    Asks api.github.com; None without a network. Only a release .exe checks
+    (each release bundles a newer yt-dlp). From source it never does: the
+    app notes a yt-dlp that doesn't match the pin in requirements.txt."""
+    current = app_version()
+    if current is None:   # from source, or a test build
+        return None
     try:
-        if getattr(sys, "frozen", False):
-            current = app_version()
-            if current is None:
-                return None
-            release = _get_json(LATEST_RELEASE_API)
-            latest = release.get("tag_name") or ""
-            if latest and newer_version(latest, current):
-                return (f"• YT Downloader {latest.removeprefix('v')} is out (this is "
-                        f"{current}). Download it from {release.get('html_url') or RELEASES_URL}")
-            return None
-        installed = yt_dlp_version()
-        if installed is None:
-            return None
-        latest = _get_json(PYPI_YT_DLP_API)["info"]["version"]
-        if newer_version(latest, installed):
-            return (f"• yt-dlp {latest} is out (installed: {installed}). If YouTube "
-                    "downloads fail, update it: pip install -U yt-dlp")
+        release = _get_json(LATEST_RELEASE_API)
+        latest = release.get("tag_name") or ""
+        if latest and newer_version(latest, current):
+            return (f"• YT Downloader {latest.removeprefix('v')} is out (this is "
+                    f"{current}). Download it from {release.get('html_url') or RELEASES_URL}")
     except Exception:
         return None
     return None

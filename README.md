@@ -40,8 +40,12 @@ ffmpeg are built in, so there's nothing else to install. Each
 [release](https://github.com/lifeupnorth/YouTubeDownloader/releases) will have
 it attached, and the "Windows app" GitHub Actions workflow builds it on demand.
 A new yt-dlp version (merged into `requirements.txt`, usually by Dependabot) is
-released automatically as the next patch version, and the app logs a line at
-startup when a newer release is out. It starts a little
+released automatically as the next patch version. At startup the .exe asks
+GitHub (api.github.com) for the latest release, at most once a day, and logs a
+line when a newer one is out; untick **Check for updates at startup** in its
+header to stop it. The request carries nothing about you or your downloads.
+Running from source never checks. v1.0.0 can't tell it's out of date: it was
+built before the app knew its own version. The .exe starts a little
 slower than the script, because it unpacks itself first, and some antivirus
 programs are wary of this kind of .exe.
 

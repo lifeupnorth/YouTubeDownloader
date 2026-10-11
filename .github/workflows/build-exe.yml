@@ -19,12 +19,12 @@ on:
   push:
     branches: [main]
     paths: ["requirements.txt"]
-    tags: ["v*"]
+    tags: ["v[0-9]+.[0-9]+.[0-9]+"]
 
 # One run per branch or tag at a time, so two merges can't pick the same
 # version. Pull request runs are replaced by newer pushes.
 concurrency:
-  group: ${{ github.workflow }}-${{ github.ref }}
+  group: ${{ github.workflow }}-${{ github.event_name }}-${{ github.ref }}
   cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 permissions:
@@ -47,13 +47,22 @@ jobs:
           BEFORE: ${{ github.event.before }}
         run: |
           tag=""
-          if [[ "$GITHUB_REF" == refs/tags/v* ]]; then
-            tag="$GITHUB_REF_NAME"
-          elif [[ "$GITHUB_EVENT_NAME" == push ]] &&
-              git diff "$BEFORE" "$GITHUB_SHA" -- requirements.txt | grep -qi '^+yt-dlp'; then
-            last=$(git tag -l 'v[0-9]*' --sort=-v:refname | head -n 1)
-            IFS=. read -r major minor patch <<< "${last:-v0.0.0}"
-            tag="${major}.${minor}.$((patch + 1))"
+          semver='^v[0-9]+[.][0-9]+[.][0-9]+$'
+          if [[ "$GITHUB_REF" == refs/tags/* ]]; then
+            if [[ "$GITHUB_REF_NAME" =~ $semver ]]; then tag="$GITHUB_REF_NAME"; fi
+          elif [[ "$GITHUB_EVENT_NAME" == push ]]; then
+            # A force push or a new branch has no usable "before" commit; say
+            # so rather than silently skip a release.
+            if [[ -z "$BEFORE" || "$BEFORE" =~ ^0+$ ]] ||
+                ! git cat-file -e "$BEFORE^{commit}" 2>/dev/null; then
+              echo "::error::No commit before this push ($BEFORE), so it can't tell whether the yt-dlp pin changed. Release by pushing a vX.Y.Z tag."
+              exit 1
+            fi
+            if git diff "$BEFORE" "$GITHUB_SHA" -- requirements.txt | grep -qi '^+yt-dlp=='; then
+              last=$(git tag -l 'v*' | grep -E "$semver" | sort -V | tail -n 1)
+              IFS=. read -r major minor patch <<< "${last:-v0.0.0}"
+              tag="${major}.${minor}.$((patch + 1))"
+            fi
           fi
           echo "Release: ${tag:-none}"
           echo "tag=$tag" >> "$GITHUB_OUTPUT"

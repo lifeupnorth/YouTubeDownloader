@@ -163,14 +163,10 @@ class UpdateCheckTest(unittest.TestCase):
             self.assertIsNone(engine.check_for_update())   # a test build
         get.assert_not_called()
 
-    def test_source_says_when_a_newer_yt_dlp_is_out(self):
-        pypi = {"info": {"version": "2026.10.1"}}
-        with (mock.patch.object(engine, "yt_dlp_version", return_value="2026.08.19"),
-              mock.patch.object(engine, "_get_json", return_value=pypi) as get):
-            self.assertIn("yt-dlp 2026.10.1 is out", engine.check_for_update())
-            get.assert_called_once_with(engine.PYPI_YT_DLP_API)
-            pypi["info"]["version"] = "2026.8.19"
+    def test_source_never_checks(self):
+        with mock.patch.object(engine, "_get_json") as get:
             self.assertIsNone(engine.check_for_update())
+        get.assert_not_called()
 
     def test_no_network_no_notice(self):
         with (mock.patch.object(engine, "yt_dlp_version", return_value="2026.08.19"),
