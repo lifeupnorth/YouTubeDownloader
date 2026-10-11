@@ -55,7 +55,9 @@ def make_fake_ydl(streams=2, videos=1, overshoot=0, error=None):
                         time.sleep(0.002)
                     for hook in hooks:
                         hook({"status": "finished", "video": video,
-                              "filename": f"v{video}.part{stream}"})
+                              "filename": f"v{video}.f{stream}.webm"})
+                for hook in self.opts.get("post_hooks", []):
+                    hook(f"v{video}.mp4")
             if error:
                 raise error
 
@@ -155,6 +157,15 @@ class ThreadSafetyTest(unittest.TestCase):
                              "bar reached 100 before the done callback")
         self.assertEqual(self.progress[-1], 99)
         self.assertIsNone(self.app._after_id, "poll should stop when idle")
+        log = self.app.log_box.get("1.0", "end")
+        self.assertIn("Saved: v0.mp4", log)
+        self.assertNotIn(".f0.webm", log, "logged a temporary stream file")
+
+    def test_playlist_checkbox(self):
+        url = "https://www.youtube.com/watch?v=test&list=x"
+        self.assertIs(self.app._get_ydl_opts(url, "ffmpeg")["noplaylist"], True)
+        self.app.playlist_var.set(True)
+        self.assertIs(self.app._get_ydl_opts(url, "ffmpeg")["noplaylist"], False)
 
     def test_progress_restarts_per_playlist_video(self):
         seen = {}

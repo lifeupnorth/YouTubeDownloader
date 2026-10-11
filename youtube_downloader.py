@@ -149,6 +149,7 @@ class YouTubeDownloader(tk.Tk):
         # State
         self.download_path = tk.StringVar(value=os.path.expanduser("~/Downloads"))
         self.format_var    = tk.StringVar(value="mp4_best")
+        self.playlist_var  = tk.BooleanVar(value=False)
         self.progress_var  = tk.DoubleVar(value=0)
         self.status_var    = tk.StringVar(value="Ready")
         self.is_running    = False
@@ -249,6 +250,12 @@ class YouTubeDownloader(tk.Tk):
                                 cursor="hand2",
                                 command=self._on_format_change)
             rb.grid(row=rrow, column=col, sticky="w", padx=(0, 20), pady=2)
+        # The radio buttons fill columns 0-1; column 2 is free.
+        tk.Checkbutton(fmt_frame, text="Whole playlist",
+                       variable=self.playlist_var, font=("Helvetica", 10),
+                       bg=SURFACE, fg=TEXT_DIM, selectcolor=SURFACE2,
+                       activebackground=SURFACE, activeforeground=TEXT,
+                       cursor="hand2").grid(row=0, column=2, sticky="w", pady=2)
         row += 1
 
         # Output folder
@@ -416,6 +423,9 @@ class YouTubeDownloader(tk.Tk):
         opts = {
             "outtmpl": outtmpl,
             "progress_hooks": [self._progress_hook],
+            "post_hooks": [self._saved_hook],
+            # Only affects links to a video in a playlist (watch?v=…&list=…).
+            "noplaylist": not self.playlist_var.get(),
             "quiet": True,
             "no_warnings": False,
         }
@@ -448,7 +458,11 @@ class YouTubeDownloader(tk.Tk):
             self._stream_index += 1
             if self._stream_index >= streams:
                 self._latest_progress = (99, "Processing…", WARNING)
-            self._post(self._log, f"✔ Saved: {d.get('filename', '')}")
+
+    # Runs on the download thread, once per video after ffmpeg has finished;
+    # the progress hook only sees the temporary per-stream files.
+    def _saved_hook(self, filepath):
+        self._post(self._log, f"✔ Saved: {filepath}")
 
     def _start_download(self):
         if not YT_DLP_AVAILABLE:
