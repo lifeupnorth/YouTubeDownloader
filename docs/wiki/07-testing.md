@@ -12,7 +12,7 @@
 
 </details>
 
-The tests use the standard library `unittest`, and nothing touches the network: downloads run against a fake yt-dlp. There are 97 tests in four files. The engine's tests need no display; the window's tests open real Tk windows. GitHub Actions runs them on every push to `main` and every pull request, together with a ruff lint check.
+The tests use the standard library `unittest`, and nothing touches the internet: most downloads run against a fake yt-dlp, and `test_real_yt_dlp.py` runs the real one against a local server. There are 172 tests in eight files. The engine's tests need no display; the window's tests open real Tk windows. GitHub Actions runs them on every push to `main` and every pull request, together with a ruff lint check.
 
 ```
 python -m unittest discover -s tests -v
@@ -20,11 +20,14 @@ python -m unittest discover -s tests -v
 
 | File | Tests | What it covers | Needs |
 |---|---|---|---|
-| `test_engine.py` | 44 | `download_engine.py` on its own: formats, ffmpeg lookup, yt-dlp version and loading, preview helpers, the logger, `DownloadJob`, `DownloadQueue` | Nothing (some tests use real yt-dlp or Pillow and skip without them) |
-| `test_thread_safety.py` | 37 | The real window driven through simulated downloads; worker threads must never call Tk | A display |
-| `test_app.py` | 10 | Settings file, Open folder, ffmpeg help text and checks in the window | A display for the window checks |
-| `test_requirements.py` | 6 | The yt-dlp pin in `requirements.txt` is what the in-app installer uses; every requirement is pinned | Nothing |
-| `test_smoke.py` | 10 | `packaging/smoke_test.py` and `--smoke-download` with a fake job: the report, retries, timeouts, the bot check | Nothing |
+| `test_engine.py` | 69 | `download_engine.py` on its own: formats, ffmpeg and JavaScript runtime lookup, the update check, yt-dlp version and loading, preview helpers, the logger, `DownloadJob`, `DownloadQueue` | Nothing (some tests use real yt-dlp or Pillow and skip without them) |
+| `test_real_yt_dlp.py` | 3 | The engine with the real yt-dlp, downloading from a local HTTP server: a download then "Already downloaded", an MP3 converted only once, Cancel removing the `.part` file | yt-dlp; ffmpeg for the MP3 test |
+| `test_thread_safety.py` | 50 | The real window driven through simulated downloads; worker threads must never call Tk | A display |
+| `test_app.py` | 15 | Settings file, Open folder, ffmpeg help text and checks in the window | A display for the window checks |
+| `test_requirements.py` | 10 | The yt-dlp pin in `requirements.txt` is what the in-app installer uses; every requirement is pinned | Tkinter (it imports the window) |
+| `test_build_exe.py` | 7 | `packaging/build_exe.py`: checksum-checked downloads and unpacking, and the `--check` verdict on the .exe's self-check | Nothing |
+| `test_sign_exe.py` | 8 | `packaging/sign_exe.py` with a fake signtool | Nothing |
+| `test_smoke.py` | 10 | `packaging/smoke_test.py` and `--smoke-download` with a fake job: the report, retries, timeouts, the bot check | Tkinter (it imports the window) |
 
 ### The nightly smoke test
 
@@ -44,10 +47,11 @@ Sources: [README.md:60-73](https://github.com/lifeupnorth/YouTubeDownloader/blob
 | `fail` | Entries that call `logger.error` (and raise unless `ignoreerrors` is set) |
 | `already` | Entries reported with `__real_download=False` |
 | `error` | An exception after the run |
-| `probe` | The `_type` returned by each `extract_info(process=False)` call |
+| `probe` | The `_type` returned by each `extract_info(process=False)` call; `None` logs an error and returns nothing, like a video that can't be found |
 | `files_dir` | Writes real stream files there (`.part` while downloading, then renamed, then "merged" into `v<N>.mp4`) |
 | `on_progress` | A callback before each progress event, used to cancel at an exact point |
 | `warn` | A yt-dlp warning |
+| `delay` | Seconds between progress events (default 0) |
 
 Sources: [tests/fakes.py:8-118](https://github.com/lifeupnorth/YouTubeDownloader/blob/fed021846b04c093d045f0ec3de2b53d5ea42060/tests/fakes.py#L8-L118)
 
@@ -69,7 +73,7 @@ Sources: [tests/test_engine.py:82-293](https://github.com/lifeupnorth/YouTubeDow
 
 ## Window tests (`test_thread_safety.py`)
 
-These check the app's central rule: **worker threads never call Tk**. `setUp` wraps the Tk methods in `GUARDED` (`Variable.get/set`, `Misc.configure/config/after/after_cancel`, `Text.insert/see`) with a function that records any call from a non-main thread, and tests assert `self.violations == []`. `run_download` puts the fake in place of the engine's `yt_dlp`, starts `_start_download`, and runs `mainloop()` with a 10-second safety timeout; `_download_finished` and the patched dialogs end the loop. Settings go to a temporary file, never the real one.
+These check the app's central rule: **worker threads never call Tk**. `setUp` records any call from a non-main thread at three levels: the Tk methods in `GUARDED`, the Tcl interpreter itself (`GuardedTcl`, which every widget, variable and image goes through), and the dialogs (`GuardedDialogs`, which also wraps a mock a test puts in a dialog's place). After every test, a cleanup asserts there were no such calls, no exceptions on any thread, and no worker crashes (unless the test sets `expect_crash`). `run_download` puts the fake in place of the engine's `yt_dlp`, starts `_start_download`, and runs `mainloop()`; it fails the test if the download hasn't finished after 10 seconds; `_download_finished` and the patched dialogs end the loop. Settings go to a temporary file, never the real one.
 
 | Area | Tests |
 |---|---|

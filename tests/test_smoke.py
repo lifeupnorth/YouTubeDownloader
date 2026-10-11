@@ -5,12 +5,12 @@ import tempfile
 import unittest
 from unittest import mock
 
-sys.path.insert(0, os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
-                                "packaging"))
-import smoke_test
+ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+sys.path[:0] = [ROOT, os.path.join(ROOT, "packaging")]   # the app, and smoke_test
+import smoke_test  # noqa: E402
 
-import download_engine as engine
-import youtube_downloader as ytd
+import download_engine as engine  # noqa: E402
+import youtube_downloader as ytd  # noqa: E402
 
 
 class FakeJob:
