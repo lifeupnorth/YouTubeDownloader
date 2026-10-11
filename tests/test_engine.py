@@ -126,6 +126,19 @@ class FormatSelectionTest(unittest.TestCase):
 
 
 class FindFfmpegTest(unittest.TestCase):
+    def test_bundled_ffmpeg_only_in_the_exe(self):
+        self.assertIsNone(engine.bundled_ffmpeg())   # running from source
+        with tempfile.TemporaryDirectory() as unpacked:
+            name = "ffmpeg.exe" if sys.platform == "win32" else "ffmpeg"
+            with mock.patch.object(engine.sys, "frozen", True, create=True), \
+                    mock.patch.object(engine.sys, "_MEIPASS", unpacked, create=True):
+                self.assertIsNone(engine.bundled_ffmpeg(), "not in the bundle")
+                open(os.path.join(unpacked, name), "wb").close()
+                self.assertEqual(engine.bundled_ffmpeg(), os.path.join(unpacked, name))
+                with mock.patch.object(engine.shutil, "which") as which:
+                    self.assertEqual(engine.find_ffmpeg(), os.path.join(unpacked, name))
+                which.assert_not_called()   # the bundled one comes first
+
     def test_prefers_path(self):
         with mock.patch.object(engine.shutil, "which", return_value="/bin/ffmpeg"):
             self.assertEqual(engine.find_ffmpeg(), "/bin/ffmpeg")

@@ -1,1 +1,6 @@
 __pycache__/
+
+# Windows app build (packaging/build_exe.py)
+build/
+dist/
+packaging/.cache/

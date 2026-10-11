@@ -159,8 +159,18 @@ def _registry_path():
     return os.pathsep.join(parts)
 
 
+def bundled_ffmpeg():
+    """The ffmpeg packed into the one-file .exe (packaging/build_exe.py), when
+    running from it; PyInstaller unpacks it into sys._MEIPASS."""
+    if not getattr(sys, "frozen", False):
+        return None
+    name = "ffmpeg.exe" if sys.platform == "win32" else "ffmpeg"
+    path = os.path.join(getattr(sys, "_MEIPASS", ""), name)
+    return path if os.path.isfile(path) else None
+
+
 def find_ffmpeg():
-    found = shutil.which("ffmpeg")
+    found = bundled_ffmpeg() or shutil.which("ffmpeg")
     if found is None and sys.platform == "win32":
         found = shutil.which("ffmpeg", path=_registry_path())
     return found

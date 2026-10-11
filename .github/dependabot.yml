@@ -17,3 +17,11 @@ updates:
       interval: "weekly"
     commit-message:
       prefix: "ci"
+
+  # PyInstaller, which builds the Windows .exe.
+  - package-ecosystem: "pip"
+    directory: "/packaging"
+    schedule:
+      interval: "weekly"
+    commit-message:
+      prefix: "deps"

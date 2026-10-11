@@ -1,0 +1,30 @@
+YT-Downloader.exe — third-party software
+
+The app itself is MIT-licensed (see LICENSE in the source repository,
+https://github.com/lifeupnorth/YouTubeDownloader). The one-file .exe also
+contains the following programs and libraries, each under its own license.
+
+ffmpeg
+  The "essentials" build by gyan.dev, used to merge video and audio and to
+  convert audio. It's licensed under the GNU General Public License version 3
+  (GPLv3); the full license is in FFMPEG-LICENSE.txt next to this file.
+  Builds and their source: https://www.gyan.dev/ffmpeg/builds/
+  ffmpeg's own source: https://ffmpeg.org/download.html
+  ffmpeg is a separate program that the app runs; it isn't linked into the app.
+
+yt-dlp
+  https://github.com/yt-dlp/yt-dlp
+  Released into the public domain (The Unlicense).
+
+Pillow
+  https://python-pillow.github.io/
+  MIT-CMU license.
+
+Python and Tcl/Tk
+  Python is licensed under the PSF License Agreement
+  (https://docs.python.org/3/license.html); Tcl/Tk under a BSD-style license
+  (https://www.tcl.tk/software/tcltk/license.html).
+
+PyInstaller (used to build the .exe)
+  https://pyinstaller.org/ — GPL with an exception that allows distributing
+  the programs it builds under any license.

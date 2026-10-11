@@ -1,0 +1,73 @@
+name: Windows app
+
+# Builds dist/YT-Downloader.exe with packaging/build_exe.py and checks it.
+# Run it by hand (Actions tab → "Windows app" → Run workflow) to get the .exe
+# as a downloadable artifact. It also runs on pull requests that change the
+# build or the pinned versions (e.g. Dependabot's). Pushing a version tag
+# (v1.0.0, ...) also attaches the .exe to a GitHub release for that tag.
+
+on:
+  workflow_dispatch:
+  pull_request:
+    paths:
+      - "packaging/**"
+      - "requirements.txt"
+      - ".github/workflows/build-exe.yml"
+  push:
+    tags: ["v*"]
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    runs-on: windows-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: actions/setup-python@v7
+        with:
+          python-version: "3.14"
+          cache: pip
+          cache-dependency-path: |
+            requirements.txt
+            packaging/requirements-build.txt
+
+      - name: Install dependencies
+        run: python -m pip install -r requirements.txt -r packaging/requirements-build.txt
+
+      - name: Build the .exe
+        run: python packaging/build_exe.py
+
+      # Runs the .exe: yt-dlp, the bundled ffmpeg, Pillow and the window must work.
+      - name: Check the .exe
+        run: python packaging/build_exe.py --check
+
+      - uses: actions/upload-artifact@v7
+        with:
+          name: YT-Downloader
+          path: |
+            dist/YT-Downloader.exe
+            dist/THIRD-PARTY-NOTICES.txt
+            dist/FFMPEG-LICENSE.txt
+          if-no-files-found: error
+
+  release:
+    if: startsWith(github.ref, 'refs/tags/v')
+    needs: build
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write   # to create the release
+    steps:
+      - uses: actions/download-artifact@v8
+        with:
+          name: YT-Downloader
+
+      - name: Create the release with the .exe
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: >-
+          gh release create "$GITHUB_REF_NAME" --repo "$GITHUB_REPOSITORY"
+          --title "YT Downloader $GITHUB_REF_NAME" --generate-notes
+          YT-Downloader.exe THIRD-PARTY-NOTICES.txt FFMPEG-LICENSE.txt

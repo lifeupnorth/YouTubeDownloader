@@ -46,6 +46,10 @@ With **Whole playlist** unticked, a link to a video opened from a playlist downl
 
 Sources: [README.md:36-59](https://github.com/lifeupnorth/YouTubeDownloader/blob/fed021846b04c093d045f0ec3de2b53d5ea42060/README.md#L36-L59), [download_engine.py:333-354](https://github.com/lifeupnorth/YouTubeDownloader/blob/fed021846b04c093d045f0ec3de2b53d5ea42060/download_engine.py#L333-L354)
 
+## The one-file Windows app
+
+`packaging/build_exe.py` builds `dist/YT-Downloader.exe` with PyInstaller (pinned in `packaging/requirements-build.txt`). It contains Python, the app, the pinned yt-dlp and Pillow, and gyan.dev's ffmpeg "essentials" build, which the script downloads and checks against a pinned SHA-256. Inside the .exe, `engine.bundled_ffmpeg()` finds that ffmpeg in PyInstaller's unpack folder (`sys._MEIPASS`) before looking anywhere else, and the yt-dlp install prompt is replaced by an error, since there's no pip. `build_exe.py --check` runs the .exe with `--self-check`, which writes what the build contains to a JSON file (yt-dlp version, the bundled ffmpeg and its version, Pillow, whether the window opens). The "Windows app" workflow (`.github/workflows/build-exe.yml`) builds and checks it on demand, on pull requests that change the build or the pins, and for version tags, where it also creates the GitHub release. ffmpeg is GPL-licensed, so its license and the other notices (`packaging/THIRD-PARTY-NOTICES.txt`) go inside the .exe and next to it.
+
 ## Settings
 
 There are no environment variables or command-line options. The last **Save To** folder and **Format** are remembered in a small JSON file:
