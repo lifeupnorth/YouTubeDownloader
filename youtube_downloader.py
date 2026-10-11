@@ -13,6 +13,7 @@ import queue
 import subprocess
 import sys
 import threading
+import time
 import tkinter as tk
 from tkinter import filedialog, messagebox, ttk
 
@@ -89,6 +90,9 @@ def save_settings(data):
         pass   # not being able to remember settings isn't worth an error
 
 
+UPDATE_CHECK_INTERVAL = 24 * 60 * 60   # seconds
+
+
 PREVIEW_HINT = "Paste a link to see its title and length here."
 
 
@@ -125,7 +129,7 @@ def ffmpeg_help(startup=False):
 
 
 class YouTubeDownloader(tk.Tk):
-    def __init__(self):
+    def __init__(self, *, update_check=True):
         super().__init__()
         self.title("YT Downloader")
         self.configure(bg=BG)
@@ -152,6 +156,7 @@ class YouTubeDownloader(tk.Tk):
         self._preview_key   = None     # (links, whole playlist) last looked up
         self._preview_token = 0        # newest lookup; older answers are dropped
         self._preview_image = None     # keeps the PhotoImage alive
+        self.update_check_var = tk.BooleanVar(value=True)
         self._apply_saved_settings()
 
         self._build_ui()
@@ -165,6 +170,8 @@ class YouTubeDownloader(tk.Tk):
             self._set_status(FFMPEG_MISSING_STATUS, WARNING)
             self._log(ffmpeg_help(startup=True))
         self._note_yt_dlp_version()
+        if update_check:
+            self._maybe_check_for_update()
         self.bind("<FocusIn>", self._recheck_ffmpeg, add="+")
 
     # ── UI Construction ─────────────────────────────────────────────────────
@@ -182,6 +189,13 @@ class YouTubeDownloader(tk.Tk):
         self.powered_lbl = tk.Label(hdr, text=self._powered_by_text(),
                                     font=(UI_FONT, 9), bg=SURFACE, fg=TEXT_DIM)
         self.powered_lbl.grid(row=1, column=0, pady=(2, 0))
+        if engine.app_version():   # only a release .exe checks
+            tk.Checkbutton(hdr, text="Check for updates at startup",
+                           variable=self.update_check_var, font=(UI_FONT, 8),
+                           bg=SURFACE, fg=TEXT_DIM, selectcolor=SURFACE2,
+                           activebackground=SURFACE, activeforeground=TEXT,
+                           cursor="hand2", command=self._save_settings,
+                           ).grid(row=2, column=0)
 
         # ── Main card ──
         card = tk.Frame(self, bg=SURFACE, padx=28, pady=24,
@@ -360,10 +374,15 @@ class YouTubeDownloader(tk.Tk):
         folder = saved.get("folder")
         if isinstance(folder, str) and os.path.isdir(folder):
             self.download_path.set(folder)
+        if isinstance(saved.get("check_updates"), bool):
+            self.update_check_var.set(saved["check_updates"])
 
     def _save_settings(self):
-        save_settings({"folder": self.download_path.get(),
-                       "format": self.format_var.get()})
+        # Keeps the other keys, e.g. when updates were last checked.
+        save_settings({**load_settings(),
+                       "folder": self.download_path.get(),
+                       "format": self.format_var.get(),
+                       "check_updates": self.update_check_var.get()})
 
     def _fit_window(self):
         # Open tall enough to show everything (but no taller than the screen).
@@ -709,8 +728,31 @@ class YouTubeDownloader(tk.Tk):
 
     def _powered_by_text(self):
         version = engine.yt_dlp_version()
-        return f"Powered by yt-dlp {version}" if version else \
+        text = f"Powered by yt-dlp {version}" if version else \
             "Powered by yt-dlp (not installed)"
+        app = engine.app_version()
+        return f"v{app} · {text}" if app else text
+
+    # A release .exe asks GitHub (api.github.com) for its latest release, at
+    # most once a day, while "Check for updates at startup" is ticked.
+    def _maybe_check_for_update(self):
+        if engine.app_version() is None or not self.update_check_var.get():
+            return
+        saved = load_settings()
+        last, now = saved.get("last_update_check"), time.time()
+        if isinstance(last, (int, float)) and 0 <= now - last < UPDATE_CHECK_INTERVAL:
+            return
+        save_settings({**saved, "last_update_check": now})
+        self._start_worker(self._update_thread)
+
+    # Says once, in the log, when a newer release is out.
+    def _update_thread(self):
+        self._post(self._update_checked, engine.check_for_update())
+
+    def _update_checked(self, notice):
+        self._worker_finished()
+        if notice:
+            self._log(notice)
 
     # The app is tested with the version pinned in requirements.txt; say so
     # if another one is installed (yt-dlp often needs updates for YouTube).
@@ -783,13 +825,14 @@ def self_check(path):
                              creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0))
         ffmpeg_version = run.stdout.splitlines()[0] if run.stdout else None
     result = {"frozen": bool(getattr(sys, "frozen", False)),
+              "app_version": engine.app_version(),
               "yt_dlp": engine.yt_dlp_version(),
               "yt_dlp_pin": engine.pinned_yt_dlp_version(),
               "ffmpeg": ffmpeg, "ffmpeg_bundled": engine.bundled_ffmpeg() is not None,
               "ffmpeg_version": ffmpeg_version,
               "thumbnails": ImageTk is not None and engine.Image is not None}
     try:
-        app = YouTubeDownloader()   # also checks that Tk works in this build
+        app = YouTubeDownloader(update_check=False)   # also checks that Tk works
         app.update()
         result["window"] = app.title()
         app.destroy()

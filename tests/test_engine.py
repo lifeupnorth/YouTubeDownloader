@@ -127,6 +127,56 @@ class FormatSelectionTest(unittest.TestCase):
             self.assertEqual([mapping(pp) for pp in extractors], [choice])
 
 
+class UpdateCheckTest(unittest.TestCase):
+    def test_newer_version(self):
+        self.assertTrue(engine.newer_version("v1.0.10", "1.0.9"))
+        self.assertTrue(engine.newer_version("2026.10.01", "2026.8.19"))
+        self.assertFalse(engine.newer_version("v1.0.0", "1.0.0"))
+        self.assertFalse(engine.newer_version("2026.08.19", "2026.8.19"))
+
+    def test_app_version_only_in_the_exe(self):
+        self.assertIsNone(engine.app_version())   # running from source
+        with (tempfile.TemporaryDirectory() as unpacked,
+              mock.patch.object(engine.sys, "frozen", True, create=True),
+              mock.patch.object(engine.sys, "_MEIPASS", unpacked, create=True)):
+            self.assertIsNone(engine.app_version(), "no VERSION file")
+            version_file = os.path.join(unpacked, "VERSION")
+            with open(version_file, "w", encoding="utf-8") as f:
+                f.write("")
+            self.assertIsNone(engine.app_version(), "a test build")
+            with open(version_file, "w", encoding="utf-8") as f:
+                f.write("1.0.3")
+            self.assertEqual(engine.app_version(), "1.0.3")
+
+    def test_exe_says_when_a_newer_release_is_out(self):
+        release = {"tag_name": "v1.0.4", "html_url": "https://github.com/r/v1.0.4"}
+        with (mock.patch.object(engine.sys, "frozen", True, create=True),
+              mock.patch.object(engine, "app_version", return_value="1.0.3"),
+              mock.patch.object(engine, "_get_json", return_value=release) as get):
+            notice = engine.check_for_update()
+            self.assertIn("1.0.4 is out (this is 1.0.3)", notice)
+            self.assertIn("https://github.com/r/v1.0.4", notice)
+            get.assert_called_once_with(engine.LATEST_RELEASE_API)
+            release["tag_name"] = "v1.0.3"
+            self.assertIsNone(engine.check_for_update())
+        with (mock.patch.object(engine.sys, "frozen", True, create=True),
+              mock.patch.object(engine, "app_version", return_value=None),
+              mock.patch.object(engine, "_get_json") as get):
+            self.assertIsNone(engine.check_for_update())   # a test build
+        get.assert_not_called()
+
+    def test_source_never_checks(self):
+        with mock.patch.object(engine, "_get_json") as get:
+            self.assertIsNone(engine.check_for_update())
+        get.assert_not_called()
+
+    def test_no_network_no_notice(self):
+        with (mock.patch.object(engine, "yt_dlp_version", return_value="2026.08.19"),
+              mock.patch.object(engine.urllib.request, "urlopen",
+                                side_effect=OSError("offline"))):
+            self.assertIsNone(engine.check_for_update())
+
+
 class FindFfmpegTest(unittest.TestCase):
     def test_bundled_ffmpeg_only_in_the_exe(self):
         self.assertIsNone(engine.bundled_ffmpeg())   # running from source

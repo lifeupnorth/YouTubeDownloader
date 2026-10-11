@@ -10,6 +10,7 @@ import functools
 import glob
 import importlib
 import io
+import json
 import os
 import re
 import shutil
@@ -90,6 +91,58 @@ def same_version(a, b):
     def parts(version):
         return tuple(int(p) if p.isdigit() else p for p in version.split("."))
     return parts(a) == parts(b)
+
+
+# ── Update check ─────────────────────────────────────────────────────────────
+
+RELEASES_URL = "https://github.com/lifeupnorth/YouTubeDownloader/releases/latest"
+LATEST_RELEASE_API = "https://api.github.com/repos/lifeupnorth/YouTubeDownloader/releases/latest"
+
+
+def app_version():
+    """The release this .exe was built as (e.g. "1.0.3", from the VERSION file
+    packaging/build_exe.py bundles); None from source or in a test build."""
+    if not getattr(sys, "frozen", False):
+        return None
+    try:
+        with open(os.path.join(getattr(sys, "_MEIPASS", ""), "VERSION"),
+                  encoding="utf-8") as f:
+            return f.read().strip().removeprefix("v") or None
+    except OSError:
+        return None
+
+
+def newer_version(latest, current):
+    """Whether latest is newer than current: "v1.0.10" > "1.0.9",
+    "2026.10.01" > "2026.8.19"."""
+    def parts(version):
+        return tuple(int(p) for p in re.findall("[0-9]+", version))
+    return parts(latest) > parts(current)
+
+
+def _get_json(url):
+    request = urllib.request.Request(url, headers={"User-Agent": "YT-Downloader"})
+    with urllib.request.urlopen(request, timeout=10) as response:
+        return json.load(response)
+
+
+def check_for_update():
+    """A one-line notice when a newer release of the app is out, else None.
+    Asks api.github.com; None without a network. Only a release .exe checks
+    (each release bundles a newer yt-dlp). From source it never does: the
+    app notes a yt-dlp that doesn't match the pin in requirements.txt."""
+    current = app_version()
+    if current is None:   # from source, or a test build
+        return None
+    try:
+        release = _get_json(LATEST_RELEASE_API)
+        latest = release.get("tag_name") or ""
+        if latest and newer_version(latest, current):
+            return (f"• YT Downloader {latest.removeprefix('v')} is out (this is "
+                    f"{current}). Download it from {release.get('html_url') or RELEASES_URL}")
+    except Exception:
+        return None
+    return None
 
 
 # ── Formats ──────────────────────────────────────────────────────────────────

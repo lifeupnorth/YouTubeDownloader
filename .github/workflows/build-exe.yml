@@ -4,7 +4,10 @@ name: Windows app
 # Run it by hand (Actions tab → "Windows app" → Run workflow) to get the .exe
 # as a downloadable artifact. It also runs on pull requests that change the
 # build or the pinned versions (e.g. Dependabot's). Pushing a version tag
-# (v1.0.0, ...) also attaches the .exe to a GitHub release for that tag.
+# (v1.0.0, ...) also attaches the .exe to a GitHub release for that tag. A
+# push to main that changes the yt-dlp pin in requirements.txt (e.g. a merged
+# Dependabot PR) releases too, as the next patch version (v1.0.0 -> v1.0.1),
+# so users of the .exe get the new yt-dlp; the app tells them it's out.
 
 on:
   workflow_dispatch:
@@ -14,13 +17,58 @@ on:
       - "requirements.txt"
       - ".github/workflows/build-exe.yml"
   push:
-    tags: ["v*"]
+    branches: [main]
+    paths: ["requirements.txt"]
+    tags: ["v[0-9]+.[0-9]+.[0-9]+"]
+
+# One run per branch or tag at a time, so two merges can't pick the same
+# version. Pull request runs are replaced by newer pushes.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event_name }}-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 permissions:
   contents: read
 
 jobs:
+  # The version to release, if any: the pushed tag, or the next patch version
+  # when a push to main changed the yt-dlp pin. Empty otherwise.
+  version:
+    runs-on: ubuntu-latest
+    outputs:
+      tag: ${{ steps.pick.outputs.tag }}
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          fetch-depth: 0   # the tags and the commits before this push
+
+      - id: pick
+        env:
+          BEFORE: ${{ github.event.before }}
+        run: |
+          tag=""
+          semver='^v[0-9]+[.][0-9]+[.][0-9]+$'
+          if [[ "$GITHUB_REF" == refs/tags/* ]]; then
+            if [[ "$GITHUB_REF_NAME" =~ $semver ]]; then tag="$GITHUB_REF_NAME"; fi
+          elif [[ "$GITHUB_EVENT_NAME" == push ]]; then
+            # A force push or a new branch has no usable "before" commit; say
+            # so rather than silently skip a release.
+            if [[ -z "$BEFORE" || "$BEFORE" =~ ^0+$ ]] ||
+                ! git cat-file -e "$BEFORE^{commit}" 2>/dev/null; then
+              echo "::error::No commit before this push ($BEFORE), so it can't tell whether the yt-dlp pin changed. Release by pushing a vX.Y.Z tag."
+              exit 1
+            fi
+            if git diff "$BEFORE" "$GITHUB_SHA" -- requirements.txt | grep -qi '^+yt-dlp=='; then
+              last=$(git tag -l 'v*' | grep -E "$semver" | sort -V | tail -n 1)
+              IFS=. read -r major minor patch <<< "${last:-v0.0.0}"
+              tag="${major}.${minor}.$((patch + 1))"
+            fi
+          fi
+          echo "Release: ${tag:-none}"
+          echo "tag=$tag" >> "$GITHUB_OUTPUT"
+
   build:
+    needs: version
     runs-on: windows-latest
     timeout-minutes: 20
     steps:
@@ -39,10 +87,14 @@ jobs:
 
       - name: Build the .exe
         run: python packaging/build_exe.py
+        env:
+          APP_VERSION: ${{ needs.version.outputs.tag }}
 
       # Runs the .exe: yt-dlp, the bundled ffmpeg, Pillow and the window must work.
       - name: Check the .exe
         run: python packaging/build_exe.py --check
+        env:
+          APP_VERSION: ${{ needs.version.outputs.tag }}
 
       - uses: actions/upload-artifact@v7
         with:
@@ -54,8 +106,8 @@ jobs:
           if-no-files-found: error
 
   release:
-    if: startsWith(github.ref, 'refs/tags/v')
-    needs: build
+    if: needs.version.outputs.tag != ''
+    needs: [version, build]
     runs-on: ubuntu-latest
     permissions:
       contents: write   # to create the release
@@ -67,7 +119,8 @@ jobs:
       - name: Create the release with the .exe
         env:
           GH_TOKEN: ${{ github.token }}
+          TAG: ${{ needs.version.outputs.tag }}
         run: >-
-          gh release create "$GITHUB_REF_NAME" --repo "$GITHUB_REPOSITORY"
-          --title "YT Downloader $GITHUB_REF_NAME" --generate-notes
+          gh release create "$TAG" --repo "$GITHUB_REPOSITORY" --target "$GITHUB_SHA"
+          --title "YT Downloader $TAG" --generate-notes
           YT-Downloader.exe THIRD-PARTY-NOTICES.txt FFMPEG-LICENSE.txt
