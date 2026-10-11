@@ -39,9 +39,14 @@ start downloading right after. The header shows which yt-dlp version is in use.
 `YT-Downloader.exe` is the whole app in one file: Python, yt-dlp, Pillow and
 ffmpeg are built in, so there's nothing else to install. Each
 [release](https://github.com/lifeupnorth/YouTubeDownloader/releases) will have
-it attached, and the "Windows app" GitHub Actions workflow builds it on demand.
-A new yt-dlp version (merged into `requirements.txt`, usually by Dependabot) is
-released automatically as the next patch version. At startup the .exe asks
+it attached, and the "Windows app" GitHub Actions workflow builds it for every
+pull request and on demand. A new yt-dlp version (merged into
+`requirements.txt`, usually by Dependabot) is released automatically as the
+next patch version, once the repository owner approves the release build.
+Each release lists the .exe's SHA-256 (and `SHA256SUMS.txt` for all its files),
+and you can check that a downloaded .exe was built by this repository's
+workflow with `gh attestation verify YT-Downloader.exe --repo
+lifeupnorth/YouTubeDownloader`. At startup the .exe asks
 GitHub (api.github.com) for the latest release, at most once a day, and logs a
 line when a newer one is out; untick **Check for updates at startup** in its
 header to stop it. The request carries nothing about you or your downloads.
@@ -52,12 +57,14 @@ programs are wary of this kind of .exe.
 
 To build it yourself on Windows:
 ```
-pip install -r requirements.txt -r packaging/requirements-build.txt
+pip install -r requirements.txt
+pip install --require-hashes -r packaging/requirements-build.txt
 python packaging/build_exe.py
 python packaging/build_exe.py --check
 ```
 This writes `dist/YT-Downloader.exe`. The build downloads ffmpeg (gyan.dev's
-GPL "essentials" build) and checks it against a pinned checksum; its license and
+GPL "essentials" build) and deno, and checks them against pinned checksums (a
+weekly workflow opens an issue when either has a newer release); its license and
 the other third-party notices are in `packaging/THIRD-PARTY-NOTICES.txt` and go
 next to the .exe.
 

@@ -1,16 +1,18 @@
 # Keeps the yt-dlp pin in requirements.txt current: YouTube changes regularly
 # break older yt-dlp versions. The app reads the pin from requirements.txt, so
-# a Dependabot PR is a complete update on its own.
+# a Dependabot PR is a complete update on its own. Daily, since a yt-dlp
+# release is often the fix for a YouTube change; once merged, it's released.
 version: 2
 updates:
   - package-ecosystem: "pip"
     directory: "/"
     schedule:
-      interval: "weekly"
+      interval: "daily"
     commit-message:
       prefix: "deps"
 
-  # Keeps the action versions in .github/workflows current.
+  # Keeps the actions in .github/workflows current (they're pinned by
+  # commit SHA, with the version in a comment).
   - package-ecosystem: "github-actions"
     directory: "/"
     schedule:
@@ -18,7 +20,8 @@ updates:
     commit-message:
       prefix: "ci"
 
-  # PyInstaller, which builds the Windows .exe.
+  # PyInstaller, which builds the Windows .exe, and its dependencies, with
+  # their hashes.
   - package-ecosystem: "pip"
     directory: "/packaging"
     schedule:

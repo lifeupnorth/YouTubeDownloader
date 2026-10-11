@@ -5,7 +5,8 @@ mutagen) and Pillow (the versions pinned in requirements.txt), ffmpeg and deno (
 YouTube), so users don't need to install anything.
 Run it on Windows, from the repository's root folder:
 
-    pip install -r requirements.txt -r packaging/requirements-build.txt
+    pip install -r requirements.txt
+    pip install --require-hashes -r packaging/requirements-build.txt
     python packaging/build_exe.py            # builds dist/YT-Downloader.exe
     python packaging/build_exe.py --check    # runs the .exe's self-check
 

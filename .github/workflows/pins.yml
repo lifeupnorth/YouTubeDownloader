@@ -1,0 +1,36 @@
+name: Bundled programs
+
+# Dependabot keeps the Python packages and the actions current, but not the
+# ffmpeg and deno builds the .exe bundles (FFMPEG_VERSION and DENO_VERSION in
+# packaging/build_exe.py). Every week this opens an issue for each newer
+# release, with what to change; packaging/check_pins.py does the work.
+
+on:
+  schedule:
+    - cron: "41 6 * * 1"   # Mondays
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      contents: read
+      issues: write   # to open the issues
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+        with:
+          python-version: "3.14"
+
+      - name: Look for newer ffmpeg and deno releases
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+        run: python packaging/check_pins.py --open-issues
