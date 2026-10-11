@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """
 YouTube Video Downloader — Desktop App
-Requirements: pip install yt-dlp
+Requirements: pip install -r requirements.txt
 """
 
 import tkinter as tk
@@ -20,6 +20,10 @@ try:
     YT_DLP_AVAILABLE = True
 except ImportError:
     YT_DLP_AVAILABLE = False
+
+# The yt-dlp version this app is tested with; must match requirements.txt
+# (tests/test_requirements.py checks). Bump both when YouTube changes break it.
+YT_DLP_REQUIREMENT = "yt-dlp==2026.8.19"
 
 
 # ── Color palette ───────────────────────────────────────────────────────────
@@ -657,7 +661,7 @@ class YouTubeDownloader(tk.Tk):
             "yt-dlp not found",
             "yt-dlp is required but not installed.\n\n"
             "Install it now with pip?\n\n"
-            "(You can also run:  pip install yt-dlp)"
+            f"(You can also run:  pip install {YT_DLP_REQUIREMENT})"
         )
         if ans:
             self._install_ytdlp()
@@ -669,7 +673,7 @@ class YouTubeDownloader(tk.Tk):
         def run():
             try:
                 subprocess.check_call(
-                    [sys.executable, "-m", "pip", "install", "yt-dlp"],
+                    [sys.executable, "-m", "pip", "install", YT_DLP_REQUIREMENT],
                     stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL
                 )
                 self._post(self._install_done, True)
@@ -688,7 +692,8 @@ class YouTubeDownloader(tk.Tk):
                                 "Please restart the application.")
         else:
             self._log(f"✘ Install failed: {err}")
-            self._set_status("Install failed. Try: pip install yt-dlp", ACCENT)
+            self._set_status(f"Install failed. Try: pip install {YT_DLP_REQUIREMENT}",
+                             ACCENT)
 
 
 # ── Entry point ─────────────────────────────────────────────────────────────
