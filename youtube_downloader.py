@@ -10,6 +10,7 @@ import threading
 import queue
 import functools
 import os
+import re
 import shutil
 import sys
 import subprocess
@@ -135,11 +136,22 @@ def format_opts(fmt):
     raise ValueError(f"unknown format: {fmt}")
 
 
+_ANSI_CODES = re.compile(r"\x1b\[[0-9;]*m")
+
+
 class _YdlLogger:
     """Hands yt-dlp's errors to on_error; with ignoreerrors they don't raise."""
 
     def __init__(self, on_error):
-        self.error = on_error
+        self._on_error = on_error
+
+    def error(self, msg):
+        # yt-dlp also sends its "Deprecated Feature: ..." notices (e.g. for an
+        # old Python version) here, after already passing them to warning().
+        # They aren't failed downloads.
+        if _ANSI_CODES.sub("", msg).startswith("Deprecated Feature:"):
+            return
+        self._on_error(msg)
 
     def debug(self, msg):
         pass

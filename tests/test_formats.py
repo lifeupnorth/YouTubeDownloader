@@ -244,6 +244,28 @@ class ErrorColorTest(unittest.TestCase):
             if not colored:
                 self.assertEqual(messages[0], "ERROR: Private video")
 
+    def test_deprecation_notices_are_not_errors(self):
+        # yt-dlp sends these to logger.error too, e.g. on Python 3.10.
+        errors = []
+        logger = ytd._YdlLogger(errors.append)
+        with mock.patch("builtins.print"):
+            logger.error("Deprecated Feature: Support for Python version 3.10")
+            logger.error("\x1b[0;31mDeprecated Feature:\x1b[0m Old option")
+        logger.error("ERROR: Private video")
+        self.assertEqual(errors, ["ERROR: Private video"])
+
+    def test_real_deprecation_notice_is_not_an_error(self):
+        try:
+            import yt_dlp
+        except ImportError:
+            self.skipTest("yt-dlp not installed")
+        errors = []
+        opts = {"logger": ytd._YdlLogger(errors.append),
+                "color": {"stdout": "never", "stderr": "never"}}
+        with mock.patch("builtins.print"):
+            yt_dlp.YoutubeDL(opts).deprecated_feature("Test notice")
+        self.assertEqual(errors, [])
+
 
 if __name__ == "__main__":
     unittest.main()
