@@ -1,8 +1,8 @@
 {
   "title": "lifeupnorth/YouTubeDownloader Wiki",
   "repo_url": "https://github.com/lifeupnorth/YouTubeDownloader",
-  "sha": "fed021846b04c093d045f0ec3de2b53d5ea42060",
-  "permalink_base": "https://github.com/lifeupnorth/YouTubeDownloader/blob/fed021846b04c093d045f0ec3de2b53d5ea42060",
+  "sha": "b369bd269cac691e2563e27391dbd3702c986e50",
+  "permalink_base": "https://github.com/lifeupnorth/YouTubeDownloader/blob/b369bd269cac691e2563e27391dbd3702c986e50",
   "generated": "2026-10-11",
   "pages": [
     {
@@ -18,7 +18,9 @@
         "requirements-dev.txt",
         ".github/workflows/tests.yml",
         ".github/dependabot.yml",
-        "ruff.toml"
+        "ruff.toml",
+        "packaging/build_exe.py",
+        ".github/workflows/build-exe.yml"
       ]
     },
     {
@@ -29,7 +31,14 @@
         "README.md",
         "requirements.txt",
         "youtube_downloader.py",
-        "download_engine.py"
+        "download_engine.py",
+        "packaging/build_exe.py",
+        "packaging/sign_exe.py",
+        "packaging/check_pins.py",
+        "packaging/requirements-build.txt",
+        ".github/workflows/build-exe.yml",
+        ".github/workflows/pins.yml",
+        ".github/workflows/smoke.yml"
       ]
     },
     {
@@ -81,7 +90,15 @@
         "tests/fakes.py",
         ".github/workflows/tests.yml",
         "ruff.toml",
-        "README.md"
+        "README.md",
+        "tests/test_real_yt_dlp.py",
+        "tests/test_build_exe.py",
+        "tests/test_check_pins.py",
+        "tests/test_sign_exe.py",
+        "tests/test_smoke.py",
+        "packaging/smoke_test.py",
+        ".github/workflows/smoke.yml",
+        ".github/dependabot.yml"
       ]
     },
     {
