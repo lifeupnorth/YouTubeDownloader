@@ -58,7 +58,7 @@ jobs:
               echo "::error::No commit before this push ($BEFORE), so it can't tell whether the yt-dlp pin changed. Release by pushing a vX.Y.Z tag."
               exit 1
             fi
-            if git diff "$BEFORE" "$GITHUB_SHA" -- requirements.txt | grep -qi '^+yt-dlp=='; then
+            if git diff "$BEFORE" "$GITHUB_SHA" -- requirements.txt | grep -qiE '^\+yt-dlp(\[[^]]*\])?=='; then
               last=$(git tag -l 'v*' | grep -E "$semver" | sort -V | tail -n 1)
               IFS=. read -r major minor patch <<< "${last:-v0.0.0}"
               tag="${major}.${minor}.$((patch + 1))"

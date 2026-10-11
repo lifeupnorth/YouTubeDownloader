@@ -2,12 +2,12 @@
 # the yt-dlp line for its built-in installer too, so this is the only place to
 # bump it. Dependabot (.github/dependabot.yml) opens a PR when a new version is
 # out; run the tests before merging it.
-yt-dlp==2026.8.19
-
-# YouTube's challenge solver, which yt-dlp runs with the JavaScript runtime
-# (deno). yt-dlp pins it in its "default" extra; bump the two together
-# (tests/test_requirements.py checks that they match).
-yt-dlp-ejs==0.8.0
+#
+# The "default" extra is what yt-dlp recommends: yt-dlp-ejs (YouTube's
+# challenge solver, which runs in the JavaScript runtime), plus websockets,
+# requests, brotli, certifi, mutagen and pycryptodomex. yt-dlp pins the exact
+# yt-dlp-ejs version itself, so bumping this line keeps the two in step.
+yt-dlp[default]==2026.8.19
 
 # Optional: thumbnails in link previews. Without it the app still works and
 # previews show text only.

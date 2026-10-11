@@ -94,19 +94,19 @@ Sources: [requirements.txt](https://github.com/lifeupnorth/YouTubeDownloader/blo
 
 | Path | Lines | Contents |
 |---|---|---|
-| `youtube_downloader.py` | 935 | The window: UI, settings, dialogs, worker plumbing, entry point |
-| `download_engine.py` | 867 | Downloading without Tk: yt-dlp and ffmpeg, formats, previews, `DownloadJob`, `DownloadQueue` |
-| `tests/test_engine.py` | 801 | The engine with a fake yt-dlp; needs no display |
-| `tests/test_thread_safety.py` | 687 | The real window driven through simulated downloads |
+| `youtube_downloader.py` | 1034 | The window: UI, settings, dialogs, worker plumbing, entry point |
+| `download_engine.py` | 897 | Downloading without Tk: yt-dlp and ffmpeg, formats, previews, `DownloadJob`, `DownloadQueue` |
+| `tests/test_engine.py` | 841 | The engine with a fake yt-dlp; needs no display |
+| `tests/test_thread_safety.py` | 756 | The real window driven through simulated downloads |
 | `tests/test_app.py` | 240 | Settings file, Open folder, ffmpeg help and checks |
-| `tests/test_requirements.py` | 72 | The yt-dlp pin is what the installer uses |
+| `tests/test_requirements.py` | 93 | The yt-dlp pin is what the installer uses |
 | `tests/test_smoke.py` | 123 | The smoke test's report, retries, timeouts and bot check, with a fake job |
 | `tests/test_sign_exe.py` | 108 | Code signing with a fake signtool |
 | `tests/fakes.py` | 118 | The fake yt-dlp shared by the tests |
-| `requirements.txt` / `requirements-dev.txt` | 14 / 3 | Pinned yt-dlp, yt-dlp-ejs and Pillow / ruff |
+| `requirements.txt` / `requirements-dev.txt` | 14 / 3 | Pinned `yt-dlp[default]` (which brings yt-dlp-ejs) and Pillow / ruff |
 | `ruff.toml` | 8 | Lint rules |
 | `.github/workflows/tests.yml` | 73 | Tests (Windows and Ubuntu, Python 3.10 and 3.14) and lint on every push to `main` and every PR |
-| `packaging/build_exe.py` | 182 | Builds the one-file Windows app with PyInstaller and the bundled ffmpeg and deno (deno's version is pinned there by `DENO_VERSION`/`DENO_SHA256`; Dependabot doesn't update it) |
+| `packaging/build_exe.py` | 188 | Builds the one-file Windows app with PyInstaller and the bundled ffmpeg and deno (deno's version is pinned there by `DENO_VERSION`/`DENO_SHA256`; Dependabot doesn't update it) |
 | `.github/workflows/build-exe.yml` | 147 | Builds and checks the .exe; releases it for version tags and for yt-dlp pin bumps on `main` |
 | `packaging/sign_exe.py` | 92 | Signs and verifies the .exe with signtool when a certificate is set up |
 | `packaging/smoke_test.py` | 107 | One real MP4 and MP3 download via `--smoke-download`, from source or with the .exe |

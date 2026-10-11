@@ -1,7 +1,7 @@
 """Builds the one-file Windows app, dist/YT-Downloader.exe.
 
-The .exe bundles Python, the app, yt-dlp and Pillow (the versions pinned in
-requirements.txt), ffmpeg and deno (the JavaScript runtime yt-dlp uses for
+The .exe bundles Python, the app, yt-dlp with its "default" extras (minus
+mutagen) and Pillow (the versions pinned in requirements.txt), ffmpeg and deno (the JavaScript runtime yt-dlp uses for
 YouTube), so users don't need to install anything.
 Run it on Windows, from the repository's root folder:
 
@@ -132,6 +132,9 @@ def build():
         "--add-data", f"{ffmpeg_license}{sep}.",
         "--add-data", f"{deno_license}{sep}.",
         "--add-data", f"{version_file}{sep}.",
+        # yt-dlp[default] installs mutagen (GPL) to embed thumbnails and
+        # metadata, which the app doesn't do; keep it out of the .exe.
+        "--exclude-module", "mutagen",
         os.path.join(ROOT, "youtube_downloader.py"),
     ])
     # The notices and licenses also go next to the .exe for users.
@@ -166,6 +169,9 @@ def check():
         problems.append("the bundled deno didn't run")
     if not result.get("js_solver"):
         problems.append("yt-dlp-ejs (YouTube's challenge solver) wasn't bundled")
+    missing = result.get("yt_dlp_extras_missing")
+    if missing is None or missing:
+        problems.append(f"yt-dlp's extras weren't all bundled: {missing}")
     version = os.environ.get("APP_VERSION", "").removeprefix("v") or None
     if result.get("app_version") != version:
         problems.append(f"the version is {result.get('app_version')}, not {version}")

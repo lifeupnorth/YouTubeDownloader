@@ -126,6 +126,13 @@ class FormatSelectionTest(unittest.TestCase):
                                         FFmpegExtractAudioPP)
             self.assertEqual([mapping(pp) for pp in extractors], [choice])
 
+    def test_final_ext_is_the_converted_extension(self):
+        # Without it yt-dlp doesn't see that "T.mp3" (made from "T.webm") is
+        # already there, and downloads and converts it again.
+        for choice in [*engine.VIDEO_MAX_RES, "mp3", "m4a"]:
+            expected = choice if choice in ("mp3", "m4a") else "mp4"
+            self.assertEqual(engine.format_opts(choice)["final_ext"], expected, choice)
+
 
 class UpdateCheckTest(unittest.TestCase):
     def test_newer_version(self):
@@ -534,6 +541,13 @@ class DownloadJobTest(unittest.TestCase):
             self.assertEqual(os.listdir(tmp), ["v0.mp4"])
         self.assertEqual(job.summary(), "Download canceled (1 saved).")
 
+    def test_url_results_are_followed_at_most_three_times(self):
+        # A link that keeps redirecting must not be looked up forever.
+        fake = make_fake_ydl(streams=1, probe=("url",) * 10)
+        job = self.run_job(fake)
+        self.assertEqual(fake.calls, ["probe"] * 4 + ["download"])
+        self.assertEqual(job.outcome, "done")
+
     def test_job_uses_the_js_runtime(self):
         job = engine.DownloadJob("https://x", fmt="mp3", folder="dl", ffmpeg="ffmpeg",
                                  whole_playlist=False, on_progress=None, on_log=None,
@@ -795,6 +809,32 @@ class DownloadQueueTest(unittest.TestCase):
         self.assertEqual(len(queue.jobs), 1, "links 2 and 3 never started")
         self.assertEqual(queue.outcome, "canceled")
         self.assertEqual(queue.summary(), "Download canceled (1 partial file removed).")
+
+    def test_cancel_after_the_last_link_finished(self):
+        # Clicked in the moment between the end and the window noticing it.
+        queue = self.run_queue(make_fake_ydl(streams=1), ["https://a", "https://b"])
+        queue.cancel()
+        self.assertEqual(queue.outcome, "done")
+        self.assertEqual(queue.summary(), "Done: 2 saved")
+
+    def test_a_crashing_link_is_a_failed_link(self):
+        run = engine.DownloadJob.run
+
+        def crash_on_b(job):
+            if job.url == "https://b":
+                raise KeyError("boom")
+            return run(job)
+
+        with mock.patch.object(engine.DownloadJob, "run", crash_on_b):
+            queue = self.run_queue(make_fake_ydl(streams=1),
+                                   ["https://a", "https://b", "https://c"])
+        self.assertEqual([job.outcome for job in queue.jobs], ["done", "failed", "done"])
+        self.assertIn("✘ Error: Unexpected error: KeyError: 'boom'", queue.log)
+        self.assertEqual(queue.summary(), "Done: 2 saved, 1 link failed")
+
+    def test_no_outcome_before_it_runs(self):
+        queue = engine.DownloadQueue(["https://a"], on_progress=None, on_log=None)
+        self.assertIsNone(queue.outcome)
 
 
 if __name__ == "__main__":

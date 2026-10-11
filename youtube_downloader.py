@@ -15,6 +15,7 @@ import sys
 import threading
 import time
 import tkinter as tk
+import traceback
 from tkinter import filedialog, messagebox, ttk
 
 import download_engine as engine
@@ -95,6 +96,27 @@ UPDATE_CHECK_INTERVAL = 24 * 60 * 60   # seconds
 
 PREVIEW_HINT = "Paste a link to see its title and length here."
 
+# Room for the window's title bar and frame, which Tk's sizes don't include.
+TITLE_BAR = 40
+
+
+def work_area(widget):
+    """(left, top, width, height) of the screen without the taskbar."""
+    if sys.platform == "win32":
+        try:
+            import ctypes
+            from ctypes import wintypes
+            rect = wintypes.RECT()
+            SPI_GETWORKAREA = 0x30
+            if ctypes.windll.user32.SystemParametersInfoW(
+                    SPI_GETWORKAREA, 0, ctypes.byref(rect), 0):
+                return (rect.left, rect.top,
+                        rect.right - rect.left, rect.bottom - rect.top)
+        except (AttributeError, OSError):
+            pass
+    # Elsewhere, leave room for a panel or dock.
+    return 0, 0, widget.winfo_screenwidth(), widget.winfo_screenheight() - 40
+
 
 def reveal_in_file_manager(path):
     """Open the folder holding path, with the file selected where possible."""
@@ -110,6 +132,11 @@ def reveal_in_file_manager(path):
                          else ["open", folder])
     else:
         subprocess.Popen(["xdg-open", folder])
+
+
+def pip_install_command():
+    # Quoted: zsh would treat the "[default]" extra as a file pattern.
+    return f'pip install "{engine.YT_DLP_REQUIREMENT}"'
 
 
 def _ffmpeg_install_hint():
@@ -166,6 +193,7 @@ class YouTubeDownloader(tk.Tk):
         self._latest_progress = None
         self._shown_progress  = None
         self._queue = None             # the running engine.DownloadQueue
+        self._installing = False       # the in-app yt-dlp install is running
         self._close_when_stopped = False
         self._placeholder_shown = False
         self._last_file = None
@@ -240,7 +268,9 @@ class YouTubeDownloader(tk.Tk):
 
         # Several links can go in, one per line; they download in order. The
         # box grows to 4 lines. Enter downloads, Shift+Enter adds a line.
-        self.url_entry = tk.Text(url_frame, height=1, wrap="none",
+        # width=1: it fills the row, and the window's size comes from the
+        # other controls rather than from a default of 80 characters.
+        self.url_entry = tk.Text(url_frame, height=1, width=1, wrap="none",
                                  font=(UI_FONT, 12), bg=SURFACE2, fg=TEXT,
                                  insertbackground=TEXT, relief="flat", bd=0,
                                  padx=8, pady=8, highlightthickness=0, undo=True)
@@ -253,6 +283,7 @@ class YouTubeDownloader(tk.Tk):
         self.url_entry.bind("<Return>", self._on_url_enter)
         self.url_entry.bind("<Shift-Return>", lambda e: None)   # a new line
         self.url_entry.bind("<Tab>", self._focus_next)
+        self.url_entry.bind("<Shift-Tab>", self._focus_prev)
 
         btn_paste = tk.Button(url_frame, text="Paste", font=(UI_FONT, 9),
                               bg=ACCENT, fg=TEXT, relief="flat", bd=0,
@@ -378,7 +409,7 @@ class YouTubeDownloader(tk.Tk):
         tk.Label(log_frame, text="Log", font=(UI_FONT, 9, "bold"),
                  bg=BG, fg=TEXT_DIM).grid(row=0, column=0, sticky="w")
 
-        self.log_box = tk.Text(log_frame, height=6, font=(MONO_FONT, 9),
+        self.log_box = tk.Text(log_frame, height=6, width=1, font=(MONO_FONT, 9),
                                bg=SURFACE2, fg=TEXT_DIM, relief="flat",
                                state="disabled", wrap="word")
         self.log_box.grid(row=1, column=0, sticky="nsew")
@@ -407,17 +438,24 @@ class YouTubeDownloader(tk.Tk):
                        "check_updates": self.update_check_var.get()})
 
     def _fit_window(self):
-        # Open tall enough to show everything (but no taller than the screen).
-        # Only the log grows and shrinks with the window, and the minimum
-        # height keeps the controls, the status line and 2 log lines visible
-        # (plus one line for a status message that wraps).
+        # Open wide and tall enough to show everything, but no bigger than
+        # the screen without the taskbar, and centered on it. Only the log
+        # grows and shrinks with the window, and the minimum height keeps the
+        # controls, the status line and 2 log lines visible (plus one line for
+        # a status message that wraps). With larger text (Windows display
+        # scaling) the controls need more room than the usual 680 px.
         self.update_idletasks()
-        wanted = self.winfo_reqheight()
+        needed, wanted = self.winfo_reqwidth(), self.winfo_reqheight()
         log_height = self.log_box.winfo_reqheight()
         line = log_height // int(self.log_box.cget("height"))
-        height = min(wanted, self.winfo_screenheight() - 80)
-        self.minsize(580, min(wanted - log_height + 3 * line, height))
-        self.geometry(f"680x{height}")
+        left, top, area_width, area_height = work_area(self)
+        width = min(max(680, needed), area_width)
+        height = min(wanted, area_height - TITLE_BAR)
+        self.minsize(min(max(580, needed), width),
+                     min(wanted - log_height + 3 * line, height))
+        x = left + (area_width - width) // 2
+        y = top + max(0, (area_height - TITLE_BAR - height) // 2)
+        self.geometry(f"{width}x{height}+{x}+{y}")
 
     # ── Helpers ─────────────────────────────────────────────────────────────
 
@@ -471,6 +509,11 @@ class YouTubeDownloader(tk.Tk):
         event.widget.tk_focusNext().focus()
         return "break"   # no tab character
 
+    # Without its own binding, Shift+Tab would match <Tab> and move forward.
+    def _focus_prev(self, event):
+        event.widget.tk_focusPrev().focus()
+        return "break"
+
     def _paste_url(self):
         try:
             clip = self.clipboard_get()
@@ -505,7 +548,35 @@ class YouTubeDownloader(tk.Tk):
         self._active_workers += 1
         if self._after_id is None:
             self._after_id = self.after(50, self._poll_ui_queue)
-        threading.Thread(target=target, args=args, daemon=True).start()
+        threading.Thread(target=self._run_worker, args=(target, *args),
+                         daemon=True).start()
+
+    # Runs on a worker thread. Whatever target does, the main thread hears
+    # that it finished (after anything target posted), so _active_workers
+    # can't leak; a crash goes to the log instead of a console nobody sees.
+    def _run_worker(self, target, *args):
+        try:
+            target(*args)
+        except Exception:
+            self._post(self._worker_crashed, traceback.format_exc())
+        finally:
+            self._post(self._worker_finished)
+
+    def _worker_crashed(self, details):
+        self._log("✘ Unexpected error: " + details.strip().splitlines()[-1])
+        if sys.stderr:   # a console (from source): the full traceback too
+            print(details, file=sys.stderr)
+
+    # Tk's default prints the error to stderr, which the windowed .exe doesn't
+    # have; show it in the log as well.
+    def report_callback_exception(self, exc, val, tb):
+        try:
+            self._log("✘ Unexpected error: "
+                      + "".join(traceback.format_exception_only(exc, val)).strip())
+        except tk.TclError:   # the window is already gone
+            pass
+        if sys.stderr:
+            super().report_callback_exception(exc, val, tb)
 
     # Runs on a worker thread.
     def _find_js_runtime_thread(self):
@@ -513,7 +584,6 @@ class YouTubeDownloader(tk.Tk):
                    engine.js_solver_version())
 
     def _js_runtime_found(self, runtime, solver):
-        self._worker_finished()
         self._js_runtime = runtime
         if runtime is None:
             self._log(js_runtime_help())
@@ -553,13 +623,16 @@ class YouTubeDownloader(tk.Tk):
                     "A download is still running.\n\n"
                     "Cancel it and close the app?"):
                 return
-            self._close_when_stopped = True
-            self._preview_cancel.set()
-            if not self._queue.canceled:
-                self._cancel_download()
-            self._set_status("Canceling… the app closes when it has stopped.",
-                             WARNING)
-            return
+            # The download may have finished while the question was open
+            # (Tk keeps running timers meanwhile); then just close.
+            if self.is_running:
+                self._close_when_stopped = True
+                self._preview_cancel.set()
+                if not self._queue.canceled:
+                    self._cancel_download()
+                self._set_status("Canceling… the app closes when it has stopped.",
+                                 WARNING)
+                return
         self._preview_cancel.set()
         self._save_settings()
         self._closing = True
@@ -576,8 +649,15 @@ class YouTubeDownloader(tk.Tk):
     # ── Downloading (the work itself is engine.DownloadQueue) ───────────────
 
     def _start_download(self):
+        if self.is_running:
+            messagebox.showinfo("Busy", "A download is already in progress.")
+            return
+
         if not engine.YT_DLP_AVAILABLE:
-            self._prompt_install()
+            if self._installing:
+                self._set_status("Installing yt-dlp, please wait…", WARNING)
+            else:
+                self._prompt_install()
             return
 
         ffmpeg = engine.find_ffmpeg()
@@ -591,10 +671,6 @@ class YouTubeDownloader(tk.Tk):
             messagebox.showwarning("No URL", "Please enter a YouTube URL.")
             return
 
-        if self.is_running:
-            messagebox.showinfo("Busy", "A download is already in progress.")
-            return
-
         # Tk variables are read here, on the main thread; the queue gets values.
         self._queue = engine.DownloadQueue(
             urls, fmt=self.format_var.get(), folder=self.download_path.get(),
@@ -604,7 +680,7 @@ class YouTubeDownloader(tk.Tk):
             ask=self._job_ask)
         self._save_settings()
         self.is_running = True
-        self.dl_btn.config(text="✖  Cancel", command=self._cancel_download)
+        self.dl_btn.config(state="normal", text="✖  Cancel", command=self._cancel_download)
         self.progress_var.set(0)
         self._set_status("Starting download…", WARNING)
         self._log(f"▶ {urls[0]}" if len(urls) == 1 else f"▶ {len(urls)} links")
@@ -624,12 +700,17 @@ class YouTubeDownloader(tk.Tk):
     def _job_ask(self, question):
         return self._ask_on_main("Playlist", question)
 
-    # Runs on the download thread.
-    def _run_queue(self, queue):
-        if queue.job_options.get("js_runtime") is None:   # installed since startup?
-            queue.job_options["js_runtime"] = engine.find_js_runtime()
-        queue.run()
-        self._post(self._download_finished, queue)
+    # Runs on the download thread. The window hears that the download ended
+    # even if it crashed, after the error is in the log.
+    def _run_queue(self, download):
+        try:
+            if download.job_options.get("js_runtime") is None:   # installed since startup?
+                download.job_options["js_runtime"] = engine.find_js_runtime()
+            download.run()
+        except Exception:
+            self._post(self._worker_crashed, traceback.format_exc())
+        finally:
+            self._post(self._download_finished, download)
 
     # Runs on the download thread; blocks it until the user answers.
     def _ask_on_main(self, title, question):
@@ -664,7 +745,6 @@ class YouTubeDownloader(tk.Tk):
         self._set_status("Canceling…", WARNING)
 
     def _end_download(self):
-        self._worker_finished()
         self.is_running = False
         self.dl_btn.config(state="normal", text="⬇  Download",
                            command=self._start_download)
@@ -674,13 +754,19 @@ class YouTubeDownloader(tk.Tk):
         if self._close_when_stopped:   # the user is closing the app
             return self._on_close()
         self._last_file = job.last_file
+        if job.outcome is None:   # it crashed; the error is in the log
+            self.progress_var.set(0)
+            self._set_status("✘ The download stopped because of an unexpected "
+                             "error (see the log).", ACCENT)
+            self._offer_open_folder()
+            return
         summary = job.summary()
         if job.outcome == "failed":
             self.progress_var.set(0)
             self._set_status(f"✘ {summary}", ACCENT)
             if not job.error_logged:
                 self._log(f"✘ {summary}\n")
-            messagebox.showerror("Download Failed", str(job.error))
+            messagebox.showerror("Download Failed", job.error or "See the log for details.")
         elif job.outcome in ("canceled", "declined"):
             self.progress_var.set(0)
             self._set_status(summary)
@@ -742,21 +828,22 @@ class YouTubeDownloader(tk.Tk):
     def _preview_thread(self, url, whole_playlist, token, more, cancel, js_runtime=None):
         result = engine.preview_link(url, whole_playlist, cancel, js_runtime)
         if result is None:   # a newer link replaced this one
-            return self._post(self._worker_finished)
+            return
         text, image, found = result
         if more:   # several links: the preview shows the first one
             text += f"\n+ {more} more link{'s' * (more != 1)}"
         self._post(self._preview_done, text, image, found, token)
 
     def _preview_done(self, text, image, found, token):
-        self._worker_finished()
         if token == self._preview_token:   # drop answers for an older link
             self._set_preview(text, image, dim=not found)
 
     def _set_preview(self, text, image=None, dim=False):
         self.preview_text.set(text)
         self.preview_lbl.config(fg=TEXT_DIM if dim else TEXT)
-        self._preview_image = ImageTk.PhotoImage(image) if image is not None else None
+        # Some Linux distributions package Pillow's ImageTk separately.
+        show = image is not None and ImageTk is not None
+        self._preview_image = ImageTk.PhotoImage(image) if show else None
         self.preview_img.config(image=self._preview_image or "")
 
     def _recheck_ffmpeg(self, event=None):
@@ -796,7 +883,6 @@ class YouTubeDownloader(tk.Tk):
         self._post(self._update_checked, engine.check_for_update())
 
     def _update_checked(self, notice):
-        self._worker_finished()
         if notice:
             self._log(notice)
 
@@ -806,7 +892,7 @@ class YouTubeDownloader(tk.Tk):
         installed, pinned = engine.yt_dlp_version(), engine.pinned_yt_dlp_version()
         if installed and pinned and not engine.same_version(installed, pinned):
             self._log(f"• yt-dlp {installed} is installed; this app is tested "
-                      f"with {pinned}. To match: pip install {engine.YT_DLP_REQUIREMENT}")
+                      f"with {pinned}. To match: {pip_install_command()}")
 
     def _prompt_install(self):
         if getattr(sys, "frozen", False):
@@ -819,23 +905,31 @@ class YouTubeDownloader(tk.Tk):
             "yt-dlp not found",
             "yt-dlp is required but not installed.\n\n"
             "Install it now with pip?\n\n"
-            f"(You can also run:  pip install {engine.YT_DLP_REQUIREMENT})"
+            f"(You can also run:  {pip_install_command()})"
         )
         if ans:
             self._install_ytdlp()
 
     def _install_ytdlp(self):
+        self._installing = True
         self._set_status("Installing yt-dlp…", WARNING)
         self._log("Installing yt-dlp via pip…")
 
         def run():
             try:
-                subprocess.check_call(
+                done = subprocess.run(
                     [sys.executable, "-m", "pip", "install", engine.YT_DLP_REQUIREMENT],
-                    stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL
-                )
+                    capture_output=True, text=True, errors="replace",
+                    creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0))
             except Exception as e:
                 self._post(self._install_done, False, str(e))
+                return
+            if done.returncode:
+                # pip's last lines say why (e.g. no network, or a Python
+                # that its distribution manages).
+                why = "\n".join((done.stderr or done.stdout or "").strip().splitlines()[-5:])
+                self._post(self._install_done, False,
+                           why or f"pip exited with code {done.returncode}")
                 return
             # Importing here, on the worker, keeps the window responsive.
             self._post(self._install_done, True, None, engine.load_yt_dlp())
@@ -843,11 +937,16 @@ class YouTubeDownloader(tk.Tk):
         self._start_worker(run)
 
     def _install_done(self, ok, err=None, loaded=False):
-        self._worker_finished()
+        self._installing = False
         if ok and loaded:
             self.powered_lbl.config(text=self._powered_by_text())
             self._log(f"✔ yt-dlp {engine.yt_dlp_version()} installed and ready.")
             self._set_status("✔ yt-dlp installed. You can download now.", SUCCESS)
+            # What startup skipped without yt-dlp: the JavaScript runtime
+            # check, and the preview of a link that's already entered.
+            self._start_worker(self._find_js_runtime_thread)
+            self._preview_key = None
+            self._schedule_preview(delay=100)
         elif ok:   # installed, but this Python can't import it until a restart
             self._log("✔ yt-dlp installed! Please restart the app.")
             self._set_status("✔ yt-dlp installed — please restart.", SUCCESS)
@@ -856,8 +955,7 @@ class YouTubeDownloader(tk.Tk):
                                 "Please restart the application.")
         else:
             self._log(f"✘ Install failed: {err}")
-            self._set_status(f"Install failed. Try: pip install {engine.YT_DLP_REQUIREMENT}",
-                             ACCENT)
+            self._set_status(f"Install failed. Try: {pip_install_command()}", ACCENT)
 
 
 def self_check(path):
@@ -886,6 +984,7 @@ def self_check(path):
               "js_runtime_version": js_runtime_version,
               "deno_bundled": engine.bundled_deno() is not None,
               "js_solver": engine.js_solver_version(),
+              "yt_dlp_extras_missing": engine.missing_yt_dlp_extras(),
               "thumbnails": ImageTk is not None and engine.Image is not None}
     try:
         app = YouTubeDownloader(update_check=False)   # also checks that Tk works

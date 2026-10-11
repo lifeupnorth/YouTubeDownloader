@@ -564,20 +564,89 @@ class ThreadSafetyTest(unittest.TestCase):
         self.assertEqual(self.log(), before)
 
     def test_install_without_restart(self):
-        self.app._active_workers = 1   # as if the install worker ran
-        with mock.patch.object(engine, "yt_dlp_version", return_value="2026.08.19"):
+        self.app._installing = True
+        self.app._preview_key = (("https://x",), False)
+        with mock.patch.object(engine, "yt_dlp_version", return_value="2026.08.19"), \
+                mock.patch.object(self.app, "_start_worker") as start:
             self.app._install_done(True, None, loaded=True)
         self.assertEqual(self.app.powered_lbl.cget("text"),
                          "Powered by yt-dlp 2026.08.19")
         self.assertEqual(self.statuses[-1], "✔ yt-dlp installed. You can download now.")
         self.assertIn("yt-dlp 2026.08.19 installed and ready", self.log())
         self.assertEqual(self.dialogs, [])   # no "please restart"
+        self.assertFalse(self.app._installing)
+        # What startup skipped without yt-dlp happens now.
+        start.assert_called_once_with(self.app._find_js_runtime_thread)
+        self.assertIsNone(self.app._preview_key, "the preview looks the link up again")
 
     def test_install_that_still_needs_a_restart(self):
-        self.app._active_workers = 1
         self.app._install_done(True, None, loaded=False)
         self.assertEqual(self.dialogs, ["showinfo"])
         self.assertIn("Please restart", self.log())
+
+    def test_download_while_installing_doesnt_install_again(self):
+        self.app._installing = True
+        with mock.patch.object(engine, "YT_DLP_AVAILABLE", False), \
+                mock.patch.object(self.app, "_prompt_install") as prompt:
+            self.app._start_download()
+        prompt.assert_not_called()
+        self.assertEqual(self.statuses[-1], "Installing yt-dlp, please wait…")
+
+    def test_close_after_the_download_finished_during_the_question(self):
+        # Tk runs timers while the question is open, so the download can end
+        # meanwhile; Yes must then close, not wait for a stop that happened.
+        self.app.is_running = True
+        self.app._queue = mock.Mock(canceled=False)
+
+        def finished_meanwhile(*a, **k):
+            self.app._end_download()
+            return True
+
+        with mock.patch.object(ytd.messagebox, "askyesno", side_effect=finished_meanwhile):
+            self.app._on_close()
+        self.assertTrue(self.app._closing)
+        self.app._queue.cancel.assert_not_called()
+
+    def test_crashed_download_ends_the_download(self):
+        def crash(queue):
+            raise RuntimeError("boom")
+
+        with mock.patch.object(engine.DownloadQueue, "run", crash), \
+                mock.patch.object(sys, "stderr", None):   # no traceback in the test output
+            self.run_download(make_fake_ydl(streams=1))
+        self.assertFalse(self.app.is_running)
+        self.assertEqual(self.app.dl_btn.cget("text"), "⬇  Download")
+        self.assertIn("✘ Unexpected error: RuntimeError: boom", self.log())
+        self.assertIn("unexpected error", self.statuses[-1])
+        self.assertEqual(self.app._active_workers, 0)
+        self.assertEqual(self.violations, [])
+
+    def test_worker_that_crashes_still_finishes(self):
+        with mock.patch.object(sys, "stderr", None):
+            self.app._start_worker(lambda: 1 / 0)
+            deadline = time.monotonic() + 5
+            while self.app._active_workers and time.monotonic() < deadline:
+                self.app.update()
+                time.sleep(0.01)
+        self.assertEqual(self.app._active_workers, 0)
+        self.assertIn("✘ Unexpected error: ZeroDivisionError", self.log())
+
+    def test_callback_errors_reach_the_log(self):
+        # The windowed .exe has no stderr for Tk's own report.
+        try:
+            raise ValueError("bad value")
+        except ValueError:
+            exc = sys.exc_info()
+        with mock.patch.object(sys, "stderr", None):
+            ytd.YouTubeDownloader.report_callback_exception(self.app, *exc)
+        self.assertIn("✘ Unexpected error: ValueError: bad value", self.log())
+
+    def test_shift_tab_moves_focus_back(self):
+        self.app.url_entry.focus_force()
+        self.app.update()
+        self.app.url_entry.event_generate("<Shift-Tab>")
+        self.app.update()
+        self.assertEqual(self.app.focus_get(), self.app.url_entry.tk_focusPrev())
 
     def test_folder_and_format_are_remembered(self):
         with tempfile.TemporaryDirectory() as folder:
