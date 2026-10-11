@@ -278,8 +278,7 @@ class YouTubeDownloader(tk.Tk):
                                 value=val, font=("Helvetica", 10),
                                 bg=SURFACE, fg=TEXT_DIM, selectcolor=SURFACE2,
                                 activebackground=SURFACE, activeforeground=TEXT,
-                                cursor="hand2",
-                                command=self._on_format_change)
+                                cursor="hand2")
             rb.grid(row=rrow, column=col, sticky="w", padx=(0, 20), pady=2)
         # The radio buttons fill columns 0-1; column 2 is free.
         tk.Checkbutton(fmt_frame, text="Whole playlist",
@@ -384,9 +383,6 @@ class YouTubeDownloader(tk.Tk):
         path = filedialog.askdirectory(initialdir=self.download_path.get())
         if path:
             self.download_path.set(path)
-
-    def _on_format_change(self):
-        pass
 
     def _log(self, msg):
         self.log_box.configure(state="normal")

@@ -43,8 +43,6 @@ Sources: [youtube_downloader.py:169-176](https://github.com/lifeupnorth/YouTubeD
 | Status `Label` (`status_lbl`) | `status_var` | Text and color set by `_set_status` |
 | Log `Text` (`log_box`) | `_log` | Read-only; temporarily enabled to append a line and scroll to it |
 
-Each radio button's `command` calls `_on_format_change`, which does nothing.
-
 Sources: [youtube_downloader.py:231-341](https://github.com/lifeupnorth/YouTubeDownloader/blob/bd3fd4242f83ee2cf111812e71b6d2db5aa71bdf/youtube_downloader.py#L231-L341), [youtube_downloader.py:364-389](https://github.com/lifeupnorth/YouTubeDownloader/blob/bd3fd4242f83ee2cf111812e71b6d2db5aa71bdf/youtube_downloader.py#L364-L389)
 
 ## Status, log and colors
