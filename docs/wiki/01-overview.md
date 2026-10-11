@@ -92,7 +92,7 @@ Sources: [youtube_downloader.py:7-22](https://github.com/lifeupnorth/YouTubeDown
 | `requirements.txt` | 5 | The pinned yt-dlp version |
 | `.github/dependabot.yml` | 19 | Weekly Dependabot checks for newer yt-dlp and GitHub Actions versions |
 | `.github/workflows/tests.yml` | 53 | Runs the tests on every push to `main` and every PR |
-| `README.md` | 30 | Install commands, test command, disclaimer, license |
+| `README.md` | 65 | Requirements, install, run and usage instructions, tests, disclaimer, license |
 | `LICENSE` | 21 | MIT |
 | `.gitignore` | 1 | `__pycache__/` |
 
