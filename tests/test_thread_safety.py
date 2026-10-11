@@ -473,6 +473,67 @@ class ThreadSafetyTest(unittest.TestCase):
         text = self.look_up("https://e.com/old", "https://e.com/new", extract=extract)
         self.assertEqual(text, "new\n1:00")
 
+    def test_newer_link_cancels_the_older_lookup(self):
+        events = {}
+
+        def preview_link(url, whole_playlist, cancel_event, js_runtime=None):
+            events[url] = cancel_event
+            if url.endswith("old") and cancel_event.wait(5):
+                return None
+            return url.rsplit("/", 1)[1], None, True
+
+        with mock.patch.object(engine, "preview_link", preview_link), \
+                mock.patch.object(engine, "YT_DLP_AVAILABLE", True):
+            for url in ("https://e.com/old", "https://e.com/new"):
+                self.app._replace_url_text(url)
+                self.app._start_preview()
+            deadline = time.time() + 5
+            while self.app._active_workers and time.time() < deadline:
+                self.app.update()
+                time.sleep(0.01)
+        self.assertTrue(events["https://e.com/old"].is_set())
+        self.assertFalse(events["https://e.com/new"].is_set())
+        self.assertEqual(self.app.preview_text.get(), "new")
+        self.assertEqual(self.app._active_workers, 0)
+        self.assertEqual(self.violations, [])
+
+    def test_closing_cancels_the_lookup(self):
+        cancel = self.app._preview_cancel
+        self.app._on_close()
+        self.assertTrue(cancel.is_set())
+
+    def test_answering_no_to_close_keeps_the_lookup(self):
+        started, release = threading.Event(), threading.Event()
+
+        def preview_link(url, whole_playlist, cancel_event, js_runtime=None):
+            started.set()
+            release.wait(5)
+            return None if cancel_event.is_set() else ("T", None, True)
+
+        with mock.patch.object(engine, "preview_link", preview_link), \
+                mock.patch.object(engine, "YT_DLP_AVAILABLE", True):
+            self.app._replace_url_text("https://e.com/v")
+            self.app._start_preview()
+            self.assertTrue(started.wait(5))
+            cancel = self.app._preview_cancel
+            self.app.is_running = True   # a download is running
+            try:
+                with mock.patch.object(ytd.messagebox, "askyesno",
+                                       return_value=False) as ask:
+                    self.app._on_close()
+            finally:
+                self.app.is_running = False
+            ask.assert_called_once()
+            self.assertFalse(cancel.is_set())
+            release.set()
+            deadline = time.time() + 5
+            while self.app._active_workers and time.time() < deadline:
+                self.app.update()
+                time.sleep(0.01)
+        self.assertEqual(self.app.preview_text.get(), "T")
+        self.assertEqual(self.app._active_workers, 0)
+        self.assertEqual(self.violations, [])
+
     @unittest.skipIf(engine.Image is None, "Pillow not installed")
     def test_preview_shows_the_thumbnail(self):
         image = engine.Image.new("RGB", engine.THUMB_SIZE, "red")

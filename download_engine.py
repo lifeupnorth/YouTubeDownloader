@@ -420,15 +420,18 @@ def thumbnail_url(info):
     return info.get("thumbnail")
 
 
-def fetch_thumbnail(url):
-    """Downloads and shrinks a thumbnail; None without Pillow or on errors."""
+def fetch_thumbnail(url, canceled=lambda: False):
+    """Downloads and shrinks a thumbnail; None without Pillow, on errors, or
+    once canceled() is true."""
     if Image is None or not url or not url.startswith(("https://", "http://")):
         return None
     try:
+        data = b""
         with urllib.request.urlopen(url, timeout=10) as response:
-            data = response.read(2_000_001)
-        if len(data) > 2_000_000:
-            return None
+            while chunk := response.read(64 * 1024):
+                data += chunk
+                if canceled() or len(data) > 2_000_000:
+                    return None
         image = Image.open(io.BytesIO(data)).convert("RGB")
         image.thumbnail(THUMB_SIZE)
         return image
@@ -436,17 +439,27 @@ def fetch_thumbnail(url):
         return None
 
 
-def preview_link(url, whole_playlist, js_runtime=None):
+def preview_link(url, whole_playlist, cancel_event=None, js_runtime=None):
     """Looks a link up without downloading: (text, PIL image or None, found).
 
     Like a download, it follows "url" results, but it doesn't page through a
     playlist's entries (process=False), so even big playlists take a second
-    or two. Runs on a worker thread.
+    or two. Runs on a worker thread. Once cancel_event is set (a newer link
+    was typed), it stops at yt-dlp's next status message or the thumbnail's
+    next chunk and returns None.
     """
+    canceled = cancel_event.is_set if cancel_event else lambda: False
+
+    # yt-dlp's own cancel exception: it stops even with ignoreerrors set and
+    # isn't caught by its broad "except Exception" handlers.
+    def check():
+        if canceled():
+            raise yt_dlp.utils.DownloadCancelled()
+
     try:
         opts = {"quiet": True, "skip_download": True,
                 "noplaylist": not whole_playlist,
-                "logger": _YdlLogger(lambda msg: None),
+                "logger": _YdlLogger(lambda msg: None, check=check),
                 "color": {"stdout": "never", "stderr": "never"}}
         if js_runtime:   # (name, path) from find_js_runtime(), as for a download
             name, path = js_runtime
@@ -456,9 +469,14 @@ def preview_link(url, whole_playlist, js_runtime=None):
                 ydl, ydl.extract_info(url, download=False, process=False))
     except Exception:   # e.g. not a video page; the preview just says so
         info = None
+    if canceled():
+        return None
     if not info:
         return "Couldn't load a preview for this link.", None, False
-    return describe_info(info), fetch_thumbnail(thumbnail_url(info)), True
+    image = fetch_thumbnail(thumbnail_url(info), canceled)
+    if canceled():
+        return None
+    return describe_info(info), image, True
 
 
 # ── Downloading ──────────────────────────────────────────────────────────────
