@@ -38,7 +38,7 @@ Sources: [youtube_downloader.py:169-176](https://github.com/lifeupnorth/YouTubeD
 | Whole playlist `Checkbutton` | `playlist_var` | In the free column 2 of the format grid, off by default |
 | Save To `Entry` | `download_path` | Defaults to `~/Downloads` |
 | Browse `Button` | `_browse_folder` | `filedialog.askdirectory`, starting at the current folder |
-| Download `Button` (`dl_btn`) | `_start_download` | Disabled and relabeled "Downloading…" while running |
+| Download `Button` (`dl_btn`) | `_start_download` | Becomes **✖ Cancel** (`_cancel_download`) while a download runs, then "Canceling…" (disabled) until it stops |
 | `ttk.Progressbar` | `progress_var` | Custom `Red.Horizontal.TProgressbar` style on the `clam` theme |
 | Status `Label` (`status_lbl`) | `status_var` | Text and color set by `_set_status` |
 | Log `Text` (`log_box`) | `_log` | Read-only; temporarily enabled to append a line and scroll to it |
@@ -56,7 +56,7 @@ Worker threads reach them only through `_post` or the coalesced `_latest_progres
 
 | Constant | Hex | Used for |
 |---|---|---|
-| `TEXT_DIM` | `#aaaaaa` | Idle ("Ready", "Playlist not downloaded.") |
+| `TEXT_DIM` | `#aaaaaa` | Idle ("Ready", "Playlist not downloaded.", "Download canceled …") |
 | `WARNING` | `#f59e0b` | In progress, ffmpeg missing, a finished run that had skipped entries |
 | `SUCCESS` | `#22c55e` | Download complete, yt-dlp installed |
 | `ACCENT` | `#ff0000` | Errors; also the Download button and progress bar |

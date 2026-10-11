@@ -120,9 +120,20 @@ Sources: [youtube_downloader.py:133-144](https://github.com/lifeupnorth/YouTubeD
 
 Sources: [youtube_downloader.py:607-644](https://github.com/lifeupnorth/YouTubeDownloader/blob/bd3fd4242f83ee2cf111812e71b6d2db5aa71bdf/youtube_downloader.py#L607-L644)
 
+## 7. Canceling
+
+While a download runs, the Download button turns into **✖ Cancel** (`_cancel_download`). Clicking it sets a `threading.Event`, shows "Canceling…" and disables the button until the download stops. The worker checks the event in `_check_canceled` and raises yt-dlp's `DownloadCancelled`, which stops yt-dlp even with `ignoreerrors` set. It checks at two points:
+
+- every progress update (`_progress_hook`), so a download in progress stops almost at once;
+- before each video starts (`StreamCounter`, the `before_dl` hook), so a playlist stops between two videos.
+
+yt-dlp leaves the unfinished video's `.part` file behind, plus any stream of it that already finished but wasn't merged yet. The progress hook records the files this run writes for the current video in `_entry_files`, and after a cancel `_remove_partial_files` deletes them, along with their `.ytdl` and `-Frag*` fragment files. Files that were already on disk never get a "downloading" event, so they're never recorded, and `_file_done` clears the list once a video is complete, so finished videos are kept. The result reads e.g. "Download canceled (1 saved, 2 partial files removed)."
+
+ffmpeg can't be interrupted, so a click during the final merge or conversion lets that video finish first.
+
 ## Limitations
 
-- There's no Cancel. A long playlist can only be stopped by closing the window, which ends the daemon worker mid-file.
+- Closing the window during a download stops it without cleanup: the `.part` file stays. Cancel removes it.
 - Only one download at a time (`is_running`).
 - The output folder comes from the **Save To** field and defaults to `~/Downloads`; the app doesn't create or validate it beforehand.
 

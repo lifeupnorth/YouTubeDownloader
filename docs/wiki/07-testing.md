@@ -32,8 +32,10 @@ Downloads use **`make_fake_ydl`**, a stand-in for `yt_dlp.YoutubeDL`. It drives 
 | `already` | Entries reported with `__real_download=False` |
 | `error` | An exception after the run |
 | `probe` | The `_type` returned by each `extract_info(process=False)` call |
+| `files_dir` | Writes real stream files there (`.part` while downloading, then renamed, then "merged" into `v<N>.mp4`) |
+| `on_progress` | Callback on the download thread before each progress event; the cancel tests use it to click Cancel at an exact point |
 
-`run_download` replaces the `yt_dlp` module with a namespace containing the fake (and `PostProcessor=object`), schedules `_start_download`, and runs `mainloop()` with a 10-second safety timeout. The patched dialogs call `quit()` to end the loop.
+`run_download` replaces the `yt_dlp` module with a namespace containing the fake (plus `PostProcessor=object` and `FakeCancelled` as `utils.DownloadCancelled`), schedules `_start_download`, and runs `mainloop()` with a 10-second safety timeout. The patched dialogs call `quit()` to end the loop.
 
 Sources: [tests/test_thread_safety.py:18-96](https://github.com/lifeupnorth/YouTubeDownloader/blob/bd3fd4242f83ee2cf111812e71b6d2db5aa71bdf/tests/test_thread_safety.py#L18-L96), [tests/test_thread_safety.py:99-193](https://github.com/lifeupnorth/YouTubeDownloader/blob/bd3fd4242f83ee2cf111812e71b6d2db5aa71bdf/tests/test_thread_safety.py#L99-L193)
 
@@ -44,6 +46,7 @@ Sources: [tests/test_thread_safety.py:18-96](https://github.com/lifeupnorth/YouT
 | Single download | Progress never goes backwards, stays ≤ 99 until done, then reaches 100; polling stops when idle; the log shows the final file, not the temporary streams |
 | Errors | Failure dialog; a single-video error is logged once; closing the window while the Done dialog is open |
 | Playlists | Whole-playlist run with one "Saved" per video; "Video n/N" status; an unavailable entry is skipped; nothing saved means failure; "Already downloaded" is counted separately |
+| Cancel | Only the unfinished video's files are removed (finished videos and unrelated files stay); canceling between playlist videos; downloading again after a cancel |
 | Playlist prompt | A single video doesn't ask; a playlist asks; declining downloads nothing; `url` results are followed before asking; Yes doesn't tick the box |
 
 Sources: [tests/test_thread_safety.py:195-339](https://github.com/lifeupnorth/YouTubeDownloader/blob/bd3fd4242f83ee2cf111812e71b6d2db5aa71bdf/tests/test_thread_safety.py#L195-L339)

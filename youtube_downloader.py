@@ -9,6 +9,7 @@ from tkinter import ttk, filedialog, messagebox
 import threading
 import queue
 import functools
+import glob
 import os
 import re
 import shutil
@@ -191,8 +192,11 @@ def _stream_counter_class(base):
             self._app = app
 
         def run(self, info):
+            # Also where Cancel stops a playlist between two videos.
+            self._app._check_canceled()
             self._app._stream_index = 0
             self._app._stream_count = len(info.get("requested_formats") or ()) or 1
+            self._app._entry_files = set()
             return [], info
 
     return StreamCounter
@@ -224,6 +228,8 @@ class YouTubeDownloader(tk.Tk):
         self._stream_count = 1
         self._saved = self._already = 0
         self._skipped = []
+        self._cancel = threading.Event()
+        self._entry_files = set()
 
         self._build_ui()
         self.protocol("WM_DELETE_WINDOW", self._on_close)
@@ -501,8 +507,20 @@ class YouTubeDownloader(tk.Tk):
 
         return opts
 
+    # Runs on the download thread. Raising here is how yt-dlp lets a caller
+    # stop a download; it leaves the .part file, which Cancel then removes.
+    def _check_canceled(self):
+        if self._cancel.is_set():
+            raise yt_dlp.utils.DownloadCancelled()
+
     # Runs on the download thread.
     def _progress_hook(self, d):
+        if d["status"] == "downloading":
+            # Only files this run is writing; already-downloaded files never
+            # get a "downloading" event, so Cancel can't remove them.
+            self._entry_files.update(
+                p for p in (d.get("tmpfilename"), d.get("filename")) if p)
+        self._check_canceled()
         streams = self._stream_count
         entry = d.get("info_dict") or {}
         index, count = entry.get("playlist_index"), entry.get("n_entries")
@@ -532,6 +550,7 @@ class YouTubeDownloader(tk.Tk):
     # video, with its final file (the progress hook only sees the temporary
     # per-stream files).
     def _file_done(self, info):
+        self._entry_files.clear()   # finished: nothing for Cancel to remove
         path = info.get("filepath", "")
         if info.get("__real_download"):
             self._saved += 1
@@ -581,7 +600,7 @@ class YouTubeDownloader(tk.Tk):
 
         opts = self._get_ydl_opts(url, ffmpeg)
         self.is_running = True
-        self.dl_btn.config(state="disabled", text="Downloading…")
+        self.dl_btn.config(text="✖  Cancel", command=self._cancel_download)
         self.progress_var.set(0)
         self._set_status("Starting download…", WARNING)
         self._log(f"▶ {url}")
@@ -590,9 +609,21 @@ class YouTubeDownloader(tk.Tk):
         self._stream_count = 1
         self._saved = self._already = 0
         self._skipped = []
+        self._cancel = threading.Event()
+        self._entry_files = set()
         self._latest_progress = self._shown_progress = None
         self._start_worker(self._download_thread, url, opts,
                            not self.playlist_var.get())
+
+    # The Download button turns into Cancel while a download runs. yt-dlp
+    # stops at its next progress update, or before the next playlist video;
+    # it can't stop ffmpeg mid-merge, so that video still finishes.
+    def _cancel_download(self):
+        self._cancel.set()
+        # A progress update set just before must not overwrite "Canceling…".
+        self._shown_progress = self._latest_progress
+        self.dl_btn.config(state="disabled", text="Canceling…")
+        self._set_status("Canceling…", WARNING)
 
     def _download_thread(self, url, opts, ask_playlist):
         try:
@@ -609,7 +640,24 @@ class YouTubeDownloader(tk.Tk):
                     return
             self._post(self._download_done, True, None)
         except Exception as exc:
-            self._post(self._download_done, False, str(exc))
+            if self._cancel.is_set():
+                self._post(self._download_canceled, self._remove_partial_files())
+            else:
+                self._post(self._download_done, False, str(exc))
+
+    # Runs on the download thread after a cancel. Removes what this run wrote
+    # for the unfinished video: its .part file, fragments, and any stream that
+    # finished but wasn't merged yet. Videos that finished are kept.
+    def _remove_partial_files(self):
+        removed = 0
+        for path in self._entry_files:
+            for p in [path, path + ".ytdl", *glob.glob(glob.escape(path) + "-Frag*")]:
+                try:
+                    os.remove(p)
+                    removed += 1
+                except OSError:
+                    pass
+        return removed
 
     # With the box unticked, ask before downloading a playlist, channel or tab
     # (decided from what yt-dlp extracts, not from the URL).
@@ -635,7 +683,18 @@ class YouTubeDownloader(tk.Tk):
     def _end_download(self):
         self._worker_finished()
         self.is_running = False
-        self.dl_btn.config(state="normal", text="⬇  Download")
+        self.dl_btn.config(state="normal", text="⬇  Download",
+                           command=self._start_download)
+
+    def _download_canceled(self, removed):
+        self._end_download()
+        self.progress_var.set(0)
+        parts = [f"{self._saved} saved"] if self._saved else []
+        if removed:
+            parts.append(f"{removed} partial file{'s' * (removed != 1)} removed")
+        detail = f" ({', '.join(parts)})" if parts else ""
+        self._set_status(f"Download canceled{detail}.")
+        self._log(f"✘ Download canceled{detail}.\n")
 
     def _download_declined(self):
         self._end_download()
