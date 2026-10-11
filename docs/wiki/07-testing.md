@@ -3,29 +3,37 @@
 <details>
 <summary>Relevant source files</summary>
 
-- [tests/test_thread_safety.py](https://github.com/lifeupnorth/YouTubeDownloader/blob/bd3fd4242f83ee2cf111812e71b6d2db5aa71bdf/tests/test_thread_safety.py)
-- [tests/test_formats.py](https://github.com/lifeupnorth/YouTubeDownloader/blob/bd3fd4242f83ee2cf111812e71b6d2db5aa71bdf/tests/test_formats.py)
-- [README.md](https://github.com/lifeupnorth/YouTubeDownloader/blob/bd3fd4242f83ee2cf111812e71b6d2db5aa71bdf/README.md)
+- [tests/test_engine.py](https://github.com/lifeupnorth/YouTubeDownloader/blob/fed021846b04c093d045f0ec3de2b53d5ea42060/tests/test_engine.py)
+- [tests/test_thread_safety.py](https://github.com/lifeupnorth/YouTubeDownloader/blob/fed021846b04c093d045f0ec3de2b53d5ea42060/tests/test_thread_safety.py)
+- [tests/test_app.py](https://github.com/lifeupnorth/YouTubeDownloader/blob/fed021846b04c093d045f0ec3de2b53d5ea42060/tests/test_app.py)
+- [tests/test_requirements.py](https://github.com/lifeupnorth/YouTubeDownloader/blob/fed021846b04c093d045f0ec3de2b53d5ea42060/tests/test_requirements.py)
+- [tests/fakes.py](https://github.com/lifeupnorth/YouTubeDownloader/blob/fed021846b04c093d045f0ec3de2b53d5ea42060/tests/fakes.py)
+- [.github/workflows/tests.yml](https://github.com/lifeupnorth/YouTubeDownloader/blob/fed021846b04c093d045f0ec3de2b53d5ea42060/.github/workflows/tests.yml)
 
 </details>
 
-The tests use the standard library `unittest`, with no extra dependencies. They're split into three files: one drives a real Tk window through simulated downloads, one covers format selection and ffmpeg detection, and `test_requirements.py` checks that the in-app installer uses the exact yt-dlp pin from `requirements.txt` and that Dependabot watches that file. Nothing touches the network. GitHub Actions (`.github/workflows/tests.yml`) runs them on every push to `main` and every pull request, on Windows and Ubuntu (under a virtual display, `xvfb-run`) with Python 3.10 and 3.14. Each job runs the suite twice: once normally, and once with yt-dlp blocked, so the tests that need it must skip rather than fail. A separate `lint` job runs `ruff check .` with the rules in `ruff.toml` (ruff is pinned in `requirements-dev.txt`), and findings show up on the PR's lines.
+The tests use the standard library `unittest`, and nothing touches the network: downloads run against a fake yt-dlp. There are 97 tests in four files. The engine's tests need no display; the window's tests open real Tk windows. GitHub Actions runs them on every push to `main` and every pull request, together with a ruff lint check.
 
 ```
 python -m unittest discover -s tests -v
 ```
 
-Sources: [README.md:13-16](https://github.com/lifeupnorth/YouTubeDownloader/blob/bd3fd4242f83ee2cf111812e71b6d2db5aa71bdf/README.md#L13-L16)
+| File | Tests | What it covers | Needs |
+|---|---|---|---|
+| `test_engine.py` | 44 | `download_engine.py` on its own: formats, ffmpeg lookup, yt-dlp version and loading, preview helpers, the logger, `DownloadJob`, `DownloadQueue` | Nothing (some tests use real yt-dlp or Pillow and skip without them) |
+| `test_thread_safety.py` | 37 | The real window driven through simulated downloads; worker threads must never call Tk | A display |
+| `test_app.py` | 10 | Settings file, Open folder, ffmpeg help text and checks in the window | A display for the window checks |
+| `test_requirements.py` | 6 | The yt-dlp pin in `requirements.txt` is what the in-app installer uses; every requirement is pinned | Nothing |
 
-## Thread-safety tests (`test_thread_safety.py`)
+Sources: [README.md:60-73](https://github.com/lifeupnorth/YouTubeDownloader/blob/fed021846b04c093d045f0ec3de2b53d5ea42060/README.md#L60-L73), [tests/test_engine.py:1-4](https://github.com/lifeupnorth/YouTubeDownloader/blob/fed021846b04c093d045f0ec3de2b53d5ea42060/tests/test_engine.py#L1-L4), [tests/test_thread_safety.py:1-4](https://github.com/lifeupnorth/YouTubeDownloader/blob/fed021846b04c093d045f0ec3de2b53d5ea42060/tests/test_thread_safety.py#L1-L4)
 
-These tests check the app's central rule: **worker threads never call Tk**. `setUp` wraps the Tk methods listed in `GUARDED` (`Variable.get/set`, `Misc.configure/config/after/after_cancel`, `Text.insert/see`) with a function that records any call made from a non-main thread. Each test then asserts that `self.violations == []`.
+## The fake yt-dlp (`tests/fakes.py`)
 
-Downloads use **`make_fake_ydl`**, a stand-in for `yt_dlp.YoutubeDL`. It drives the real progress hooks and the app's post-processors (`before_dl`, `after_move`), and its parameters create specific scenarios:
+`make_fake_ydl` returns a stand-in for `yt_dlp.YoutubeDL` that drives the engine's real progress hook, logger and post-processors (`before_dl`, `after_move`), and `fake_yt_dlp` wraps it as a module (with `PostProcessor=object` and a `FakeCancelled` as `utils.DownloadCancelled`). Its parameters build scenarios:
 
 | Parameter | Simulates |
 |---|---|
-| `streams` | Number of streams per video (2 = merged video and audio) |
+| `streams` | Streams per video (2 = merged video and audio) |
 | `videos` | A playlist with `playlist_index`/`n_entries` |
 | `overshoot` | `downloaded_bytes` exceeding `total_bytes_estimate` |
 | `fail` | Entries that call `logger.error` (and raise unless `ignoreerrors` is set) |
@@ -33,50 +41,52 @@ Downloads use **`make_fake_ydl`**, a stand-in for `yt_dlp.YoutubeDL`. It drives 
 | `error` | An exception after the run |
 | `probe` | The `_type` returned by each `extract_info(process=False)` call |
 | `files_dir` | Writes real stream files there (`.part` while downloading, then renamed, then "merged" into `v<N>.mp4`) |
-| `on_progress` | Callback on the download thread before each progress event; the cancel tests use it to click Cancel at an exact point |
+| `on_progress` | A callback before each progress event, used to cancel at an exact point |
+| `warn` | A yt-dlp warning |
 
-`run_download` replaces the `yt_dlp` module with a namespace containing the fake (plus `PostProcessor=object` and `FakeCancelled` as `utils.DownloadCancelled`), schedules `_start_download`, and runs `mainloop()` with a 10-second safety timeout. The patched dialogs call `quit()` to end the loop.
+Sources: [tests/fakes.py:8-118](https://github.com/lifeupnorth/YouTubeDownloader/blob/fed021846b04c093d045f0ec3de2b53d5ea42060/tests/fakes.py#L8-L118)
 
-Sources: [tests/test_thread_safety.py:18-96](https://github.com/lifeupnorth/YouTubeDownloader/blob/bd3fd4242f83ee2cf111812e71b6d2db5aa71bdf/tests/test_thread_safety.py#L18-L96), [tests/test_thread_safety.py:99-193](https://github.com/lifeupnorth/YouTubeDownloader/blob/bd3fd4242f83ee2cf111812e71b6d2db5aa71bdf/tests/test_thread_safety.py#L99-L193)
+## Engine tests (`test_engine.py`)
 
-### What is covered
+| Class | Tests |
+|---|---|
+| `FormatSelectionTest` | Runs yt-dlp's real format selector on synthetic format lists: resolution caps, MP4 preference, fallback instead of failure, vertical videos, and that the remux and extract-audio post-processors are registered (needs yt-dlp) |
+| `FindFfmpegTest` | `PATH` first, registry fallback on Windows only, not found, `%VAR%` expansion of the real registry `Path` (Windows) |
+| `YtDlpVersionTest` | Version comparison, the pin, loading yt-dlp after an install and its failure case |
+| `HelpersTest` | `format_eta`, `describe_info`, `thumbnail_url`, `fetch_thumbnail`, the logger's warning/error split |
+| `ErrorColorTest` | Error text has no ANSI codes; "Deprecated Feature" notices aren't errors |
+| `DownloadJobTest` | A single video, options, progress per stream and per playlist video, skipped/failed/already downloaded, playlist confirmation, Cancel (with real files in a temp folder), warnings, previews |
+| `DownloadQueueTest` | Links in order with "Link n/N", a failed link doesn't stop the rest, an unavailable video counts once, all failed, declined playlists, Cancel skips the remaining links |
+
+`make_job` builds a `DownloadJob` whose callbacks record into `job.progress` and `job.log`, so the tests check exactly what the window would receive.
+
+Sources: [tests/test_engine.py:82-293](https://github.com/lifeupnorth/YouTubeDownloader/blob/fed021846b04c093d045f0ec3de2b53d5ea42060/tests/test_engine.py#L82-L293), [tests/test_engine.py:296-555](https://github.com/lifeupnorth/YouTubeDownloader/blob/fed021846b04c093d045f0ec3de2b53d5ea42060/tests/test_engine.py#L296-L555)
+
+## Window tests (`test_thread_safety.py`)
+
+These check the app's central rule: **worker threads never call Tk**. `setUp` wraps the Tk methods in `GUARDED` (`Variable.get/set`, `Misc.configure/config/after/after_cancel`, `Text.insert/see`) with a function that records any call from a non-main thread, and tests assert `self.violations == []`. `run_download` puts the fake in place of the engine's `yt_dlp`, starts `_start_download`, and runs `mainloop()` with a 10-second safety timeout; `_download_finished` and the patched dialogs end the loop. Settings go to a temporary file, never the real one.
 
 | Area | Tests |
 |---|---|
-| Single download | Progress never goes backwards, stays ≤ 99 until done, then reaches 100; polling stops when idle; the log shows the final file, not the temporary streams |
-| Errors | Failure dialog; a single-video error is logged once; closing the window while the error dialog is open |
-| Playlists | Whole-playlist run with one "Saved" per video; "Video n/N" status; an unavailable entry is skipped; nothing saved means failure; "Already downloaded" is counted separately |
-| Closing during a download | Asks first; Yes cancels, removes the partial files and closes; No keeps downloading |
-| Open folder, settings | The button appears after a save and opens that file; folder and format are remembered, bad saved settings fall back to defaults (tests use a temporary settings file) |
-| Preview | Video, playlist (following `url` results), bad link, non-link text, an older link's late answer is dropped, thumbnail shown |
-| Polish | Dimmed placeholder isn't a URL; Paste replaces it; yt-dlp warnings reach the log; the status wraps at the window width |
-| Cancel | Only the unfinished video's files are removed (finished videos and unrelated files stay); canceling between playlist videos; downloading again after a cancel |
-| Playlist prompt | A single video doesn't ask; a playlist asks; declining downloads nothing; `url` results are followed before asking; Yes doesn't tick the box |
+| Downloads | Success (progress never goes backwards, ≤ 99 until done, then 100; the log shows the final file); failure dialog; whole playlist; skipped and already-downloaded entries |
+| Several links | One per line, repeats dropped, the box grows to 4 lines; Enter downloads; a queue of three; a failed link doesn't stop the rest |
+| Playlist question | A single video doesn't ask; a playlist asks; declining downloads nothing; `url` results are followed first; Yes doesn't tick the box |
+| Cancel and closing | Only the unfinished video's files are removed; canceling between playlist videos; downloading again after a cancel; closing during a download asks first, Yes cancels and closes, No keeps going; closing with the error dialog open |
+| Preview | Video, playlist, bad link, an older link's late answer is dropped, thumbnail |
+| Settings, version, install | Folder and format remembered, saved on close, bad settings ignored; version in the header and the mismatch note; install with and without a restart |
+| Polish | Placeholder isn't a URL, Paste, warnings in the log, the status wraps, Open folder |
 
-Sources: [tests/test_thread_safety.py:195-339](https://github.com/lifeupnorth/YouTubeDownloader/blob/bd3fd4242f83ee2cf111812e71b6d2db5aa71bdf/tests/test_thread_safety.py#L195-L339)
+Each test builds and destroys its own window. If a destroyed window's objects were garbage-collected on a worker thread, each `Variable.__del__` would block for about a second against the dead Tcl interpreter, so `setUp` collects garbage on the main thread first.
 
-### The `gc.collect()` in `setUp`
+Sources: [tests/test_thread_safety.py:24-29](https://github.com/lifeupnorth/YouTubeDownloader/blob/fed021846b04c093d045f0ec3de2b53d5ea42060/tests/test_thread_safety.py#L24-L29), [tests/test_thread_safety.py:33-36](https://github.com/lifeupnorth/YouTubeDownloader/blob/fed021846b04c093d045f0ec3de2b53d5ea42060/tests/test_thread_safety.py#L33-L36), [tests/test_thread_safety.py:120-128](https://github.com/lifeupnorth/YouTubeDownloader/blob/fed021846b04c093d045f0ec3de2b53d5ea42060/tests/test_thread_safety.py#L120-L128)
 
-Each test creates and destroys its own Tk app. If a destroyed app's objects are garbage-collected on a worker thread, each `Variable.__del__` blocks for about a second against the dead Tcl interpreter, which can push a test past its timeout. `setUp` therefore collects garbage on the main thread before building the next app.
+## CI
 
-Sources: [tests/test_thread_safety.py:100-103](https://github.com/lifeupnorth/YouTubeDownloader/blob/bd3fd4242f83ee2cf111812e71b6d2db5aa71bdf/tests/test_thread_safety.py#L100-L103)
+`.github/workflows/tests.yml` runs on every push to `main` and every pull request, with read-only permissions:
 
-## Format and ffmpeg tests (`test_formats.py`)
+- **Tests** on Windows and Ubuntu, each with Python 3.10 (the oldest the pinned yt-dlp supports) and 3.14. Ubuntu runs under a virtual display (`xvfb-run`). Each job runs the suite twice: normally, and with yt-dlp blocked, so the tests that need it must skip rather than fail.
+- **Lint**: `ruff check .` with the rules in `ruff.toml` (ruff is pinned in `requirements-dev.txt`); findings show up on the PR's lines.
 
-| Class | What it checks | Needs |
-|---|---|---|
-| `FormatSelectionTest` | Runs yt-dlp's real format selector on synthetic format lists: resolution caps, MP4 preference, fallback instead of failure, vertical videos, and that the remux and extract-audio post-processors are registered | yt-dlp (skipped otherwise) |
-| `FindFfmpegTest` | `PATH` first, registry fallback on Windows only, not-found case, `%VAR%` expansion of the real registry `Path` | Windows for the last test |
-| `SmallHelpersTest` | `format_eta`; the logger keeps warnings and errors apart | |
-| `FfmpegHelpTest` | Install hint per platform; startup vs. Download wording | |
-| `FfmpegCheckTest` | Startup warning, focus recheck (ignoring child widgets), one `find_ffmpeg` call per download, path passed to yt-dlp | Display |
-| `ErrorColorTest` | The app's options give the logger plain `ERROR: …` text without ANSI codes | yt-dlp |
+Dependabot keeps yt-dlp, Pillow, ruff and the GitHub Actions versions current; its PRs run the same checks.
 
-`registered_pps` and `mapping` read yt-dlp internals (`YoutubeDL._pps`, `PP.mapping`). If a yt-dlp update changes them, these tests skip instead of failing.
-
-Sources: [tests/test_formats.py:22-70](https://github.com/lifeupnorth/YouTubeDownloader/blob/bd3fd4242f83ee2cf111812e71b6d2db5aa71bdf/tests/test_formats.py#L22-L70), [tests/test_formats.py:73-249](https://github.com/lifeupnorth/YouTubeDownloader/blob/bd3fd4242f83ee2cf111812e71b6d2db5aa71bdf/tests/test_formats.py#L73-L249)
-
-## Running without yt-dlp or a display
-
-- **Without yt-dlp:** the thread-safety tests don't need it (they use the fake), while the yt-dlp-dependent format tests skip.
-- **Without a display:** tests that build a window catch `TclError` and skip.
+Sources: [.github/workflows/tests.yml](https://github.com/lifeupnorth/YouTubeDownloader/blob/fed021846b04c093d045f0ec3de2b53d5ea42060/.github/workflows/tests.yml), [ruff.toml](https://github.com/lifeupnorth/YouTubeDownloader/blob/fed021846b04c093d045f0ec3de2b53d5ea42060/ruff.toml), [.github/dependabot.yml](https://github.com/lifeupnorth/YouTubeDownloader/blob/fed021846b04c093d045f0ec3de2b53d5ea42060/.github/dependabot.yml)

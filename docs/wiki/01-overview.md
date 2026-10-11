@@ -3,61 +3,67 @@
 <details>
 <summary>Relevant source files</summary>
 
-- [README.md](https://github.com/lifeupnorth/YouTubeDownloader/blob/bd3fd4242f83ee2cf111812e71b6d2db5aa71bdf/README.md)
-- [LICENSE](https://github.com/lifeupnorth/YouTubeDownloader/blob/bd3fd4242f83ee2cf111812e71b6d2db5aa71bdf/LICENSE)
-- [youtube_downloader.py](https://github.com/lifeupnorth/YouTubeDownloader/blob/bd3fd4242f83ee2cf111812e71b6d2db5aa71bdf/youtube_downloader.py)
+- [README.md](https://github.com/lifeupnorth/YouTubeDownloader/blob/fed021846b04c093d045f0ec3de2b53d5ea42060/README.md)
+- [LICENSE](https://github.com/lifeupnorth/YouTubeDownloader/blob/fed021846b04c093d045f0ec3de2b53d5ea42060/LICENSE)
+- [youtube_downloader.py](https://github.com/lifeupnorth/YouTubeDownloader/blob/fed021846b04c093d045f0ec3de2b53d5ea42060/youtube_downloader.py)
+- [download_engine.py](https://github.com/lifeupnorth/YouTubeDownloader/blob/fed021846b04c093d045f0ec3de2b53d5ea42060/download_engine.py)
 
 </details>
 
-**YouTubeDownloader** is a small desktop app, written in Python with Tkinter, for downloading YouTube videos and audio. It is a graphical front end for [yt-dlp](https://github.com/yt-dlp/yt-dlp): you paste a link, pick a format and a folder, and click Download. yt-dlp does the extraction and downloading, and ffmpeg merges and converts the files. The app adds the window, progress reporting, playlist safeguards and ffmpeg detection around them.
+**YouTubeDownloader** is a small desktop app, written in Python with Tkinter, for downloading YouTube videos and audio. It's a graphical front end for [yt-dlp](https://github.com/yt-dlp/yt-dlp): you paste one or more links, pick a format and a folder, and click Download. yt-dlp does the extraction and downloading, and ffmpeg merges and converts the files. The app adds the window, previews, progress reporting, playlist safeguards, a download queue, Cancel and ffmpeg detection around them.
+
+The code is split in two:
+
+- **`youtube_downloader.py`** is the window: widgets, settings, dialogs, and the plumbing that gets updates from background threads onto the screen.
+- **`download_engine.py`** does the work without any Tk: it finds yt-dlp and ffmpeg, builds yt-dlp's options, previews links, and runs downloads (`DownloadJob` for one link, `DownloadQueue` for several in a row).
 
 The pages in this wiki:
 
-- [Getting Started](02-getting-started.md): requirements, running the app, running the tests
-- [Architecture and Threading](03-architecture.md): the single-module layout and how worker threads update the UI safely
-- [Download Pipeline](04-download-pipeline.md): what happens from clicking Download to the final summary, including playlists
+- [Getting Started](02-getting-started.md): requirements, running the app, settings, tests
+- [Architecture and Threading](03-architecture.md): the two modules, and how worker threads update the window safely
+- [Download Pipeline](04-download-pipeline.md): what happens from clicking Download to the final summary, including playlists, several links and Cancel
 - [Formats and ffmpeg](05-formats-ffmpeg.md): how each format choice maps to yt-dlp options, and how ffmpeg is found
-- [User Interface](06-user-interface.md): widgets, bindings, status colors and dialogs
-- [Testing](07-testing.md): the thread-safety harness and the format and ffmpeg tests
+- [User Interface](06-user-interface.md): widgets, bindings, status colors, previews and dialogs
+- [Testing](07-testing.md): the engine tests, the window tests and the CI
 - [Glossary](08-glossary.md)
 
-Sources: [README.md:1-11](https://github.com/lifeupnorth/YouTubeDownloader/blob/bd3fd4242f83ee2cf111812e71b6d2db5aa71bdf/README.md#L1-L11), [youtube_downloader.py:1-5](https://github.com/lifeupnorth/YouTubeDownloader/blob/bd3fd4242f83ee2cf111812e71b6d2db5aa71bdf/youtube_downloader.py#L1-L5)
+Sources: [README.md:1-35](https://github.com/lifeupnorth/YouTubeDownloader/blob/fed021846b04c093d045f0ec3de2b53d5ea42060/README.md#L1-L35), [download_engine.py:1-7](https://github.com/lifeupnorth/YouTubeDownloader/blob/fed021846b04c093d045f0ec3de2b53d5ea42060/download_engine.py#L1-L7), [youtube_downloader.py:2-8](https://github.com/lifeupnorth/YouTubeDownloader/blob/fed021846b04c093d045f0ec3de2b53d5ea42060/youtube_downloader.py#L2-L8)
 
 ## Key capabilities
 
 | Capability | Where |
 |---|---|
-| Six formats: Best MP4, 1080p, 720p, 480p, MP3, M4A; resolution choices fall back to the nearest available instead of failing | `format_opts` |
-| Safe playlist handling: a single video by default; the app asks before downloading a whole playlist, channel or tab; skips unavailable entries; numbered files in a per-playlist folder | `_download_unless_declined`, `_get_ydl_opts` |
-| One progress bar across video and audio streams, with "Video n/N" for playlists | `StreamCounter`, `_progress_hook` |
-| Log of the final files, with "already downloaded" and skipped entries reported separately | `_file_done`, `_entry_failed` |
-| ffmpeg detection at startup and before each download, including a Windows install made while the app is open | `find_ffmpeg`, `_recheck_ffmpeg` |
-| Offers to install the pinned yt-dlp version with pip when it's missing, and uses it without a restart; shows the version in use | `_prompt_install`, `_install_ytdlp` |
-| Link preview: thumbnail, title, and length or playlist size | `_start_preview`, `describe_info` |
-| Open folder button after a download, instead of a pop-up; last folder and format remembered | `_open_folder`, `load_settings` |
-| Cancel a running download; its partial files are removed, finished videos are kept | `_cancel_download`, `_remove_partial_files` |
-| UI that stays responsive: downloads run on a worker thread, and UI updates go through a queue | `_post`, `_poll_ui_queue` |
+| Six formats: Best MP4, 1080p, 720p, 480p, MP3, M4A; resolution choices fall back to the nearest available instead of failing | `engine.format_opts` |
+| Several links in a row, one per line; a failed link doesn't stop the others | `engine.DownloadQueue`, `_urls` |
+| Safe playlist handling: a single video by default; asks before downloading a whole playlist, channel or tab; skips unavailable entries; numbered files in a per-playlist folder | `DownloadJob._download_unless_declined`, `DownloadJob.options` |
+| One progress bar across video and audio streams, with "Link n/N" and "Video n/N" | `DownloadJob._progress_hook` |
+| Link preview: thumbnail, title, and length or playlist size | `engine.preview_link`, `_start_preview` |
+| Cancel, which removes the unfinished video's partial files and skips links still waiting | `DownloadJob._remove_partial_files`, `_cancel_download` |
+| Open folder button after a download instead of a pop-up; last folder and format remembered | `_open_folder`, `load_settings` |
+| ffmpeg detection at startup and before each download, including a Windows install made while the app is open | `engine.find_ffmpeg`, `_recheck_ffmpeg` |
+| Installs the pinned yt-dlp when it's missing and uses it without a restart; shows the version in use | `_install_ytdlp`, `engine.load_yt_dlp` |
+| A window that stays responsive: downloads run on a worker thread, and UI updates go through a queue | `_post`, `_poll_ui_queue` |
 
-Sources: [youtube_downloader.py:84-115](https://github.com/lifeupnorth/YouTubeDownloader/blob/bd3fd4242f83ee2cf111812e71b6d2db5aa71bdf/youtube_downloader.py#L84-L115), [youtube_downloader.py:401-434](https://github.com/lifeupnorth/YouTubeDownloader/blob/bd3fd4242f83ee2cf111812e71b6d2db5aa71bdf/youtube_downloader.py#L401-L434), [youtube_downloader.py:476-519](https://github.com/lifeupnorth/YouTubeDownloader/blob/bd3fd4242f83ee2cf111812e71b6d2db5aa71bdf/youtube_downloader.py#L476-L519), [youtube_downloader.py:586-605](https://github.com/lifeupnorth/YouTubeDownloader/blob/bd3fd4242f83ee2cf111812e71b6d2db5aa71bdf/youtube_downloader.py#L586-L605), [youtube_downloader.py:657-695](https://github.com/lifeupnorth/YouTubeDownloader/blob/bd3fd4242f83ee2cf111812e71b6d2db5aa71bdf/youtube_downloader.py#L657-L695)
+Sources: [download_engine.py:102-133](https://github.com/lifeupnorth/YouTubeDownloader/blob/fed021846b04c093d045f0ec3de2b53d5ea42060/download_engine.py#L102-L133), [download_engine.py:295-503](https://github.com/lifeupnorth/YouTubeDownloader/blob/fed021846b04c093d045f0ec3de2b53d5ea42060/download_engine.py#L295-L503), [download_engine.py:506-630](https://github.com/lifeupnorth/YouTubeDownloader/blob/fed021846b04c093d045f0ec3de2b53d5ea42060/download_engine.py#L506-L630), [youtube_downloader.py:460-490](https://github.com/lifeupnorth/YouTubeDownloader/blob/fed021846b04c093d045f0ec3de2b53d5ea42060/youtube_downloader.py#L460-L490), [youtube_downloader.py:522-627](https://github.com/lifeupnorth/YouTubeDownloader/blob/fed021846b04c093d045f0ec3de2b53d5ea42060/youtube_downloader.py#L522-L627), [youtube_downloader.py:649-687](https://github.com/lifeupnorth/YouTubeDownloader/blob/fed021846b04c093d045f0ec3de2b53d5ea42060/youtube_downloader.py#L649-L687), [youtube_downloader.py:725-758](https://github.com/lifeupnorth/YouTubeDownloader/blob/fed021846b04c093d045f0ec3de2b53d5ea42060/youtube_downloader.py#L725-L758)
 
 ## From concepts to code
 
 ```mermaid
 flowchart TB
     subgraph concepts ["What the user does"]
-        pick["Paste link, pick format"] --> start["Click Download"]
+        pick["Paste links, pick a format"] --> start["Click Download"]
         start --> list["Playlist check"]
         list --> fetch["Download streams"]
         fetch --> post["Merge or convert"]
-        post --> report["See result"]
+        post --> report["See the result"]
     end
-    subgraph code ["Code in youtube_downloader.py"]
-        c1["_build_ui, format_var"]
-        c2["_start_download, _get_ydl_opts"]
-        c3["_download_unless_declined"]
-        c4["yt_dlp.YoutubeDL, _progress_hook"]
+    subgraph code ["Code"]
+        c1["Window: _build_ui, _urls, preview"]
+        c2["Window: _start_download, DownloadQueue"]
+        c3["DownloadJob._download_unless_declined"]
+        c4["yt_dlp.YoutubeDL, DownloadJob._progress_hook"]
         c5["ffmpeg via format_opts post-processors"]
-        c6["_file_done, _download_done"]
+        c6["DownloadJob._file_done, _download_finished"]
     end
     pick -.-> c1
     start -.-> c2
@@ -67,37 +73,39 @@ flowchart TB
     report -.-> c6
 ```
 
-Sources: [youtube_downloader.py:209-290](https://github.com/lifeupnorth/YouTubeDownloader/blob/bd3fd4242f83ee2cf111812e71b6d2db5aa71bdf/youtube_downloader.py#L209-L290), [youtube_downloader.py:449-474](https://github.com/lifeupnorth/YouTubeDownloader/blob/bd3fd4242f83ee2cf111812e71b6d2db5aa71bdf/youtube_downloader.py#L449-L474), [youtube_downloader.py:535-644](https://github.com/lifeupnorth/YouTubeDownloader/blob/bd3fd4242f83ee2cf111812e71b6d2db5aa71bdf/youtube_downloader.py#L535-L644)
+Sources: [youtube_downloader.py:172-352](https://github.com/lifeupnorth/YouTubeDownloader/blob/fed021846b04c093d045f0ec3de2b53d5ea42060/youtube_downloader.py#L172-L352), [youtube_downloader.py:522-557](https://github.com/lifeupnorth/YouTubeDownloader/blob/fed021846b04c093d045f0ec3de2b53d5ea42060/youtube_downloader.py#L522-L557), [download_engine.py:356-383](https://github.com/lifeupnorth/YouTubeDownloader/blob/fed021846b04c093d045f0ec3de2b53d5ea42060/download_engine.py#L356-L383), [download_engine.py:393-409](https://github.com/lifeupnorth/YouTubeDownloader/blob/fed021846b04c093d045f0ec3de2b53d5ea42060/download_engine.py#L393-L409), [download_engine.py:420-460](https://github.com/lifeupnorth/YouTubeDownloader/blob/fed021846b04c093d045f0ec3de2b53d5ea42060/download_engine.py#L420-L460), [youtube_downloader.py:605-627](https://github.com/lifeupnorth/YouTubeDownloader/blob/fed021846b04c093d045f0ec3de2b53d5ea42060/youtube_downloader.py#L605-L627)
 
 ## Tech stack
 
 | Component | Role |
 |---|---|
-| Python 3.10+ | Language (the pinned yt-dlp requires 3.10) |
+| Python 3.10+ | Language (the pinned yt-dlp needs 3.10) |
 | Tkinter / ttk | Window and widgets, standard library |
-| yt-dlp | Extraction, format selection, downloading, post-processing |
+| yt-dlp | Extraction, format selection, downloading, post-processing (pinned in `requirements.txt`) |
 | ffmpeg | External tool for merging, remuxing and audio conversion |
-| unittest | Tests, standard library |
+| Pillow | Optional: thumbnails in the link preview (also pinned) |
+| unittest, ruff | Tests (standard library) and lint (pinned in `requirements-dev.txt`) |
 
-yt-dlp is pinned to an exact version in `requirements.txt`, which the app's built-in installer also reads, and Dependabot (`.github/dependabot.yml`) opens a PR each week a new version is out. There are no other Python dependencies and no packaging metadata. The project is licensed under MIT.
+Dependabot keeps the pins and the GitHub Actions versions current. The project is licensed under MIT.
 
-Sources: [youtube_downloader.py:7-22](https://github.com/lifeupnorth/YouTubeDownloader/blob/bd3fd4242f83ee2cf111812e71b6d2db5aa71bdf/youtube_downloader.py#L7-L22), [LICENSE](https://github.com/lifeupnorth/YouTubeDownloader/blob/bd3fd4242f83ee2cf111812e71b6d2db5aa71bdf/LICENSE)
+Sources: [requirements.txt](https://github.com/lifeupnorth/YouTubeDownloader/blob/fed021846b04c093d045f0ec3de2b53d5ea42060/requirements.txt), [requirements-dev.txt](https://github.com/lifeupnorth/YouTubeDownloader/blob/fed021846b04c093d045f0ec3de2b53d5ea42060/requirements-dev.txt), [.github/dependabot.yml](https://github.com/lifeupnorth/YouTubeDownloader/blob/fed021846b04c093d045f0ec3de2b53d5ea42060/.github/dependabot.yml), [LICENSE](https://github.com/lifeupnorth/YouTubeDownloader/blob/fed021846b04c093d045f0ec3de2b53d5ea42060/LICENSE)
 
 ## Repository map
 
 | Path | Lines | Contents |
 |---|---|---|
-| `youtube_downloader.py` | 1157 | The entire app: helpers, the `YouTubeDownloader` window class, entry point |
-| `tests/test_thread_safety.py` | 689 | Simulated downloads through a real Tk window, using a fake `YoutubeDL` |
-| `tests/test_formats.py` | 428 | Format selection with real yt-dlp, ffmpeg detection, help text, error formatting |
-| `tests/test_requirements.py` | 59 | Checks the app installs the yt-dlp pin from `requirements.txt` |
-| `requirements.txt` | 9 | The pinned yt-dlp and (optional) Pillow versions |
-| `.github/dependabot.yml` | 19 | Weekly Dependabot checks for newer yt-dlp and GitHub Actions versions |
-| `.github/workflows/tests.yml` | 73 | Runs the tests and the ruff lint check on every push to `main` and every PR |
+| `youtube_downloader.py` | 764 | The window: UI, settings, dialogs, worker plumbing, entry point |
+| `download_engine.py` | 630 | Downloading without Tk: yt-dlp and ffmpeg, formats, previews, `DownloadJob`, `DownloadQueue` |
+| `tests/test_engine.py` | 559 | The engine with a fake yt-dlp; needs no display |
+| `tests/test_thread_safety.py` | 583 | The real window driven through simulated downloads |
+| `tests/test_app.py` | 153 | Settings file, Open folder, ffmpeg help and checks |
+| `tests/test_requirements.py` | 60 | The yt-dlp pin is what the installer uses |
+| `tests/fakes.py` | 118 | The fake yt-dlp shared by the tests |
+| `requirements.txt` / `requirements-dev.txt` | 9 / 3 | Pinned yt-dlp and Pillow / ruff |
 | `ruff.toml` | 8 | Lint rules |
-| `requirements-dev.txt` | 3 | The pinned ruff version |
-| `README.md` | 76 | Requirements, install, run and usage instructions, tests, disclaimer, license |
+| `.github/workflows/tests.yml` | 73 | Tests (Windows and Ubuntu, Python 3.10 and 3.14) and lint on every push to `main` and every PR |
+| `.github/dependabot.yml` | 19 | Weekly Dependabot checks for pip packages and GitHub Actions |
+| `README.md` | 81 | Requirements, install, run and usage, tests, disclaimer, license |
 | `LICENSE` | 21 | MIT |
-| `.gitignore` | 1 | `__pycache__/` |
 
-Sources: [README.md](https://github.com/lifeupnorth/YouTubeDownloader/blob/bd3fd4242f83ee2cf111812e71b6d2db5aa71bdf/README.md), [.gitignore](https://github.com/lifeupnorth/YouTubeDownloader/blob/bd3fd4242f83ee2cf111812e71b6d2db5aa71bdf/.gitignore)
+Sources: [.github/workflows/tests.yml](https://github.com/lifeupnorth/YouTubeDownloader/blob/fed021846b04c093d045f0ec3de2b53d5ea42060/.github/workflows/tests.yml), [ruff.toml](https://github.com/lifeupnorth/YouTubeDownloader/blob/fed021846b04c093d045f0ec3de2b53d5ea42060/ruff.toml), [README.md](https://github.com/lifeupnorth/YouTubeDownloader/blob/fed021846b04c093d045f0ec3de2b53d5ea42060/README.md)
