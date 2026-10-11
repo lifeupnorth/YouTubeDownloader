@@ -11,7 +11,7 @@ A small app to download YouTube videos written in Python.
 
 ## Install
 
-1. Install the Python dependency:
+1. Install the Python dependencies:
    ```
    pip install -r requirements.txt
    ```
@@ -19,9 +19,17 @@ A small app to download YouTube videos written in Python.
    - Windows: press WIN+R, type `winget install ffmpeg`, and wait for it to finish.
    - macOS: `brew install ffmpeg`
    - Linux: your package manager, e.g. `sudo apt install ffmpeg`
+3. Install deno, the JavaScript runtime yt-dlp uses for YouTube:
+   - Windows: press WIN+R, type `winget install DenoLand.Deno`, and wait for it to finish.
+   - macOS: `brew install deno`
+   - Linux: `curl -fsSL https://deno.land/install.sh | sh`
+
+   Node or bun work too, if you already have one of them.
 
 The app checks for ffmpeg at startup and before each download. On Windows it
-also finds an install made while the app is open.
+also finds an install made while the app is open. Without a JavaScript runtime
+it says so in its log at startup, and picks one up on the next download once
+it's installed.
 
 ## Run
 
@@ -112,9 +120,15 @@ ones that finished, and skips any links still waiting.
 
 ## Run the tests
 
+From the project folder, after `pip install -r requirements.txt` (without
+yt-dlp the tests that need it are skipped):
 ```
 python -m unittest discover -s tests -v
 ```
+The window tests open real Tk windows, so they need a display; on a Linux
+server run them with `xvfb-run -a python -m unittest discover -s tests -v`.
+The real yt-dlp tests download from a local server, so they need no internet;
+the MP3 one needs ffmpeg and is skipped without it.
 
 A nightly workflow (`.github/workflows/smoke.yml`) also downloads one short
 video for real, from source and with the .exe. Run it locally with
