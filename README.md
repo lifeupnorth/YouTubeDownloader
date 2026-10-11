@@ -6,3 +6,8 @@ Install ffmpeg before running:
 - Type : Winget install ffmpeg
 - Wait 10 seconds.
 - Done.
+
+Run the tests:
+```
+python -m unittest discover -s tests -v
+```

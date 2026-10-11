@@ -33,6 +33,17 @@ WARNING   = "#f59e0b"
 BORDER    = "#333333"
 
 
+def _stream_counter(app):
+    # Merged formats download video and audio as separate streams; the
+    # progress hook's info_dict no longer lists them, so count them up front.
+    class StreamCounter(yt_dlp.postprocessor.PostProcessor):
+        def run(self, info):
+            app._stream_count = len(info.get("requested_formats") or ()) or 1
+            return [], info
+
+    return StreamCounter()
+
+
 class YouTubeDownloader(tk.Tk):
     def __init__(self):
         super().__init__()
@@ -50,9 +61,15 @@ class YouTubeDownloader(tk.Tk):
         self.is_running    = False
         self._after_id     = None
         self._ui_queue     = queue.Queue()
+        self._active_workers = 0
+        self._closing      = False
+        self._latest_progress = None
+        self._shown_progress  = None
+        self._stream_index = 0
+        self._stream_count = 1
 
         self._build_ui()
-        self._poll_ui_queue()
+        self.protocol("WM_DELETE_WINDOW", self._on_close)
 
         if not YT_DLP_AVAILABLE:
             self.after(300, self._prompt_install)
@@ -245,20 +262,47 @@ class YouTubeDownloader(tk.Tk):
         self.status_var.set(msg)
         self.status_lbl.config(fg=color)
 
-    # Tkinter is not thread-safe: worker threads must only call _post(),
-    # and the main loop applies the queued UI updates.
+    # Tkinter is not thread-safe: worker threads must not touch widgets or
+    # Tk variables. They _post() discrete events and overwrite
+    # _latest_progress; the main thread applies both in _poll_ui_queue().
     def _post(self, func, *args):
         self._ui_queue.put((func, args))
 
-    def _poll_ui_queue(self):
-        try:
-            while True:
-                func, args = self._ui_queue.get_nowait()
-                func(*args)
-        except queue.Empty:
-            pass
-        finally:
+    def _start_worker(self, target, *args):
+        self._active_workers += 1
+        if self._after_id is None:
             self._after_id = self.after(50, self._poll_ui_queue)
+        threading.Thread(target=target, args=args, daemon=True).start()
+
+    def _worker_finished(self):
+        self._active_workers -= 1
+
+    def _poll_ui_queue(self):
+        self._after_id = None
+        progress = self._latest_progress
+        if progress is not None and progress is not self._shown_progress:
+            self._shown_progress = progress
+            self._set_progress(*progress)
+
+        while not self._closing:
+            try:
+                func, args = self._ui_queue.get_nowait()
+            except queue.Empty:
+                break
+            try:
+                func(*args)
+            except Exception:
+                self.report_callback_exception(*sys.exc_info())
+
+        if not self._closing and (self._active_workers or not self._ui_queue.empty()):
+            self._after_id = self.after(50, self._poll_ui_queue)
+
+    def _on_close(self):
+        self._closing = True
+        if self._after_id is not None:
+            self.after_cancel(self._after_id)
+            self._after_id = None
+        self.destroy()
 
     def _set_progress(self, pct, msg, color):
         self.progress_var.set(pct)
@@ -306,7 +350,9 @@ class YouTubeDownloader(tk.Tk):
 
         return opts
 
+    # Runs on the download thread.
     def _progress_hook(self, d):
+        streams = self._stream_count
         if d["status"] == "downloading":
             total   = d.get("total_bytes") or d.get("total_bytes_estimate", 0)
             downloaded = d.get("downloaded_bytes", 0)
@@ -314,15 +360,18 @@ class YouTubeDownloader(tk.Tk):
             eta     = d.get("eta", 0) or 0
 
             pct = (downloaded / total * 100) if total else 0
+            pct = (min(self._stream_index, streams - 1) * 100 + pct) / streams
             speed_str = f"{speed/1024/1024:.1f} MB/s" if speed > 0 else ""
             eta_str   = f"ETA {eta}s" if eta > 0 else ""
             info      = " · ".join(filter(None, [speed_str, eta_str]))
 
-            self._post(self._set_progress, pct,
-                       f"Downloading… {pct:.1f}%  {info}", WARNING)
+            self._latest_progress = (pct, f"Downloading… {pct:.1f}%  {info}",
+                                     WARNING)
 
         elif d["status"] == "finished":
-            self._post(self._set_progress, 99, "Processing…", WARNING)
+            self._stream_index += 1
+            if self._stream_index >= streams:
+                self._latest_progress = (99, "Processing…", WARNING)
             self._post(self._log, f"✔ Saved: {d.get('filename', '')}")
 
     def _start_download(self):
@@ -338,25 +387,29 @@ class YouTubeDownloader(tk.Tk):
             messagebox.showinfo("Busy", "A download is already in progress.")
             return
 
+        opts = self._get_ydl_opts(url)
         self.is_running = True
         self.dl_btn.config(state="disabled", text="Downloading…")
         self.progress_var.set(0)
         self._set_status("Starting download…", WARNING)
         self._log(f"▶ {url}")
 
-        threading.Thread(target=self._download_thread,
-                         args=(url,), daemon=True).start()
+        self._stream_index = 0
+        self._stream_count = 1
+        self._latest_progress = self._shown_progress = None
+        self._start_worker(self._download_thread, url, opts)
 
-    def _download_thread(self, url):
+    def _download_thread(self, url, opts):
         try:
-            opts = self._get_ydl_opts(url)
             with yt_dlp.YoutubeDL(opts) as ydl:
+                ydl.add_post_processor(_stream_counter(self), when="before_dl")
                 ydl.download([url])
             self._post(self._download_done, True, None)
         except Exception as exc:
             self._post(self._download_done, False, str(exc))
 
     def _download_done(self, success, error):
+        self._worker_finished()
         self.is_running = False
         self.dl_btn.config(state="normal", text="⬇  Download")
 
@@ -397,9 +450,10 @@ class YouTubeDownloader(tk.Tk):
             except Exception as e:
                 self._post(self._install_done, False, str(e))
 
-        threading.Thread(target=run, daemon=True).start()
+        self._start_worker(run)
 
     def _install_done(self, ok, err=None):
+        self._worker_finished()
         if ok:
             self._log("✔ yt-dlp installed! Please restart the app.")
             self._set_status("✔ yt-dlp installed — please restart.", SUCCESS)
