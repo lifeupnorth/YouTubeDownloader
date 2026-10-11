@@ -111,7 +111,7 @@ Sources: [youtube_downloader.py:133-144](https://github.com/lifeupnorth/YouTubeD
 
 ## 6. Finishing: `_download_done`
 
-`_download_done(success, error)` runs on the main thread. It re-enables the button via `_end_download` and picks one of four outcomes:
+`_download_done(success, error)` runs on the main thread. It re-enables the button via `_end_download` and picks one of four outcomes. There's no pop-up when a download succeeds: the status line says how it went, and an **Open folder** button appears (`_offer_open_folder`) that shows the last saved file in Explorer, Finder or the Linux file manager (`reveal_in_file_manager`). Only failures get a dialog.
 
 | Situation | Result |
 |---|---|

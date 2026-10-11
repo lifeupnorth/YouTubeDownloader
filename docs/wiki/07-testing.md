@@ -44,9 +44,11 @@ Sources: [tests/test_thread_safety.py:18-96](https://github.com/lifeupnorth/YouT
 | Area | Tests |
 |---|---|
 | Single download | Progress never goes backwards, stays ≤ 99 until done, then reaches 100; polling stops when idle; the log shows the final file, not the temporary streams |
-| Errors | Failure dialog; a single-video error is logged once; closing the window while the Done dialog is open |
+| Errors | Failure dialog; a single-video error is logged once; closing the window while the error dialog is open |
 | Playlists | Whole-playlist run with one "Saved" per video; "Video n/N" status; an unavailable entry is skipped; nothing saved means failure; "Already downloaded" is counted separately |
 | Closing during a download | Asks first; Yes cancels, removes the partial files and closes; No keeps downloading |
+| Open folder, settings | The button appears after a save and opens that file; folder and format are remembered, bad saved settings fall back to defaults (tests use a temporary settings file) |
+| Preview | Video, playlist (following `url` results), bad link, non-link text, an older link's late answer is dropped, thumbnail shown |
 | Polish | Dimmed placeholder isn't a URL; Paste replaces it; yt-dlp warnings reach the log; the status wraps at the window width |
 | Cancel | Only the unfinished video's files are removed (finished videos and unrelated files stay); canceling between playlist videos; downloading again after a cancel |
 | Playlist prompt | A single video doesn't ask; a playlist asks; declining downloads nothing; `url` results are followed before asking; Yes doesn't tick the box |

@@ -5,6 +5,7 @@ A small app to download YouTube videos written in Python.
 
 - **Python 3.10 or newer**, with Tkinter. The python.org installers for Windows and macOS include it; on Linux you may need a separate package, e.g. `sudo apt install python3-tk`.
 - **yt-dlp**, pinned to a tested version in `requirements.txt`.
+- **Pillow** (optional, also in `requirements.txt`), for thumbnails in the link preview.
 - **ffmpeg**, used to merge video and audio and to convert to MP3/M4A.
 
 ## Install
@@ -34,10 +35,14 @@ to restart it.
 
 ## Use
 
-1. Paste a link into **YouTube URL**, or click **Paste**.
+1. Paste a link into **YouTube URL**, or click **Paste**. A preview with the
+   thumbnail, title and length appears under it.
 2. Pick a **Format**: Best MP4, 1080p, 720p, 480p, MP3 or M4A.
 3. Choose where to save under **Save To** (default: your Downloads folder).
 4. Click **Download**, or press Enter. Progress and saved files show in the status line and the log.
+5. When it's done, click **Open folder** to see the file.
+
+The app remembers the folder and format you used last time.
 
 A link to a video opened from a playlist downloads just that video. Tick
 **Whole playlist** to download the whole list instead. For a playlist or
