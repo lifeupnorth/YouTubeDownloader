@@ -184,11 +184,17 @@ _ANSI_CODES = re.compile(r"\x1b\[[0-9;]*m")
 class _YdlLogger:
     """Hands yt-dlp's errors to on_error (with ignoreerrors they don't raise)
     and its warnings to on_warning, so both reach the app's log, also when
-    there's no console (pythonw)."""
+    there's no console (pythonw).
 
-    def __init__(self, on_error, on_warning=lambda msg: None):
+    check(), if given, runs for each of yt-dlp's status messages and may
+    raise to stop it. yt-dlp sends them all through the way, also while it
+    reads a playlist's pages, where no progress hook runs.
+    """
+
+    def __init__(self, on_error, on_warning=lambda msg: None, check=None):
         self._on_error = on_error
         self.warning = on_warning
+        self._check = check
 
     def error(self, msg):
         # yt-dlp also sends its "Deprecated Feature: ..." notices (e.g. for an
@@ -199,7 +205,8 @@ class _YdlLogger:
         self._on_error(msg)
 
     def debug(self, msg):
-        pass
+        if self._check:
+            self._check()
 
     info = debug
 
@@ -262,15 +269,18 @@ def thumbnail_url(info):
     return info.get("thumbnail")
 
 
-def fetch_thumbnail(url):
-    """Downloads and shrinks a thumbnail; None without Pillow or on errors."""
+def fetch_thumbnail(url, canceled=lambda: False):
+    """Downloads and shrinks a thumbnail; None without Pillow, on errors, or
+    once canceled() is true."""
     if Image is None or not url or not url.startswith(("https://", "http://")):
         return None
     try:
+        data = b""
         with urllib.request.urlopen(url, timeout=10) as response:
-            data = response.read(2_000_001)
-        if len(data) > 2_000_000:
-            return None
+            while chunk := response.read(64 * 1024):
+                data += chunk
+                if canceled() or len(data) > 2_000_000:
+                    return None
         image = Image.open(io.BytesIO(data)).convert("RGB")
         image.thumbnail(THUMB_SIZE)
         return image
@@ -278,26 +288,43 @@ def fetch_thumbnail(url):
         return None
 
 
-def preview_link(url, whole_playlist):
+class _PreviewCanceled(Exception):
+    pass
+
+
+def preview_link(url, whole_playlist, cancel_event=None):
     """Looks a link up without downloading: (text, PIL image or None, found).
 
     Like a download, it follows "url" results, but it doesn't page through a
     playlist's entries (process=False), so even big playlists take a second
-    or two. Runs on a worker thread.
+    or two. Runs on a worker thread. Once cancel_event is set (a newer link
+    was typed), it stops at yt-dlp's next status message or the thumbnail's
+    next chunk and returns None.
     """
+    canceled = cancel_event.is_set if cancel_event else lambda: False
+
+    def check():
+        if canceled():
+            raise _PreviewCanceled
+
     try:
         opts = {"quiet": True, "skip_download": True,
                 "noplaylist": not whole_playlist,
-                "logger": _YdlLogger(lambda msg: None),
+                "logger": _YdlLogger(lambda msg: None, check=check),
                 "color": {"stdout": "never", "stderr": "never"}}
         with yt_dlp.YoutubeDL(opts) as ydl:
             info = _follow_url_results(
                 ydl, ydl.extract_info(url, download=False, process=False))
     except Exception:   # e.g. not a video page; the preview just says so
         info = None
+    if canceled():
+        return None
     if not info:
         return "Couldn't load a preview for this link.", None, False
-    return describe_info(info), fetch_thumbnail(thumbnail_url(info)), True
+    image = fetch_thumbnail(thumbnail_url(info), canceled)
+    if canceled():
+        return None
+    return describe_info(info), image, True
 
 
 # ── Downloading ──────────────────────────────────────────────────────────────
