@@ -128,6 +128,24 @@ class ThreadSafetyTest(unittest.TestCase):
             except tkinter.TclError:
                 pass
 
+    def test_js_runtime_is_looked_up_on_a_worker(self):
+        threads = []
+
+        def find():
+            threads.append(threading.current_thread())
+            return ("node", "node")
+
+        with mock.patch.object(engine, "find_js_runtime", find):
+            self.app._js_runtime = None
+            self.app._start_worker(self.app._find_js_runtime_thread)
+            deadline = time.monotonic() + 5
+            while self.app._js_runtime is None and time.monotonic() < deadline:
+                self.app.update()
+                time.sleep(0.01)
+        self.assertEqual(self.app._js_runtime, ("node", "node"))
+        self.assertIsNot(threads[0], threading.main_thread())
+        self.assertEqual(self.violations, [])
+
     def test_successful_download(self):
         self.run_download(make_fake_ydl(streams=2))
         self.assertEqual(self.dialogs, [])

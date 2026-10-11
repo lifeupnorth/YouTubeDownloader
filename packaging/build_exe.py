@@ -157,6 +157,8 @@ def check():
         problems.append("the bundled deno wasn't found")
     if not (result.get("js_runtime_version") or "").startswith(f"deno {DENO_VERSION}"):
         problems.append("the bundled deno didn't run")
+    if not result.get("js_solver"):
+        problems.append("yt-dlp-ejs (YouTube's challenge solver) wasn't bundled")
     if not result.get("thumbnails"):
         problems.append("Pillow (thumbnails) is missing")
     if result.get("window") != "YT Downloader":

@@ -22,6 +22,12 @@ yt-dlp
   https://github.com/yt-dlp/yt-dlp
   Released into the public domain (The Unlicense).
 
+yt-dlp-ejs
+  https://github.com/yt-dlp/ejs
+  The script deno runs to solve YouTube's JavaScript challenges. Released
+  into the public domain (The Unlicense); it includes astring (MIT license)
+  and meriyah (ISC license).
+
 Pillow
   https://python-pillow.github.io/
   MIT-CMU license.

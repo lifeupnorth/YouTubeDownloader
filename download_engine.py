@@ -188,6 +188,8 @@ def find_ffmpeg():
     return bundled_ffmpeg() or _which("ffmpeg")
 
 
+# ── JavaScript runtime ───────────────────────────────────────────────────────
+
 # yt-dlp needs a JavaScript runtime for YouTube (without one some formats are
 # missing). It supports these; deno is its default and is bundled in the .exe.
 JS_RUNTIMES = ("deno", "node", "bun")
@@ -201,6 +203,16 @@ def _js_runtime_supported(name, path):
     except Exception:
         return True
     return bool(info and info.supported)
+
+
+def js_solver_version():
+    """yt-dlp-ejs's version, or None. It's the script the JavaScript runtime
+    runs to solve YouTube's challenges; without it the runtime can't help."""
+    try:
+        import yt_dlp_ejs
+    except ImportError:
+        return None
+    return getattr(yt_dlp_ejs, "version", None) or "unknown"
 
 
 def find_js_runtime():
@@ -315,7 +327,7 @@ def fetch_thumbnail(url):
         return None
 
 
-def preview_link(url, whole_playlist):
+def preview_link(url, whole_playlist, js_runtime=None):
     """Looks a link up without downloading: (text, PIL image or None, found).
 
     Like a download, it follows "url" results, but it doesn't page through a
@@ -327,6 +339,9 @@ def preview_link(url, whole_playlist):
                 "noplaylist": not whole_playlist,
                 "logger": _YdlLogger(lambda msg: None),
                 "color": {"stdout": "never", "stderr": "never"}}
+        if js_runtime:   # (name, path) from find_js_runtime(), as for a download
+            name, path = js_runtime
+            opts["js_runtimes"] = {name: {"path": path}}
         with yt_dlp.YoutubeDL(opts) as ydl:
             info = _follow_url_results(
                 ydl, ydl.extract_info(url, download=False, process=False))
