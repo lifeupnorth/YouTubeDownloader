@@ -85,9 +85,9 @@ Sources: [youtube_downloader.py:7-22](https://github.com/lifeupnorth/YouTubeDown
 
 | Path | Lines | Contents |
 |---|---|---|
-| `youtube_downloader.py` | 789 | The entire app: helpers, the `YouTubeDownloader` window class, entry point |
-| `tests/test_thread_safety.py` | 441 | Simulated downloads through a real Tk window, using a fake `YoutubeDL` |
-| `tests/test_formats.py` | 271 | Format selection with real yt-dlp, ffmpeg detection, help text, error formatting |
+| `youtube_downloader.py` | 854 | The entire app: helpers, the `YouTubeDownloader` window class, entry point |
+| `tests/test_thread_safety.py` | 518 | Simulated downloads through a real Tk window, using a fake `YoutubeDL` |
+| `tests/test_formats.py` | 287 | Format selection with real yt-dlp, ffmpeg detection, help text, error formatting |
 | `tests/test_requirements.py` | 53 | Checks the app installs the yt-dlp pin from `requirements.txt` |
 | `requirements.txt` | 5 | The pinned yt-dlp version |
 | `.github/dependabot.yml` | 19 | Weekly Dependabot checks for newer yt-dlp and GitHub Actions versions |

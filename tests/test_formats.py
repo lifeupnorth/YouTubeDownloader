@@ -144,6 +144,22 @@ class FindFfmpegTest(unittest.TestCase):
         self.assertNotIn("%systemroot%", path)
 
 
+class SmallHelpersTest(unittest.TestCase):
+    def test_eta_as_minutes_and_seconds(self):
+        self.assertEqual(ytd.format_eta(5), "0:05")
+        self.assertEqual(ytd.format_eta(138), "2:18")
+        self.assertEqual(ytd.format_eta(138.7), "2:18")
+        self.assertEqual(ytd.format_eta(3725), "1:02:05")
+
+    def test_logger_sends_warnings_and_errors_apart(self):
+        errors, warnings = [], []
+        logger = ytd._YdlLogger(errors.append, warnings.append)
+        logger.warning("[youtube] No supported JavaScript runtime")
+        logger.error("ERROR: Private video")
+        self.assertEqual(warnings, ["[youtube] No supported JavaScript runtime"])
+        self.assertEqual(errors, ["ERROR: Private video"])
+
+
 class FfmpegHelpTest(unittest.TestCase):
     COMMANDS = {"win32": "winget install ffmpeg",
                 "darwin": "brew install ffmpeg",
@@ -233,7 +249,7 @@ class ErrorColorTest(unittest.TestCase):
         app.download_path.get.return_value = "dl"
         app.playlist_var.get.return_value = False
         app._entry_failed = messages.append
-        opts = ytd.YouTubeDownloader._get_ydl_opts(app, "u", "ffmpeg")
+        opts = ytd.YouTubeDownloader._get_ydl_opts(app, "ffmpeg")
         # The second run checks that color can be forced on at all.
         for o, colored in ((opts, False),
                             ({**opts, "color": {"stderr": "always"}}, True)):

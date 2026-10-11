@@ -46,6 +46,8 @@ Sources: [tests/test_thread_safety.py:18-96](https://github.com/lifeupnorth/YouT
 | Single download | Progress never goes backwards, stays ≤ 99 until done, then reaches 100; polling stops when idle; the log shows the final file, not the temporary streams |
 | Errors | Failure dialog; a single-video error is logged once; closing the window while the Done dialog is open |
 | Playlists | Whole-playlist run with one "Saved" per video; "Video n/N" status; an unavailable entry is skipped; nothing saved means failure; "Already downloaded" is counted separately |
+| Closing during a download | Asks first; Yes cancels, removes the partial files and closes; No keeps downloading |
+| Polish | Dimmed placeholder isn't a URL; Paste replaces it; yt-dlp warnings reach the log; the status wraps at the window width |
 | Cancel | Only the unfinished video's files are removed (finished videos and unrelated files stay); canceling between playlist videos; downloading again after a cancel |
 | Playlist prompt | A single video doesn't ask; a playlist asks; declining downloads nothing; `url` results are followed before asking; Yes doesn't tick the box |
 
@@ -63,6 +65,7 @@ Sources: [tests/test_thread_safety.py:100-103](https://github.com/lifeupnorth/Yo
 |---|---|---|
 | `FormatSelectionTest` | Runs yt-dlp's real format selector on synthetic format lists: resolution caps, MP4 preference, fallback instead of failure, vertical videos, and that the remux and extract-audio post-processors are registered | yt-dlp (skipped otherwise) |
 | `FindFfmpegTest` | `PATH` first, registry fallback on Windows only, not-found case, `%VAR%` expansion of the real registry `Path` | Windows for the last test |
+| `SmallHelpersTest` | `format_eta`; the logger keeps warnings and errors apart | |
 | `FfmpegHelpTest` | Install hint per platform; startup vs. Download wording | |
 | `FfmpegCheckTest` | Startup warning, focus recheck (ignoring child widgets), one `find_ffmpeg` call per download, path passed to yt-dlp | Display |
 | `ErrorColorTest` | The app's options give the logger plain `ERROR: …` text without ANSI codes | yt-dlp |

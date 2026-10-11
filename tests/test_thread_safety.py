@@ -29,7 +29,8 @@ class FakeCancelled(Exception):
 
 
 def make_fake_ydl(streams=2, videos=1, overshoot=0, error=None, fail=(),
-                  already=(), probe=("video",), files_dir=None, on_progress=None):
+                  already=(), probe=("video",), files_dir=None, on_progress=None,
+                  warn=None):
     """probe: the _type returned by each extract_info(process=False) call.
 
     files_dir: write real stream files there (.part while downloading, then
@@ -86,6 +87,8 @@ def make_fake_ydl(streams=2, videos=1, overshoot=0, error=None, fail=(),
                     if not self.opts.get("ignoreerrors"):
                         raise RuntimeError("Private video")
                     continue
+                if warn and video == 0:
+                    self.opts["logger"].warning(warn)
                 on_progress(video, -1, 0)
                 self.run_pps("before_dl", info)
                 names = []
@@ -247,15 +250,14 @@ class ThreadSafetyTest(unittest.TestCase):
         self.assertNotIn(".f0.webm", log, "logged a temporary stream file")
 
     def test_playlist_checkbox(self):
-        url = "https://www.youtube.com/watch?v=test&list=x"
-        self.assertIs(self.app._get_ydl_opts(url, "ffmpeg")["noplaylist"], True)
+        self.assertIs(self.app._get_ydl_opts("ffmpeg")["noplaylist"], True)
         self.app.playlist_var.set(True)
-        self.assertIs(self.app._get_ydl_opts(url, "ffmpeg")["noplaylist"], False)
+        self.assertIs(self.app._get_ydl_opts("ffmpeg")["noplaylist"], False)
 
     def test_progress_restarts_per_playlist_video(self):
         seen = {}
         url = "https://www.youtube.com/playlist?list=x"
-        opts = self.app._get_ydl_opts(url, "ffmpeg")
+        opts = self.app._get_ydl_opts("ffmpeg")
         opts["progress_hooks"].append(
             lambda d: seen.setdefault(d["video"], []).append(
                 self.app._latest_progress[0]))
@@ -387,6 +389,81 @@ class ThreadSafetyTest(unittest.TestCase):
         self.assertEqual(self.dialogs, ["showinfo"])
         self.assertEqual(self.statuses[-1], "✔ Download complete!")
         self.assertEqual(self.violations, [])
+
+    def test_close_during_download_asks_then_cancels_and_closes(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            def on_progress(*where):
+                if where == (0, 1, 50):
+                    self.app._post(self.app._on_close)
+                    self.app._cancel.wait(5)   # until Yes was answered
+            with mock.patch.object(ytd.messagebox, "askyesno",
+                                   return_value=True) as ask:
+                self.run_download(make_fake_ydl(
+                    streams=2, files_dir=tmp, on_progress=on_progress))
+            self.assertEqual(self.files(tmp), [], "partial files left behind")
+        self.assertEqual(ask.call_args.args[0], "Download in progress")
+        self.assertTrue(self.app._closing, "the app should have closed")
+        self.assertEqual(self.dialogs, [])
+        self.assertEqual(self.violations, [])
+        self.assertEqual(self.callback_errors, [])
+
+    def test_close_during_download_no_keeps_downloading(self):
+        asked = threading.Event()
+
+        def answer_no(*a, **k):
+            asked.set()
+            return False
+
+        def on_progress(*where):
+            if where == (0, 0, 50):
+                self.app._post(self.app._on_close)
+                asked.wait(5)
+        with mock.patch.object(ytd.messagebox, "askyesno", side_effect=answer_no):
+            self.run_download(make_fake_ydl(streams=1, on_progress=on_progress))
+        self.assertTrue(asked.is_set())
+        self.assertFalse(self.app._closing)
+        self.assertEqual(self.dialogs, ["showinfo"])
+        self.assertEqual(self.statuses[-1], "✔ Download complete!")
+
+    def test_yt_dlp_warnings_reach_the_log(self):
+        self.run_download(make_fake_ydl(
+            streams=1, warn="[youtube] No supported JavaScript runtime"))
+        self.assertIn("⚠ [youtube] No supported JavaScript runtime", self.log())
+        self.assertEqual(self.violations, [])
+
+    def test_placeholder_is_not_a_url(self):
+        entry = self.app.url_entry
+        entry.delete(0, "end")
+        self.app._restore_placeholder()
+        self.assertEqual(entry.get(), ytd.URL_PLACEHOLDER)
+        self.assertEqual(str(entry.cget("fg")), ytd.TEXT_DIM)
+        self.assertEqual(self.app._url(), "")
+        self.app._start_download()
+        self.assertEqual(self.dialogs, ["showwarning"])
+        self.assertFalse(self.app.is_running)
+        self.app._clear_placeholder()             # clicking into the box
+        self.assertEqual(entry.get(), "")
+        self.assertEqual(str(entry.cget("fg")), ytd.TEXT)
+        entry.insert(0, "https://youtu.be/abc")
+        self.assertEqual(self.app._url(), "https://youtu.be/abc")
+
+    def test_paste_replaces_the_placeholder(self):
+        self.app.url_entry.delete(0, "end")
+        self.app._restore_placeholder()
+        with mock.patch.object(self.app, "clipboard_get",
+                               return_value="  https://youtu.be/abc \n"):
+            self.app._paste_url()
+        self.assertEqual(self.app._url(), "https://youtu.be/abc")
+        self.assertFalse(self.app._placeholder_shown)
+
+    def test_status_wraps_at_the_window_width(self):
+        widths = []
+        for size in ("900x600", "620x600"):
+            self.app.geometry(size)
+            self.app.update()
+            widths.append(int(self.app.status_lbl.cget("wraplength")))
+        self.assertGreater(widths[0], widths[1])
+        self.assertLess(widths[1], 620)
 
     def test_single_video_error_is_reported_once(self):
         self.run_download(make_fake_ydl(streams=1, fail={0}))

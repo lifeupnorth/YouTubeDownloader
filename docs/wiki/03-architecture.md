@@ -76,7 +76,7 @@ Sources: [youtube_downloader.py:521-533](https://github.com/lifeupnorth/YouTubeD
 - If yt-dlp is missing, it schedules `_prompt_install` 300 ms later.
 - If ffmpeg isn't found, it shows a warning in the status line and the log. A `<FocusIn>` binding (`_recheck_ffmpeg`) checks again whenever the window regains focus.
 
-`_on_close` sets `_closing`, cancels any pending poll and destroys the window. `_closing` stops the poll loop from draining or rescheduling, and makes `_ask_on_main` return. Worker threads are daemons, so a download still in progress ends when the process exits, leaving its partial file behind. The Cancel button stops a download cleanly instead (see [Download Pipeline](04-download-pipeline.md)).
+If a download is running, `_on_close` first asks "Cancel it and close the app?". On Yes it sets `_close_when_stopped` and cancels the download; the end-of-download handlers (`_download_canceled`, `_download_done`, `_download_declined`) then call `_on_close` again once the partial files are removed. Clicking close a second time while that runs (ffmpeg can't be interrupted) closes right away. Otherwise `_on_close` sets `_closing`, cancels any pending poll and destroys the window. `_closing` stops the poll loop from draining or rescheduling, and makes `_ask_on_main` return. Worker threads are daemons, so anything still running when the window is destroyed (a pip install, or a download after a forced second close) ends with the process. See [Download Pipeline](04-download-pipeline.md) for how Cancel stops a download cleanly.
 
 ```mermaid
 stateDiagram-v2

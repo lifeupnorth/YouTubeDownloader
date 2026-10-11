@@ -56,11 +56,24 @@ SUCCESS   = "#22c55e"
 WARNING   = "#f59e0b"
 BORDER    = "#333333"
 
+# Helvetica falls back to Arial on Windows, so use the system UI font there.
+UI_FONT   = "Segoe UI" if sys.platform == "win32" else "Helvetica"
+MONO_FONT = "Consolas" if sys.platform == "win32" else "Courier"
+
+URL_PLACEHOLDER = "https://www.youtube.com/watch?v=..."
+
 # res:N caps the shorter side (as YouTube's labels do), not the height: for a
 # vertical 1080x1920 video, "480p" gives 480x854.
 VIDEO_MAX_RES = {"mp4_best": None, "1080p": 1080, "720p": 720, "480p": 480}
 
 FFMPEG_MISSING_STATUS = "ffmpeg not found, see the log below"
+
+
+def format_eta(seconds):
+    """138 -> "2:18", 3725 -> "1:02:05"."""
+    minutes, secs = divmod(int(seconds), 60)
+    hours, minutes = divmod(minutes, 60)
+    return f"{hours}:{minutes:02d}:{secs:02d}" if hours else f"{minutes}:{secs:02d}"
 
 
 def _ffmpeg_install_hint():
@@ -141,10 +154,13 @@ _ANSI_CODES = re.compile(r"\x1b\[[0-9;]*m")
 
 
 class _YdlLogger:
-    """Hands yt-dlp's errors to on_error; with ignoreerrors they don't raise."""
+    """Hands yt-dlp's errors to on_error (with ignoreerrors they don't raise)
+    and its warnings to on_warning, so both reach the app's log, also when
+    there's no console (pythonw)."""
 
-    def __init__(self, on_error):
+    def __init__(self, on_error, on_warning=lambda msg: None):
         self._on_error = on_error
+        self.warning = on_warning
 
     def error(self, msg):
         # yt-dlp also sends its "Deprecated Feature: ..." notices (e.g. for an
@@ -158,9 +174,6 @@ class _YdlLogger:
         pass
 
     info = debug
-
-    def warning(self, msg):
-        print(msg, file=sys.stderr)
 
 
 @functools.lru_cache(maxsize=None)
@@ -206,10 +219,7 @@ class YouTubeDownloader(tk.Tk):
     def __init__(self):
         super().__init__()
         self.title("YT Downloader")
-        self.geometry("680x600")
-        self.minsize(580, 520)
         self.configure(bg=BG)
-        self.resizable(True, True)
 
         # State
         self.download_path = tk.StringVar(value=os.path.expanduser("~/Downloads"))
@@ -230,8 +240,11 @@ class YouTubeDownloader(tk.Tk):
         self._skipped = []
         self._cancel = threading.Event()
         self._entry_files = set()
+        self._close_when_stopped = False
+        self._placeholder_shown = False
 
         self._build_ui()
+        self._fit_window()
         self.protocol("WM_DELETE_WINDOW", self._on_close)
 
         if not YT_DLP_AVAILABLE:
@@ -252,9 +265,9 @@ class YouTubeDownloader(tk.Tk):
         hdr.grid(row=0, column=0, sticky="ew")
         hdr.columnconfigure(0, weight=1)
 
-        tk.Label(hdr, text="▶  YT Downloader", font=("Helvetica", 20, "bold"),
+        tk.Label(hdr, text="▶  YT Downloader", font=(UI_FONT, 20, "bold"),
                  bg=SURFACE, fg=ACCENT).grid(row=0, column=0)
-        tk.Label(hdr, text="Powered by yt-dlp", font=("Helvetica", 9),
+        tk.Label(hdr, text="Powered by yt-dlp", font=(UI_FONT, 9),
                  bg=SURFACE, fg=TEXT_DIM).grid(row=1, column=0, pady=(2, 0))
 
         # ── Main card ──
@@ -262,12 +275,11 @@ class YouTubeDownloader(tk.Tk):
                         highlightbackground=BORDER, highlightthickness=1)
         card.grid(row=1, column=0, sticky="nsew", padx=20, pady=16)
         card.columnconfigure(1, weight=1)
-        self.rowconfigure(1, weight=1)
 
         row = 0
 
         # URL
-        tk.Label(card, text="YouTube URL", font=("Helvetica", 11, "bold"),
+        tk.Label(card, text="YouTube URL", font=(UI_FONT, 11, "bold"),
                  bg=SURFACE, fg=TEXT).grid(row=row, column=0, columnspan=2,
                                            sticky="w", pady=(0, 6))
         row += 1
@@ -277,16 +289,16 @@ class YouTubeDownloader(tk.Tk):
         url_frame.grid(row=row, column=0, columnspan=2, sticky="ew", pady=(0, 16))
         url_frame.columnconfigure(0, weight=1)
 
-        self.url_entry = tk.Entry(url_frame, font=("Helvetica", 12),
+        self.url_entry = tk.Entry(url_frame, font=(UI_FONT, 12),
                                   bg=SURFACE2, fg=TEXT, insertbackground=TEXT,
                                   relief="flat", bd=8)
         self.url_entry.grid(row=0, column=0, sticky="ew")
-        self.url_entry.insert(0, "https://www.youtube.com/watch?v=...")
+        self._restore_placeholder()
         self.url_entry.bind("<FocusIn>",  self._clear_placeholder)
         self.url_entry.bind("<FocusOut>", self._restore_placeholder)
         self.url_entry.bind("<Return>",   lambda e: self._start_download())
 
-        btn_paste = tk.Button(url_frame, text="Paste", font=("Helvetica", 9),
+        btn_paste = tk.Button(url_frame, text="Paste", font=(UI_FONT, 9),
                               bg=ACCENT, fg=TEXT, relief="flat", bd=0,
                               padx=10, cursor="hand2",
                               command=self._paste_url)
@@ -294,7 +306,7 @@ class YouTubeDownloader(tk.Tk):
         row += 1
 
         # Format
-        tk.Label(card, text="Format", font=("Helvetica", 11, "bold"),
+        tk.Label(card, text="Format", font=(UI_FONT, 11, "bold"),
                  bg=SURFACE, fg=TEXT).grid(row=row, column=0, columnspan=2,
                                            sticky="w", pady=(0, 8))
         row += 1
@@ -313,21 +325,21 @@ class YouTubeDownloader(tk.Tk):
         for i, (label, val) in enumerate(formats):
             col, rrow = divmod(i, 3)
             rb = tk.Radiobutton(fmt_frame, text=label, variable=self.format_var,
-                                value=val, font=("Helvetica", 10),
+                                value=val, font=(UI_FONT, 10),
                                 bg=SURFACE, fg=TEXT_DIM, selectcolor=SURFACE2,
                                 activebackground=SURFACE, activeforeground=TEXT,
                                 cursor="hand2")
             rb.grid(row=rrow, column=col, sticky="w", padx=(0, 20), pady=2)
         # The radio buttons fill columns 0-1; column 2 is free.
         tk.Checkbutton(fmt_frame, text="Whole playlist",
-                       variable=self.playlist_var, font=("Helvetica", 10),
+                       variable=self.playlist_var, font=(UI_FONT, 10),
                        bg=SURFACE, fg=TEXT_DIM, selectcolor=SURFACE2,
                        activebackground=SURFACE, activeforeground=TEXT,
                        cursor="hand2").grid(row=0, column=2, sticky="w", pady=2)
         row += 1
 
         # Output folder
-        tk.Label(card, text="Save To", font=("Helvetica", 11, "bold"),
+        tk.Label(card, text="Save To", font=(UI_FONT, 11, "bold"),
                  bg=SURFACE, fg=TEXT).grid(row=row, column=0, columnspan=2,
                                            sticky="w", pady=(0, 8))
         row += 1
@@ -337,11 +349,11 @@ class YouTubeDownloader(tk.Tk):
         path_frame.columnconfigure(0, weight=1)
 
         path_entry = tk.Entry(path_frame, textvariable=self.download_path,
-                              font=("Helvetica", 10), bg=SURFACE2, fg=TEXT,
+                              font=(UI_FONT, 10), bg=SURFACE2, fg=TEXT,
                               insertbackground=TEXT, relief="flat", bd=6)
         path_entry.grid(row=0, column=0, sticky="ew")
 
-        tk.Button(path_frame, text="Browse", font=("Helvetica", 9),
+        tk.Button(path_frame, text="Browse", font=(UI_FONT, 9),
                   bg=SURFACE2, fg=TEXT_DIM, relief="flat", bd=0,
                   padx=10, cursor="hand2",
                   command=self._browse_folder).grid(row=0, column=1, padx=(6, 0))
@@ -349,7 +361,7 @@ class YouTubeDownloader(tk.Tk):
 
         # Download button
         self.dl_btn = tk.Button(card, text="⬇  Download",
-                                font=("Helvetica", 13, "bold"),
+                                font=(UI_FONT, 13, "bold"),
                                 bg=ACCENT, fg=TEXT, relief="flat", bd=0,
                                 pady=12, cursor="hand2",
                                 command=self._start_download,
@@ -372,9 +384,12 @@ class YouTubeDownloader(tk.Tk):
 
         # Status label
         self.status_lbl = tk.Label(card, textvariable=self.status_var,
-                                   font=("Helvetica", 10), bg=SURFACE, fg=TEXT_DIM,
-                                   wraplength=580, justify="left")
-        self.status_lbl.grid(row=row, column=0, columnspan=2, sticky="w")
+                                   font=(UI_FONT, 10), bg=SURFACE, fg=TEXT_DIM,
+                                   wraplength=580, justify="left", anchor="w")
+        self.status_lbl.grid(row=row, column=0, columnspan=2, sticky="ew")
+        # Wrap long messages at the label's current width, not a fixed one.
+        self.status_lbl.bind("<Configure>", lambda e: self.status_lbl.config(
+            wraplength=max(e.width - 4, 100)))
         row += 1
 
         # ── Log box ──
@@ -384,10 +399,10 @@ class YouTubeDownloader(tk.Tk):
         log_frame.rowconfigure(1, weight=1)
         self.rowconfigure(2, weight=1)
 
-        tk.Label(log_frame, text="Log", font=("Helvetica", 9, "bold"),
+        tk.Label(log_frame, text="Log", font=(UI_FONT, 9, "bold"),
                  bg=BG, fg=TEXT_DIM).grid(row=0, column=0, sticky="w")
 
-        self.log_box = tk.Text(log_frame, height=6, font=("Courier", 9),
+        self.log_box = tk.Text(log_frame, height=6, font=(MONO_FONT, 9),
                                bg=SURFACE2, fg=TEXT_DIM, relief="flat",
                                state="disabled", wrap="word")
         self.log_box.grid(row=1, column=0, sticky="nsew")
@@ -396,26 +411,51 @@ class YouTubeDownloader(tk.Tk):
         sb.grid(row=1, column=1, sticky="ns")
         self.log_box.configure(yscrollcommand=sb.set)
 
+    def _fit_window(self):
+        # Open tall enough to show everything (but no taller than the screen).
+        # Only the log grows and shrinks with the window, and the minimum
+        # height keeps the controls, the status line and 2 log lines visible
+        # (plus one line for a status message that wraps).
+        self.update_idletasks()
+        wanted = self.winfo_reqheight()
+        log_height = self.log_box.winfo_reqheight()
+        line = log_height // int(self.log_box.cget("height"))
+        height = min(wanted, self.winfo_screenheight() - 80)
+        self.minsize(580, min(wanted - log_height + 3 * line, height))
+        self.geometry(f"680x{height}")
+
     # ── Helpers ─────────────────────────────────────────────────────────────
 
-    def _clear_placeholder(self, _e):
-        if self.url_entry.get().startswith("https://www.youtube.com/watch?v=..."):
+    # The URL box shows a dimmed example until the user types or pastes.
+    def _clear_placeholder(self, _e=None):
+        if self._placeholder_shown:
+            self._placeholder_shown = False
             self.url_entry.delete(0, "end")
             self.url_entry.config(fg=TEXT)
 
-    def _restore_placeholder(self, _e):
+    def _restore_placeholder(self, _e=None):
         if not self.url_entry.get().strip():
-            self.url_entry.insert(0, "https://www.youtube.com/watch?v=...")
+            self.url_entry.delete(0, "end")
+            self.url_entry.insert(0, URL_PLACEHOLDER)
             self.url_entry.config(fg=TEXT_DIM)
+            self._placeholder_shown = True
+
+    def _url(self):
+        """The entered URL, or "" while the placeholder is showing."""
+        text = self.url_entry.get().strip()
+        if self._placeholder_shown and text == URL_PLACEHOLDER:
+            return ""
+        return text
 
     def _paste_url(self):
         try:
             clip = self.clipboard_get()
-            self.url_entry.delete(0, "end")
-            self.url_entry.insert(0, clip)
-            self.url_entry.config(fg=TEXT)
-        except Exception:
-            pass
+        except tk.TclError:   # empty clipboard, or not text
+            return
+        self._placeholder_shown = False
+        self.url_entry.delete(0, "end")
+        self.url_entry.insert(0, clip.strip())
+        self.url_entry.config(fg=TEXT)
 
     def _browse_folder(self):
         path = filedialog.askdirectory(initialdir=self.download_path.get())
@@ -468,6 +508,21 @@ class YouTubeDownloader(tk.Tk):
             self._after_id = self.after(50, self._poll_ui_queue)
 
     def _on_close(self):
+        # During a download, ask first, then cancel it and close once it has
+        # stopped, so its partial files are removed. Closing again while that
+        # runs (e.g. ffmpeg can't be interrupted) closes right away.
+        if self.is_running and not self._close_when_stopped:
+            if not messagebox.askyesno(
+                    "Download in progress",
+                    "A download is still running.\n\n"
+                    "Cancel it and close the app?"):
+                return
+            self._close_when_stopped = True
+            if not self._cancel.is_set():
+                self._cancel_download()
+            self._set_status("Canceling… the app closes when it has stopped.",
+                             WARNING)
+            return
         self._closing = True
         if self._after_id is not None:
             self.after_cancel(self._after_id)
@@ -480,7 +535,7 @@ class YouTubeDownloader(tk.Tk):
 
     # ── Download logic ───────────────────────────────────────────────────────
 
-    def _get_ydl_opts(self, url, ffmpeg):
+    def _get_ydl_opts(self, ffmpeg):
         fmt = self.format_var.get()
         out_dir = self.download_path.get()
 
@@ -497,7 +552,7 @@ class YouTubeDownloader(tk.Tk):
             "no_warnings": False,
             # Like the yt-dlp CLI: skip unavailable entries instead of stopping.
             "ignoreerrors": "only_download",
-            "logger": _YdlLogger(self._entry_failed),
+            "logger": _YdlLogger(self._entry_failed, self._entry_warning),
             # "auto" colors the ERROR: prefix when started from a terminal.
             "color": {"stdout": "never", "stderr": "never"},
         }
@@ -535,7 +590,7 @@ class YouTubeDownloader(tk.Tk):
             # Tops out at 99; only _download_done moves the bar to 100.
             pct = (min(self._stream_index, streams - 1) * 100 + pct) / streams * 0.99
             speed_str = f"{speed/1024/1024:.1f} MB/s" if speed > 0 else ""
-            eta_str   = f"ETA {eta}s" if eta > 0 else ""
+            eta_str   = f"ETA {format_eta(eta)}" if eta > 0 else ""
             info      = " · ".join(filter(None, [speed_str, eta_str]))
 
             self._latest_progress = (
@@ -565,6 +620,10 @@ class YouTubeDownloader(tk.Tk):
         self._skipped.append(msg)
         self._post(self._log, f"✘ {msg}")
 
+    # Runs on the download thread (yt-dlp's logger).
+    def _entry_warning(self, msg):
+        self._post(self._log, f"⚠ {msg.removeprefix('WARNING: ')}")
+
     # Runs on the download thread; blocks it until the user answers.
     def _ask_on_main(self, title, question):
         answer, done = [], threading.Event()
@@ -589,8 +648,8 @@ class YouTubeDownloader(tk.Tk):
             messagebox.showerror("ffmpeg not found", ffmpeg_help())
             return
 
-        url = self.url_entry.get().strip()
-        if not url or url.startswith("https://www.youtube.com/watch?v=..."):
+        url = self._url()
+        if not url:
             messagebox.showwarning("No URL", "Please enter a YouTube URL.")
             return
 
@@ -598,7 +657,7 @@ class YouTubeDownloader(tk.Tk):
             messagebox.showinfo("Busy", "A download is already in progress.")
             return
 
-        opts = self._get_ydl_opts(url, ffmpeg)
+        opts = self._get_ydl_opts(ffmpeg)
         self.is_running = True
         self.dl_btn.config(text="✖  Cancel", command=self._cancel_download)
         self.progress_var.set(0)
@@ -688,6 +747,8 @@ class YouTubeDownloader(tk.Tk):
 
     def _download_canceled(self, removed):
         self._end_download()
+        if self._close_when_stopped:   # the user is closing the app
+            return self._on_close()
         self.progress_var.set(0)
         parts = [f"{self._saved} saved"] if self._saved else []
         if removed:
@@ -698,12 +759,16 @@ class YouTubeDownloader(tk.Tk):
 
     def _download_declined(self):
         self._end_download()
+        if self._close_when_stopped:   # the user is closing the app
+            return self._on_close()
         self.progress_var.set(0)
         self._set_status("Playlist not downloaded.")
         self._log("✘ Playlist not downloaded.\n")
 
     def _download_done(self, success, error):
         self._end_download()
+        if self._close_when_stopped:   # the user is closing the app
+            return self._on_close()
         logged = False
         if success and self._skipped and not (self._saved or self._already):
             success, error, logged = False, self._skipped[0], True
