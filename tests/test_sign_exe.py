@@ -48,7 +48,37 @@ class SignExeTest(unittest.TestCase):
               self.assertRaises(SystemExit) as cm):
             sign_exe.sign("app.exe", env=SIGNING)
         self.assertNotIn("pw-secret", str(cm.exception.code))
-        self.assertIn("***", str(cm.exception.code))
+        self.assertIn("left out", str(cm.exception.code))
+
+    def test_a_short_password_doesnt_garble_the_error(self):
+        failed = subprocess.CompletedProcess([], 1, "SignTool Error: bad file\nwith Q", "")
+        with (mock.patch.object(sign_exe, "find_signtool", return_value="signtool.exe"),
+              mock.patch.object(sign_exe.subprocess, "run", return_value=failed),
+              self.assertRaises(SystemExit) as cm):
+            sign_exe.sign("app.exe", env={**SIGNING, "WINDOWS_SIGNING_PASSWORD": "Q"})
+        self.assertIn("SignTool Error: bad file", str(cm.exception.code))
+        self.assertNotIn("with Q", str(cm.exception.code))
+
+    def test_failed_verification_fails(self):
+        def run(cmd, **kwargs):
+            return subprocess.CompletedProcess(cmd, int(cmd[1] == "verify"), "No signature", "")
+
+        with (mock.patch.object(sign_exe, "find_signtool", return_value="signtool.exe"),
+              mock.patch.object(sign_exe.subprocess, "run", side_effect=run),
+              self.assertRaises(SystemExit) as cm):
+            sign_exe.sign("app.exe", env=SIGNING)
+        self.assertIn("didn't verify", str(cm.exception.code))
+
+    def test_timestamp_url_and_wrapped_base64(self):
+        wrapped = "\r\n".join(CERT[i:i + 4] for i in range(0, len(CERT), 4))
+        env = {**SIGNING, "WINDOWS_SIGNING_CERT": wrapped,
+               "SIGNING_TIMESTAMP_URL": "http://ts.example"}
+        ok = subprocess.CompletedProcess([], 0, "", "")
+        with (mock.patch.object(sign_exe, "find_signtool", return_value="signtool.exe"),
+              mock.patch.object(sign_exe.subprocess, "run", return_value=ok) as fake):
+            self.assertTrue(sign_exe.sign("app.exe", env=env))
+        sign_cmd = fake.call_args_list[0].args[0]
+        self.assertEqual(sign_cmd[sign_cmd.index("/tr") + 1], "http://ts.example")
 
     def test_misconfigured_signing_fails(self):
         cases = (({"WINDOWS_SIGNING_CERT": CERT}, "WINDOWS_SIGNING_PASSWORD"),

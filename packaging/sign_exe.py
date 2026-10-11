@@ -2,7 +2,9 @@
 
 The "Windows app" workflow runs it after the build. It reads:
   WINDOWS_SIGNING_CERT      the certificate with its private key: the .pfx
-                            file, base64-encoded (e.g. base64 -w0 cert.pfx)
+                            file, base64-encoded; line breaks are fine (PowerShell:
+                            [Convert]::ToBase64String([IO.File]::ReadAllBytes('cert.pfx'))
+                            or base64 -w0 cert.pfx)
   WINDOWS_SIGNING_PASSWORD  the .pfx password
   SIGNING_TIMESTAMP_URL     optional; an RFC 3161 timestamp server
 Without WINDOWS_SIGNING_CERT it does nothing, so the .exe stays unsigned.
@@ -38,6 +40,14 @@ def find_signtool():
     return max(candidates, key=_sdk_version, default=None)
 
 
+def hide(output, password):
+    """output without the lines that contain the password. Lines are left out
+    rather than the password replaced, which would garble the text when the
+    password is short (e.g. "a")."""
+    return "\n".join(line if password not in line else "(a line with the password, left out)"
+                     for line in output.splitlines())
+
+
 def sign(exe, env=os.environ):
     """Signs and verifies exe; False if no certificate is set up. Exits with
     a message (never containing the password) if signing was asked for but
@@ -50,7 +60,7 @@ def sign(exe, env=os.environ):
     if not password:
         sys.exit("WINDOWS_SIGNING_CERT is set but WINDOWS_SIGNING_PASSWORD isn't.")
     try:
-        pfx = base64.b64decode(cert, validate=True)
+        pfx = base64.b64decode("".join(cert.split()), validate=True)
     except (binascii.Error, ValueError):
         sys.exit("WINDOWS_SIGNING_CERT isn't base64 (encode the .pfx file).")
     signtool = find_signtool()
@@ -68,7 +78,7 @@ def sign(exe, env=os.environ):
                              capture_output=True, text=True)
     if run.returncode:
         output = (run.stdout or "") + (run.stderr or "")
-        sys.exit("Signing failed:\n" + output.replace(password, "***"))
+        sys.exit("Signing failed:\n" + hide(output, password))
     verify = subprocess.run([signtool, "verify", "/pa", exe], capture_output=True, text=True)
     if verify.returncode:
         sys.exit("The signature didn't verify:\n" + (verify.stdout or "") + (verify.stderr or ""))
