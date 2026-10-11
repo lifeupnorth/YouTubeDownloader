@@ -66,6 +66,7 @@ class ThreadSafetyTest(unittest.TestCase):
                 mock.patch.object(engine, "YT_DLP_AVAILABLE", True),
                 mock.patch.object(engine, "find_ffmpeg", return_value="ffmpeg"),
                 mock.patch.object(engine, "find_js_runtime", return_value=("deno", "deno")),
+                mock.patch.object(engine, "check_for_update", return_value=None),
                 mock.patch.object(ytd, "settings_path",
                                   return_value=self.settings_file),
                 mock.patch.object(ytd.messagebox, "askyesno",
@@ -312,6 +313,17 @@ class ThreadSafetyTest(unittest.TestCase):
         self.run_download(make_fake_ydl(
             streams=1, warn="[youtube] Some formats are missing"))
         self.assertIn("⚠ [youtube] Some formats are missing", self.log())
+        self.assertEqual(self.violations, [])
+
+    def test_update_notice_is_logged(self):
+        with mock.patch.object(engine, "check_for_update",
+                               return_value="• yt-dlp 2099.1.1 is out"):
+            self.app._start_worker(self.app._update_thread)
+            deadline = time.monotonic() + 5
+            while "2099.1.1" not in self.log() and time.monotonic() < deadline:
+                self.app.update()
+                time.sleep(0.01)
+        self.assertIn("• yt-dlp 2099.1.1 is out", self.log())
         self.assertEqual(self.violations, [])
 
     def test_placeholder_is_not_a_url(self):
@@ -588,6 +600,18 @@ class ThreadSafetyTest(unittest.TestCase):
         self.assertIs(fake.last_opts["noplaylist"], True)
         self.assertEqual(self.violations, [])
         self.assertEqual(self.callback_errors, [])
+
+    def test_failed_playlist_dialog_does_not_hang(self):
+        fake = make_fake_ydl(streams=1, videos=2, probe=("playlist",))
+        with mock.patch.object(ytd.messagebox, "askyesno",
+                               side_effect=tkinter.TclError("dialog failed")):
+            self.run_download(fake)
+        self.assertEqual(fake.calls, ["probe"])
+        self.assertFalse(self.app.is_running)
+        self.assertEqual(self.statuses[-1], "Playlist not downloaded.")
+        self.assertIn("✘ Couldn't ask about the playlist: dialog failed", self.log())
+        self.assertEqual([exc[0] for exc in self.callback_errors], [tkinter.TclError])
+        self.assertEqual(self.violations, [])
 
     def test_follows_url_results_before_asking(self):
         # e.g. a channel's home page redirecting to its Videos tab.

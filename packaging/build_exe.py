@@ -109,6 +109,12 @@ def build():
     ffmpeg, ffmpeg_license = get_ffmpeg()
     deno = get_deno()
     deno_license = os.path.join(HERE, "DENO-LICENSE.txt")
+    # The release workflow sets APP_VERSION (e.g. "v1.0.3"); the app compares
+    # it with the latest release. Empty in test builds: no update check.
+    version_file = os.path.join(BUILD, "VERSION")
+    os.makedirs(BUILD, exist_ok=True)
+    with open(version_file, "w", encoding="utf-8") as f:
+        f.write(os.environ.get("APP_VERSION", "").removeprefix("v"))
     notices = os.path.join(HERE, "THIRD-PARTY-NOTICES.txt")
     sep = os.pathsep   # PyInstaller's "source;destination" separator
     PyInstaller.__main__.run([
@@ -125,6 +131,7 @@ def build():
         "--add-data", f"{notices}{sep}.",
         "--add-data", f"{ffmpeg_license}{sep}.",
         "--add-data", f"{deno_license}{sep}.",
+        "--add-data", f"{version_file}{sep}.",
         os.path.join(ROOT, "youtube_downloader.py"),
     ])
     # The notices and licenses also go next to the .exe for users.
@@ -159,6 +166,9 @@ def check():
         problems.append("the bundled deno didn't run")
     if not result.get("js_solver"):
         problems.append("yt-dlp-ejs (YouTube's challenge solver) wasn't bundled")
+    version = os.environ.get("APP_VERSION", "").removeprefix("v") or None
+    if result.get("app_version") != version:
+        problems.append(f"the version is {result.get('app_version')}, not {version}")
     if not result.get("thumbnails"):
         problems.append("Pillow (thumbnails) is missing")
     if result.get("window") != "YT Downloader":
