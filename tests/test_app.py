@@ -114,6 +114,7 @@ class ExeBuildTest(unittest.TestCase):
     def test_self_check_report(self):
         report = os.path.join(self.folder, "report.json")
         with mock.patch.object(engine, "find_ffmpeg", return_value=None), \
+                mock.patch.object(engine, "find_js_runtime", return_value=None), \
                 mock.patch.object(engine, "YT_DLP_AVAILABLE", True), \
                 mock.patch.object(engine, "yt_dlp_version", return_value="2026.08.19"):
             ytd.self_check(report)
@@ -124,6 +125,8 @@ class ExeBuildTest(unittest.TestCase):
         self.assertEqual(result["yt_dlp"], "2026.08.19")
         self.assertFalse(result["ffmpeg_bundled"])
         self.assertIsNone(result["ffmpeg_version"])
+        self.assertIsNone(result["js_runtime"])
+        self.assertFalse(result["deno_bundled"])
         if not result["window"].startswith("failed"):   # no display: still reported
             self.assertEqual(result["window"], "YT Downloader")
 
@@ -137,6 +140,7 @@ class FfmpegCheckTest(unittest.TestCase):
         for patcher in (
                 mock.patch.object(engine, "YT_DLP_AVAILABLE", True),
                 mock.patch.object(engine, "find_ffmpeg", self.find),
+                mock.patch.object(engine, "find_js_runtime", return_value=None),
                 mock.patch.object(engine, "check_for_update", return_value=None),
                 mock.patch.object(ytd, "settings_path", return_value=os.path.join(
                     settings_dir.name, "settings.json")),

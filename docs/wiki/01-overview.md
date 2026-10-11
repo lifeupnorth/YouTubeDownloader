@@ -94,20 +94,20 @@ Sources: [requirements.txt](https://github.com/lifeupnorth/YouTubeDownloader/blo
 
 | Path | Lines | Contents |
 |---|---|---|
-| `youtube_downloader.py` | 800 | The window: UI, settings, dialogs, worker plumbing, entry point |
-| `download_engine.py` | 640 | Downloading without Tk: yt-dlp and ffmpeg, formats, previews, `DownloadJob`, `DownloadQueue` |
-| `tests/test_engine.py` | 572 | The engine with a fake yt-dlp; needs no display |
-| `tests/test_thread_safety.py` | 583 | The real window driven through simulated downloads |
-| `tests/test_app.py` | 193 | Settings file, Open folder, ffmpeg help and checks |
-| `tests/test_requirements.py` | 60 | The yt-dlp pin is what the installer uses |
+| `youtube_downloader.py` | 847 | The window: UI, settings, dialogs, worker plumbing, entry point |
+| `download_engine.py` | 698 | Downloading without Tk: yt-dlp and ffmpeg, formats, previews, `DownloadJob`, `DownloadQueue` |
+| `tests/test_engine.py` | 614 | The engine with a fake yt-dlp; needs no display |
+| `tests/test_thread_safety.py` | 602 | The real window driven through simulated downloads |
+| `tests/test_app.py` | 197 | Settings file, Open folder, ffmpeg help and checks |
+| `tests/test_requirements.py` | 72 | The yt-dlp pin is what the installer uses |
 | `tests/fakes.py` | 118 | The fake yt-dlp shared by the tests |
-| `requirements.txt` / `requirements-dev.txt` | 9 / 3 | Pinned yt-dlp and Pillow / ruff |
+| `requirements.txt` / `requirements-dev.txt` | 14 / 3 | Pinned yt-dlp, yt-dlp-ejs and Pillow / ruff |
 | `ruff.toml` | 8 | Lint rules |
 | `.github/workflows/tests.yml` | 73 | Tests (Windows and Ubuntu, Python 3.10 and 3.14) and lint on every push to `main` and every PR |
-| `packaging/build_exe.py` | 138 | Builds the one-file Windows app with PyInstaller and the bundled ffmpeg |
-| `.github/workflows/build-exe.yml` | 73 | Builds and checks the .exe; attaches it to releases for version tags |
+| `packaging/build_exe.py` | 172 | Builds the one-file Windows app with PyInstaller and the bundled ffmpeg and deno (deno's version is pinned there by `DENO_VERSION`/`DENO_SHA256`; Dependabot doesn't update it) |
+| `.github/workflows/build-exe.yml` | 74 | Builds and checks the .exe; attaches it to releases for version tags |
 | `.github/dependabot.yml` | 27 | Weekly Dependabot checks for pip packages (including PyInstaller) and GitHub Actions |
-| `README.md` | 101 | Requirements, install, run and usage, tests, disclaimer, license |
+| `README.md` | 102 | Requirements, install, run and usage, tests, disclaimer, license |
 | `LICENSE` | 21 | MIT |
 
 Sources: [.github/workflows/tests.yml](https://github.com/lifeupnorth/YouTubeDownloader/blob/fed021846b04c093d045f0ec3de2b53d5ea42060/.github/workflows/tests.yml), [ruff.toml](https://github.com/lifeupnorth/YouTubeDownloader/blob/fed021846b04c093d045f0ec3de2b53d5ea42060/ruff.toml), [README.md](https://github.com/lifeupnorth/YouTubeDownloader/blob/fed021846b04c093d045f0ec3de2b53d5ea42060/README.md)
