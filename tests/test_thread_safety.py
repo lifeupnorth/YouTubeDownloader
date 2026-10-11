@@ -65,6 +65,7 @@ class ThreadSafetyTest(unittest.TestCase):
         for patcher in (
                 mock.patch.object(engine, "YT_DLP_AVAILABLE", True),
                 mock.patch.object(engine, "find_ffmpeg", return_value="ffmpeg"),
+                mock.patch.object(engine, "check_for_update", return_value=None),
                 mock.patch.object(ytd, "settings_path",
                                   return_value=self.settings_file),
                 mock.patch.object(ytd.messagebox, "askyesno",
@@ -295,6 +296,17 @@ class ThreadSafetyTest(unittest.TestCase):
         self.assertIn("⚠ [youtube] No supported JavaScript runtime", self.log())
         self.assertEqual(self.violations, [])
 
+    def test_update_notice_is_logged(self):
+        with mock.patch.object(engine, "check_for_update",
+                               return_value="• yt-dlp 2099.1.1 is out"):
+            self.app._start_worker(self.app._update_thread)
+            deadline = time.monotonic() + 5
+            while "2099.1.1" not in self.log() and time.monotonic() < deadline:
+                self.app.update()
+                time.sleep(0.01)
+        self.assertIn("• yt-dlp 2099.1.1 is out", self.log())
+        self.assertEqual(self.violations, [])
+
     def test_placeholder_is_not_a_url(self):
         entry = self.app.url_entry
         self.app._replace_url_text("")
@@ -471,6 +483,38 @@ class ThreadSafetyTest(unittest.TestCase):
         self.app._on_close()
         self.assertTrue(cancel.is_set())
 
+    def test_answering_no_to_close_keeps_the_lookup(self):
+        started, release = threading.Event(), threading.Event()
+
+        def preview_link(url, whole_playlist, cancel_event):
+            started.set()
+            release.wait(5)
+            return None if cancel_event.is_set() else ("T", None, True)
+
+        with mock.patch.object(engine, "preview_link", preview_link), \
+                mock.patch.object(engine, "YT_DLP_AVAILABLE", True):
+            self.app._replace_url_text("https://e.com/v")
+            self.app._start_preview()
+            self.assertTrue(started.wait(5))
+            cancel = self.app._preview_cancel
+            self.app.is_running = True   # a download is running
+            try:
+                with mock.patch.object(ytd.messagebox, "askyesno",
+                                       return_value=False) as ask:
+                    self.app._on_close()
+            finally:
+                self.app.is_running = False
+            ask.assert_called_once()
+            self.assertFalse(cancel.is_set())
+            release.set()
+            deadline = time.time() + 5
+            while self.app._active_workers and time.time() < deadline:
+                self.app.update()
+                time.sleep(0.01)
+        self.assertEqual(self.app.preview_text.get(), "T")
+        self.assertEqual(self.app._active_workers, 0)
+        self.assertEqual(self.violations, [])
+
     @unittest.skipIf(engine.Image is None, "Pillow not installed")
     def test_preview_shows_the_thumbnail(self):
         image = engine.Image.new("RGB", engine.THUMB_SIZE, "red")
@@ -598,6 +642,18 @@ class ThreadSafetyTest(unittest.TestCase):
         self.assertIs(fake.last_opts["noplaylist"], True)
         self.assertEqual(self.violations, [])
         self.assertEqual(self.callback_errors, [])
+
+    def test_failed_playlist_dialog_does_not_hang(self):
+        fake = make_fake_ydl(streams=1, videos=2, probe=("playlist",))
+        with mock.patch.object(ytd.messagebox, "askyesno",
+                               side_effect=tkinter.TclError("dialog failed")):
+            self.run_download(fake)
+        self.assertEqual(fake.calls, ["probe"])
+        self.assertFalse(self.app.is_running)
+        self.assertEqual(self.statuses[-1], "Playlist not downloaded.")
+        self.assertIn("✘ Couldn't ask about the playlist: dialog failed", self.log())
+        self.assertEqual([exc[0] for exc in self.callback_errors], [tkinter.TclError])
+        self.assertEqual(self.violations, [])
 
     def test_follows_url_results_before_asking(self):
         # e.g. a channel's home page redirecting to its Videos tab.

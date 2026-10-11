@@ -120,6 +120,7 @@ class ExeBuildTest(unittest.TestCase):
         with open(report, encoding="utf-8") as f:
             result = json.load(f)
         self.assertFalse(result["frozen"])
+        self.assertIsNone(result["app_version"])
         self.assertEqual(result["yt_dlp"], "2026.08.19")
         self.assertFalse(result["ffmpeg_bundled"])
         self.assertIsNone(result["ffmpeg_version"])
@@ -136,6 +137,7 @@ class FfmpegCheckTest(unittest.TestCase):
         for patcher in (
                 mock.patch.object(engine, "YT_DLP_AVAILABLE", True),
                 mock.patch.object(engine, "find_ffmpeg", self.find),
+                mock.patch.object(engine, "check_for_update", return_value=None),
                 mock.patch.object(ytd, "settings_path", return_value=os.path.join(
                     settings_dir.name, "settings.json")),
                 mock.patch.object(ytd.messagebox, "showerror"),
@@ -187,6 +189,47 @@ class FfmpegCheckTest(unittest.TestCase):
         self.find.assert_called_once_with()
         _target, queue = app._start_worker.call_args.args
         self.assertEqual(queue.job_options["ffmpeg"], "/bin/ffmpeg")
+
+
+
+class UpdateCheckTest(unittest.TestCase):
+    def setUp(self):
+        folder = tempfile.TemporaryDirectory()
+        self.addCleanup(folder.cleanup)
+        patcher = mock.patch.object(ytd, "settings_path", return_value=os.path.join(
+            folder.name, "settings.json"))
+        patcher.start()
+        self.addCleanup(patcher.stop)
+
+    def checks(self, ticked=True, version="1.0.3"):
+        app = mock.Mock()
+        app.update_check_var.get.return_value = ticked
+        with mock.patch.object(engine, "app_version", return_value=version):
+            ytd.YouTubeDownloader._maybe_check_for_update(app)
+        return app._start_worker.call_count
+
+    def test_at_most_once_a_day(self):
+        self.assertEqual(self.checks(), 1)
+        self.assertEqual(self.checks(), 0)   # again the same day
+        settings = ytd.load_settings()
+        settings["last_update_check"] -= ytd.UPDATE_CHECK_INTERVAL + 1
+        ytd.save_settings(settings)
+        self.assertEqual(self.checks(), 1)
+
+    def test_not_when_unticked_or_from_source(self):
+        self.assertEqual(self.checks(ticked=False), 0)
+        self.assertEqual(self.checks(version=None), 0)
+        self.assertNotIn("last_update_check", ytd.load_settings())
+
+    def test_saving_keeps_the_last_check(self):
+        ytd.save_settings({"last_update_check": 5})
+        app = mock.Mock()
+        app.download_path.get.return_value = "C:/x"
+        app.format_var.get.return_value = "mp3"
+        app.update_check_var.get.return_value = False
+        ytd.YouTubeDownloader._save_settings(app)
+        self.assertEqual(ytd.load_settings(), {"last_update_check": 5, "folder": "C:/x",
+                                               "format": "mp3", "check_updates": False})
 
 
 if __name__ == "__main__":

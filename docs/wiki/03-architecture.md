@@ -87,7 +87,7 @@ Sources: [youtube_downloader.py:463-470](https://github.com/lifeupnorth/YouTubeD
 
 ## Asking the user from a worker
 
-A download sometimes needs an answer before it can continue: whether to download a whole playlist (see [Download Pipeline](04-download-pipeline.md)). The engine calls its `ask` callback, which the window wires to `_ask_on_main`. That posts a small `ask()` closure that shows `messagebox.askyesno` on the main thread, stores the answer and sets a `threading.Event`. The worker waits on the event in 0.1 s steps and gives up with `False` if the window starts closing, so it can't hang on a dialog that will never be answered.
+A download sometimes needs an answer before it can continue: whether to download a whole playlist (see [Download Pipeline](04-download-pipeline.md)). The engine calls its `ask` callback, which the window wires to `_ask_on_main`. That posts a small `ask()` closure that shows `messagebox.askyesno` on the main thread, stores the answer and sets a `threading.Event`. The worker waits on the event in 0.1 s steps and gives up with `False` if the window starts closing, so it can't hang on a dialog that will never be answered. If the dialog itself fails, `ask()` logs "✘ Couldn't ask about the playlist: …" (the windowed .exe has no stderr, so Tk's own error report would go nowhere), the answer counts as No, and a `finally` still sets the event.
 
 Sources: [youtube_downloader.py:567-568](https://github.com/lifeupnorth/YouTubeDownloader/blob/fed021846b04c093d045f0ec3de2b53d5ea42060/youtube_downloader.py#L567-L568), [youtube_downloader.py:576-587](https://github.com/lifeupnorth/YouTubeDownloader/blob/fed021846b04c093d045f0ec3de2b53d5ea42060/youtube_downloader.py#L576-L587)
 
@@ -99,7 +99,7 @@ Sources: [youtube_downloader.py:567-568](https://github.com/lifeupnorth/YouTubeD
 - If ffmpeg isn't found, it shows a warning in the status line and the log; a `<FocusIn>` binding (`_recheck_ffmpeg`) checks again when the window regains focus.
 - If the installed yt-dlp isn't the pinned version, it says so in the log (`_note_yt_dlp_version`).
 
-If a download is running, `_on_close` first asks "Cancel it and close the app?". On Yes it sets `_close_when_stopped` and cancels the queue; `_download_finished` then calls `_on_close` again once the partial files are removed. Clicking close a second time while that runs (ffmpeg can't be interrupted) closes right away. Otherwise `_on_close` saves the settings, sets `_closing`, cancels pending timers and destroys the window. `_closing` stops the poll loop and makes `_ask_on_main` return. Worker threads are daemons, so anything still running when the window is destroyed (a pip install, or a download after a forced second close) ends with the process.
+If a download is running, `_on_close` first asks "Cancel it and close the app?". On Yes it sets `_close_when_stopped` and cancels the queue; `_download_finished` then calls `_on_close` again once the partial files are removed. Clicking close a second time while that runs (e.g. stuck on a slow network request) closes right away. Otherwise `_on_close` saves the settings, sets `_closing`, cancels pending timers and destroys the window. `_closing` stops the poll loop and makes `_ask_on_main` return. Worker threads are daemons, so anything still running when the window is destroyed (a pip install, or a download after a forced second close) ends with the process.
 
 ```mermaid
 stateDiagram-v2
@@ -133,6 +133,8 @@ Sources: [download_engine.py:37-72](https://github.com/lifeupnorth/YouTubeDownlo
 | `_queue` | main (`_start_download`) | main, worker | The running `DownloadQueue`; its jobs hold the per-run state (stream counters, files written, counts) |
 | `_preview_token` | main | main | Drops preview answers for an older link |
 | `_preview_cancel` | main | main | Set by main to stop the lookup for an older link; each worker gets its own `Event` as an argument |
+| `DownloadJob._processes`, `_killed_outputs` | worker (`_process_started`), main (`stop_processes` on Cancel) | main, worker (`_remove_partial_files`) | ffmpeg runs of the job and the new files they were creating; both guarded by `DownloadJob._lock` |
+| `_current` (engine, `threading.local`) | worker | worker | Which job the thread's ffmpeg runs belong to |
 | `is_running` | main | main | Blocks a second concurrent download |
 
 Sources: [youtube_downloader.py:133-155](https://github.com/lifeupnorth/YouTubeDownloader/blob/fed021846b04c093d045f0ec3de2b53d5ea42060/youtube_downloader.py#L133-L155), [download_engine.py:306-324](https://github.com/lifeupnorth/YouTubeDownloader/blob/fed021846b04c093d045f0ec3de2b53d5ea42060/download_engine.py#L306-L324), [download_engine.py:516-521](https://github.com/lifeupnorth/YouTubeDownloader/blob/fed021846b04c093d045f0ec3de2b53d5ea42060/download_engine.py#L516-L521)
