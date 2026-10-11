@@ -54,7 +54,7 @@ The nightly "Smoke test" workflow (`.github/workflows/smoke.yml`, also runnable 
 
 ## Settings
 
-There are no environment variables or command-line options. The last **Save To** folder and **Format** are remembered in a small JSON file:
+There are no environment variables, and the only command-line options are for checks: `--self-check REPORT` (what the build contains) and `--smoke-download URL FORMAT FOLDER REPORT` (one download without the window, used by the smoke test). The last **Save To** folder and **Format** are remembered in a small JSON file:
 
 | System | File |
 |---|---|

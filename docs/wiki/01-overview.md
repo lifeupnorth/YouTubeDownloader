@@ -100,12 +100,15 @@ Sources: [requirements.txt](https://github.com/lifeupnorth/YouTubeDownloader/blo
 | `tests/test_thread_safety.py` | 583 | The real window driven through simulated downloads |
 | `tests/test_app.py` | 193 | Settings file, Open folder, ffmpeg help and checks |
 | `tests/test_requirements.py` | 60 | The yt-dlp pin is what the installer uses |
+| `tests/test_smoke.py` | 117 | The smoke test's report, retries, timeouts and bot check, with a fake job |
 | `tests/fakes.py` | 118 | The fake yt-dlp shared by the tests |
 | `requirements.txt` / `requirements-dev.txt` | 9 / 3 | Pinned yt-dlp and Pillow / ruff |
 | `ruff.toml` | 8 | Lint rules |
 | `.github/workflows/tests.yml` | 73 | Tests (Windows and Ubuntu, Python 3.10 and 3.14) and lint on every push to `main` and every PR |
 | `packaging/build_exe.py` | 138 | Builds the one-file Windows app with PyInstaller and the bundled ffmpeg |
 | `.github/workflows/build-exe.yml` | 73 | Builds and checks the .exe; attaches it to releases for version tags |
+| `packaging/smoke_test.py` | 105 | One real MP4 and MP3 download via `--smoke-download`, from source or with the .exe |
+| `.github/workflows/smoke.yml` | 70 | Runs the smoke test nightly, by hand, and on PRs that change it |
 | `.github/dependabot.yml` | 27 | Weekly Dependabot checks for pip packages (including PyInstaller) and GitHub Actions |
 | `README.md` | 101 | Requirements, install, run and usage, tests, disclaimer, license |
 | `LICENSE` | 21 | MIT |
