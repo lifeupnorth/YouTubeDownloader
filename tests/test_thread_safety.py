@@ -451,7 +451,8 @@ class ThreadSafetyTest(unittest.TestCase):
                 return None
             return url.rsplit("/", 1)[1], None, True
 
-        with mock.patch.object(engine, "preview_link", preview_link),                 mock.patch.object(engine, "YT_DLP_AVAILABLE", True):
+        with mock.patch.object(engine, "preview_link", preview_link), \
+                mock.patch.object(engine, "YT_DLP_AVAILABLE", True):
             for url in ("https://e.com/old", "https://e.com/new"):
                 self.app._replace_url_text(url)
                 self.app._start_preview()

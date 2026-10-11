@@ -503,7 +503,8 @@ class DownloadJobTest(unittest.TestCase):
                     cancel.set()
                 return {"title": "T", "thumbnail": "https://t/x.jpg"}
 
-        with mock.patch.object(engine, "yt_dlp", fake_yt_dlp(FakeYDL)),                 mock.patch.object(engine, "fetch_thumbnail") as fetch:
+        with mock.patch.object(engine, "yt_dlp", fake_yt_dlp(FakeYDL)), \
+                mock.patch.object(engine, "fetch_thumbnail") as fetch:
             self.assertIsNone(engine.preview_link("https://slow", False, cancel))
             self.assertEqual(pages, [0, 1])
             cancel.clear()
