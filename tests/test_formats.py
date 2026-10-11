@@ -4,16 +4,16 @@ Run with:  python -m unittest discover -s tests -v
 """
 import gc
 import io
-import json
 import os
 import sys
 import tempfile
 import tkinter
 import unittest
+from typing import ClassVar
 from unittest import mock
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-import youtube_downloader as ytd  # noqa: E402
+import youtube_downloader as ytd
 
 REAL_SETTINGS_PATH = ytd.settings_path   # before any test patches it
 
@@ -90,7 +90,7 @@ class FormatSelectionTest(unittest.TestCase):
 
     def test_vertical_video_caps_the_shorter_side(self):
         # The old [height<=480] filter gave 270x480 here.
-        shorts = SHORTS + [M4A]
+        shorts = [*SHORTS, M4A]
         self.assertEqual(self.pick("480p", shorts), "short-480x854+audio-m4a")
         self.assertEqual(self.pick("720p", shorts), "short-720x1280+audio-m4a")
         self.assertEqual(self.pick("1080p", shorts), "short-1080x1920+audio-m4a")
@@ -258,9 +258,9 @@ class SmallHelpersTest(unittest.TestCase):
 
 
 class FfmpegHelpTest(unittest.TestCase):
-    COMMANDS = {"win32": "winget install ffmpeg",
-                "darwin": "brew install ffmpeg",
-                "linux": "sudo apt install ffmpeg"}
+    COMMANDS: ClassVar[dict[str, str]] = {"win32": "winget install ffmpeg",
+                                         "darwin": "brew install ffmpeg",
+                                         "linux": "sudo apt install ffmpeg"}
 
     def test_hint_matches_platform(self):
         for platform, command in self.COMMANDS.items():

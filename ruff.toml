@@ -1,0 +1,8 @@
+# Settings for `ruff check .`, which CI runs on every push and pull request.
+target-version = "py310"
+
+[lint]
+# pycodestyle errors, Pyflakes, bugbear, pyupgrade, import order and Ruff's
+# own checks. Broad `except Exception` is allowed: the app uses it on purpose
+# where a worker thread must report any failure back to the window.
+select = ["E4", "E7", "E9", "F", "B", "UP", "I", "RUF"]

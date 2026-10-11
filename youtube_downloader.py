@@ -4,20 +4,20 @@ YouTube Video Downloader — Desktop App
 Requirements: pip install -r requirements.txt
 """
 
-import tkinter as tk
-from tkinter import ttk, filedialog, messagebox
-import threading
-import queue
 import functools
 import glob
 import io
 import json
 import os
+import queue
 import re
 import shutil
-import sys
 import subprocess
+import sys
+import threading
+import tkinter as tk
 import urllib.request
+from tkinter import filedialog, messagebox, ttk
 
 # ── Try importing yt-dlp; offer to install if missing ──────────────────────
 try:
@@ -290,7 +290,7 @@ class _YdlLogger:
     info = debug
 
 
-@functools.lru_cache(maxsize=None)
+@functools.cache
 def _callback_pp_class(base):
     class CallbackPP(base):
         def __init__(self, fn):
@@ -304,7 +304,7 @@ def _callback_pp_class(base):
     return CallbackPP
 
 
-@functools.lru_cache(maxsize=None)
+@functools.cache
 def _stream_counter_class(base):
     # Defined lazily because yt_dlp may be missing at import time.
     class StreamCounter(base):
@@ -801,7 +801,8 @@ class YouTubeDownloader(tk.Tk):
 
     def _start_download(self):
         if not YT_DLP_AVAILABLE:
-            self._prompt_install(); return
+            self._prompt_install()
+            return
 
         ffmpeg = find_ffmpeg()
         self._ffmpeg_missing = not ffmpeg

@@ -12,10 +12,11 @@ import time
 import tkinter
 import types
 import unittest
+from typing import ClassVar
 from unittest import mock
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-import youtube_downloader as ytd  # noqa: E402
+import youtube_downloader as ytd
 
 GUARDED = [
     (tkinter.Variable, "get"), (tkinter.Variable, "set"),
@@ -43,7 +44,7 @@ def make_fake_ydl(streams=2, videos=1, overshoot=0, error=None, fail=(),
     on_progress = on_progress or (lambda *a: None)
 
     class FakeYDL:
-        calls = []
+        calls: ClassVar[list[str]] = []   # shared: one list per fake class
 
         def __init__(self, opts):
             self.opts = FakeYDL.last_opts = opts
