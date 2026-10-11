@@ -1,5 +1,9 @@
-# Pinned to the version the app and tests were checked with. The app reads
-# this file for its built-in installer too, so this is the only place to bump.
-# Dependabot (.github/dependabot.yml) opens a PR when a new yt-dlp is out;
-# run the tests before merging it.
+# Pinned to the versions the app and tests were checked with. The app reads
+# the yt-dlp line for its built-in installer too, so this is the only place to
+# bump it. Dependabot (.github/dependabot.yml) opens a PR when a new version is
+# out; run the tests before merging it.
 yt-dlp==2026.8.19
+
+# Optional: thumbnails in link previews. Without it the app still works and
+# previews show text only.
+Pillow==12.3.0

@@ -3,6 +3,7 @@
 Run with:  python -m unittest discover -s tests -v
 """
 import gc
+import io
 import json
 import os
 import sys
@@ -187,6 +188,49 @@ class SmallHelpersTest(unittest.TestCase):
         self.assertEqual(ytd.format_eta(138), "2:18")
         self.assertEqual(ytd.format_eta(138.7), "2:18")
         self.assertEqual(ytd.format_eta(3725), "1:02:05")
+
+    def test_describe_info(self):
+        self.assertEqual(ytd.describe_info(
+            {"title": "Me at the zoo", "duration": 19, "channel": "jawed"}),
+            "Me at the zoo\n0:19 · jawed")
+        self.assertEqual(ytd.describe_info(
+            {"_type": "playlist", "title": "L", "playlist_count": 3, "uploader": "u"}),
+            "L\nPlaylist · 3 videos · u")
+        self.assertEqual(ytd.describe_info({"_type": "playlist", "title": "C"}),
+                         "C\nPlaylist or channel")
+        self.assertEqual(ytd.describe_info({"title": "Live"}), "Live")
+        title = ytd.describe_info({"title": "x" * 300}).split("\n")[0]
+        self.assertEqual(len(title), 100)
+        self.assertTrue(title.endswith("…"))
+
+    def test_thumbnail_url_picks_a_small_one(self):
+        info = {"thumbnail": "https://t/max.jpg", "thumbnails": [
+            {"url": "https://t/120.jpg", "width": 120},
+            {"url": "https://t/480.jpg", "width": 480},
+            {"url": "https://t/320.jpg", "width": 320},
+            {"url": "https://t/nowidth.jpg"}]}
+        self.assertEqual(ytd.thumbnail_url(info), "https://t/320.jpg")
+        self.assertEqual(ytd.thumbnail_url({"thumbnail": "https://t/max.jpg"}),
+                         "https://t/max.jpg")
+        self.assertIsNone(ytd.thumbnail_url({}))
+
+    def test_fetch_thumbnail_only_from_the_web(self):
+        with mock.patch.object(ytd.urllib.request, "urlopen") as urlopen:
+            self.assertIsNone(ytd.fetch_thumbnail("file:///etc/passwd"))
+            self.assertIsNone(ytd.fetch_thumbnail(None))
+        urlopen.assert_not_called()
+
+    @unittest.skipIf(ytd.Image is None, "Pillow not installed")
+    def test_fetch_thumbnail_shrinks_it(self):
+        png = io.BytesIO()
+        ytd.Image.new("RGB", (1280, 720), "blue").save(png, "PNG")
+        with mock.patch.object(ytd.urllib.request, "urlopen",
+                               return_value=io.BytesIO(png.getvalue())):
+            image = ytd.fetch_thumbnail("https://t/x.png")
+        self.assertEqual(image.size, ytd.THUMB_SIZE)
+        with mock.patch.object(ytd.urllib.request, "urlopen",
+                               return_value=io.BytesIO(b"not an image")):
+            self.assertIsNone(ytd.fetch_thumbnail("https://t/x.png"))
 
     def test_reveal_selects_the_file_on_windows(self):
         path = os.path.join("C:" + os.sep, "dl", "a b.mp4")
