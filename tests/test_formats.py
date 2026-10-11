@@ -182,6 +182,46 @@ class SettingsFileTest(unittest.TestCase):
                 "cfg", "YT Downloader", "settings.json"))
 
 
+class YtDlpVersionTest(unittest.TestCase):
+    def test_same_version_ignores_zero_padding(self):
+        self.assertTrue(ytd.same_version("2026.08.19", "2026.8.19"))
+        self.assertFalse(ytd.same_version("2026.02.21", "2026.8.19"))
+
+    def test_pinned_version(self):
+        with mock.patch.object(ytd, "YT_DLP_REQUIREMENT", "yt-dlp==2026.8.19"):
+            self.assertEqual(ytd.pinned_yt_dlp_version(), "2026.8.19")
+        with mock.patch.object(ytd, "YT_DLP_REQUIREMENT", "yt-dlp"):
+            self.assertIsNone(ytd.pinned_yt_dlp_version())
+
+    def load(self, import_module):
+        """Runs load_yt_dlp as if yt-dlp was missing at startup."""
+        with mock.patch.object(ytd, "YT_DLP_AVAILABLE", False), \
+                mock.patch.object(ytd, "yt_dlp", None, create=True), \
+                mock.patch.object(ytd.site, "addsitedir") as addsitedir, \
+                mock.patch.object(ytd.importlib, "import_module", import_module):
+            loaded = ytd.load_yt_dlp()
+            return loaded, ytd.YT_DLP_AVAILABLE, ytd.yt_dlp, addsitedir
+
+    def test_load_after_install(self):
+        fake = mock.Mock(version=mock.Mock(__version__="2026.08.19"))
+        loaded, available, module, _ = self.load(lambda name: fake)
+        self.assertEqual((loaded, available, module), (True, True, fake))
+
+    def test_load_fails_until_a_restart(self):
+        def import_module(name):
+            raise ImportError(name)
+        loaded, available, module, _ = self.load(import_module)
+        self.assertEqual((loaded, available, module), (False, False, None))
+
+    def test_version_needs_yt_dlp(self):
+        with mock.patch.object(ytd, "YT_DLP_AVAILABLE", False):
+            self.assertIsNone(ytd.yt_dlp_version())
+        fake = mock.Mock(version=mock.Mock(__version__="2026.08.19"))
+        with mock.patch.object(ytd, "YT_DLP_AVAILABLE", True), \
+                mock.patch.object(ytd, "yt_dlp", fake, create=True):
+            self.assertEqual(ytd.yt_dlp_version(), "2026.08.19")
+
+
 class SmallHelpersTest(unittest.TestCase):
     def test_eta_as_minutes_and_seconds(self):
         self.assertEqual(ytd.format_eta(5), "0:05")
