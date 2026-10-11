@@ -22,7 +22,7 @@ GUARDED = [
 ]
 
 
-def make_fake_ydl(streams=2, error=None):
+def make_fake_ydl(streams=2, videos=1, overshoot=0, error=None):
     class FakeYDL:
         def __init__(self, opts):
             self.opts = opts
@@ -40,18 +40,21 @@ def make_fake_ydl(streams=2, error=None):
         def download(self, urls):
             hooks = self.opts["progress_hooks"]
             info = {"requested_formats": [{}] * streams} if streams > 1 else {}
-            for pp in self.pps:
-                pp.run(info)
-            for stream in range(streams):
-                for done in range(0, 101, 5):
+            for video in range(videos):
+                for pp in self.pps:
+                    pp.run(info)
+                for stream in range(streams):
+                    # total_bytes_estimate can be exceeded (overshoot).
+                    for done in range(0, 101 + overshoot, 5):
+                        for hook in hooks:
+                            hook({"status": "downloading", "video": video,
+                                  "total_bytes_estimate": 100,
+                                  "downloaded_bytes": done, "speed": 1e6,
+                                  "eta": 1})
+                        time.sleep(0.002)
                     for hook in hooks:
-                        hook({"status": "downloading", "total_bytes": 100,
-                              "downloaded_bytes": done, "speed": 1e6, "eta": 1,
-                              "info_dict": info})
-                    time.sleep(0.002)
-                for hook in hooks:
-                    hook({"status": "finished", "filename": f"part{stream}",
-                          "info_dict": info})
+                        hook({"status": "finished", "video": video,
+                              "filename": f"v{video}.part{stream}"})
             if error:
                 raise error
 
@@ -79,6 +82,16 @@ class ThreadSafetyTest(unittest.TestCase):
             patcher = mock.patch.object(
                 ytd.messagebox, name,
                 side_effect=lambda *a, _n=name, **k: self._on_dialog(_n))
+            patcher.start()
+            self.addCleanup(patcher.stop)
+
+        # The fake yt_dlp module makes the real one unnecessary; without this
+        # __init__ would schedule a real (blocking) install prompt.
+        for patcher in (
+                mock.patch.object(ytd, "YT_DLP_AVAILABLE", True),
+                mock.patch.object(ytd.messagebox, "askyesno",
+                                  side_effect=lambda *a, **k:
+                                  self._on_dialog("askyesno"))):
             patcher.start()
             self.addCleanup(patcher.stop)
 
@@ -116,9 +129,7 @@ class ThreadSafetyTest(unittest.TestCase):
         fake_module = types.SimpleNamespace(
             YoutubeDL=fake,
             postprocessor=types.SimpleNamespace(PostProcessor=object))
-        with mock.patch.object(ytd, "YT_DLP_AVAILABLE", True), \
-                mock.patch.object(ytd, "yt_dlp", fake_module,
-                                  create=True):
+        with mock.patch.object(ytd, "yt_dlp", fake_module, create=True):
             self.app.after(10, self.app._start_download)
             timeout = self.app.after(10000, self.app.quit)
             self.app.mainloop()
@@ -136,6 +147,24 @@ class ThreadSafetyTest(unittest.TestCase):
         self.assertEqual(self.progress, sorted(self.progress),
                          "progress went backwards between streams")
         self.assertIsNone(self.app._after_id, "poll should stop when idle")
+
+    def test_progress_restarts_per_playlist_video(self):
+        seen = {}
+        url = "https://www.youtube.com/playlist?list=x"
+        opts = self.app._get_ydl_opts(url)
+        opts["progress_hooks"].append(
+            lambda d: seen.setdefault(d["video"], []).append(
+                self.app._latest_progress[0]))
+        ydl = make_fake_ydl(streams=2, videos=2, overshoot=15)(opts)
+        ydl.add_post_processor(ytd._stream_counter_class(object)(self.app),
+                               when="before_dl")
+        ydl.download([url])
+        self.assertEqual(sorted(seen), [0, 1])
+        for video, values in seen.items():
+            self.assertEqual(values, sorted(values),
+                             f"video {video} progress went backwards")
+            self.assertEqual(values[0], 0, f"video {video} didn't restart")
+            self.assertLessEqual(max(values), 100)
 
     def test_failed_download(self):
         self.run_download(make_fake_ydl(streams=1, error=RuntimeError("boom")))

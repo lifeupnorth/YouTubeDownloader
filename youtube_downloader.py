@@ -8,6 +8,7 @@ import tkinter as tk
 from tkinter import ttk, filedialog, messagebox
 import threading
 import queue
+import functools
 import os
 import sys
 import subprocess
@@ -33,15 +34,26 @@ WARNING   = "#f59e0b"
 BORDER    = "#333333"
 
 
-def _stream_counter(app):
-    # Merged formats download video and audio as separate streams; the
-    # progress hook's info_dict no longer lists them, so count them up front.
-    class StreamCounter(yt_dlp.postprocessor.PostProcessor):
+@functools.lru_cache(maxsize=None)
+def _stream_counter_class(base):
+    # Defined lazily because yt_dlp may be missing at import time.
+    class StreamCounter(base):
+        """before_dl hook, run once per video (also per playlist entry).
+
+        Merged formats download video and audio as separate streams, and the
+        progress hook's info_dict no longer lists them, so count them here.
+        """
+
+        def __init__(self, app):
+            super().__init__()
+            self._app = app
+
         def run(self, info):
-            app._stream_count = len(info.get("requested_formats") or ()) or 1
+            self._app._stream_index = 0
+            self._app._stream_count = len(info.get("requested_formats") or ()) or 1
             return [], info
 
-    return StreamCounter()
+    return StreamCounter
 
 
 class YouTubeDownloader(tk.Tk):
@@ -359,7 +371,7 @@ class YouTubeDownloader(tk.Tk):
             speed   = d.get("speed", 0) or 0
             eta     = d.get("eta", 0) or 0
 
-            pct = (downloaded / total * 100) if total else 0
+            pct = min(downloaded / total * 100, 100) if total else 0
             pct = (min(self._stream_index, streams - 1) * 100 + pct) / streams
             speed_str = f"{speed/1024/1024:.1f} MB/s" if speed > 0 else ""
             eta_str   = f"ETA {eta}s" if eta > 0 else ""
@@ -371,7 +383,7 @@ class YouTubeDownloader(tk.Tk):
         elif d["status"] == "finished":
             self._stream_index += 1
             if self._stream_index >= streams:
-                self._latest_progress = (99, "Processing…", WARNING)
+                self._latest_progress = (100, "Processing…", WARNING)
             self._post(self._log, f"✔ Saved: {d.get('filename', '')}")
 
     def _start_download(self):
@@ -402,7 +414,8 @@ class YouTubeDownloader(tk.Tk):
     def _download_thread(self, url, opts):
         try:
             with yt_dlp.YoutubeDL(opts) as ydl:
-                ydl.add_post_processor(_stream_counter(self), when="before_dl")
+                counter = _stream_counter_class(yt_dlp.postprocessor.PostProcessor)(self)
+                ydl.add_post_processor(counter, when="before_dl")
                 ydl.download([url])
             self._post(self._download_done, True, None)
         except Exception as exc:
