@@ -217,8 +217,32 @@ class FfmpegCheckTest(unittest.TestCase):
         app._start_worker = mock.Mock()
         app._start_download()
         self.find.assert_called_once_with()
-        _target, _url, opts = app._start_worker.call_args.args
+        _target, _url, opts, _ask_playlist = app._start_worker.call_args.args
         self.assertEqual(opts["ffmpeg_location"], "/bin/ffmpeg")
+
+
+class ErrorColorTest(unittest.TestCase):
+    def test_errors_reach_the_log_without_color_codes(self):
+        try:
+            import yt_dlp
+        except ImportError:
+            self.skipTest("yt-dlp not installed")
+        messages = []
+        app = mock.Mock()
+        app.format_var.get.return_value = "mp4_best"
+        app.download_path.get.return_value = "dl"
+        app.playlist_var.get.return_value = False
+        app._entry_failed = messages.append
+        opts = ytd.YouTubeDownloader._get_ydl_opts(app, "u", "ffmpeg")
+        # The second run checks that color can be forced on at all.
+        for o, colored in ((opts, False),
+                            ({**opts, "color": {"stderr": "always"}}, True)):
+            messages.clear()
+            yt_dlp.YoutubeDL(o).report_error("Private video")
+            self.assertEqual(len(messages), 1)
+            self.assertEqual(chr(27) in messages[0], colored, repr(messages[0]))
+            if not colored:
+                self.assertEqual(messages[0], "ERROR: Private video")
 
 
 if __name__ == "__main__":

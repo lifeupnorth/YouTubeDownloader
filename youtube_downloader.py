@@ -115,6 +115,35 @@ def format_opts(fmt):
     raise ValueError(f"unknown format: {fmt}")
 
 
+class _YdlLogger:
+    """Hands yt-dlp's errors to on_error; with ignoreerrors they don't raise."""
+
+    def __init__(self, on_error):
+        self.error = on_error
+
+    def debug(self, msg):
+        pass
+
+    info = debug
+
+    def warning(self, msg):
+        print(msg, file=sys.stderr)
+
+
+@functools.lru_cache(maxsize=None)
+def _callback_pp_class(base):
+    class CallbackPP(base):
+        def __init__(self, fn):
+            super().__init__()
+            self._fn = fn
+
+        def run(self, info):
+            self._fn(info)
+            return [], info
+
+    return CallbackPP
+
+
 @functools.lru_cache(maxsize=None)
 def _stream_counter_class(base):
     # Defined lazily because yt_dlp may be missing at import time.
@@ -149,6 +178,7 @@ class YouTubeDownloader(tk.Tk):
         # State
         self.download_path = tk.StringVar(value=os.path.expanduser("~/Downloads"))
         self.format_var    = tk.StringVar(value="mp4_best")
+        self.playlist_var  = tk.BooleanVar(value=False)
         self.progress_var  = tk.DoubleVar(value=0)
         self.status_var    = tk.StringVar(value="Ready")
         self.is_running    = False
@@ -160,6 +190,8 @@ class YouTubeDownloader(tk.Tk):
         self._shown_progress  = None
         self._stream_index = 0
         self._stream_count = 1
+        self._saved = self._already = 0
+        self._skipped = []
 
         self._build_ui()
         self.protocol("WM_DELETE_WINDOW", self._on_close)
@@ -249,6 +281,12 @@ class YouTubeDownloader(tk.Tk):
                                 cursor="hand2",
                                 command=self._on_format_change)
             rb.grid(row=rrow, column=col, sticky="w", padx=(0, 20), pady=2)
+        # The radio buttons fill columns 0-1; column 2 is free.
+        tk.Checkbutton(fmt_frame, text="Whole playlist",
+                       variable=self.playlist_var, font=("Helvetica", 10),
+                       bg=SURFACE, fg=TEXT_DIM, selectcolor=SURFACE2,
+                       activebackground=SURFACE, activeforeground=TEXT,
+                       cursor="hand2").grid(row=0, column=2, sticky="w", pady=2)
         row += 1
 
         # Output folder
@@ -411,13 +449,23 @@ class YouTubeDownloader(tk.Tk):
     def _get_ydl_opts(self, url, ffmpeg):
         fmt = self.format_var.get()
         out_dir = self.download_path.get()
-        outtmpl = os.path.join(out_dir, "%(title)s.%(ext)s")
 
         opts = {
-            "outtmpl": outtmpl,
+            # Playlist entries go to "<playlist>/<NNN> - <title>.<ext>" (the
+            # index keeps same-title videos apart); single videos to
+            # "<title>.<ext>", as an empty folder name collapses.
+            "outtmpl": os.path.join(out_dir, "%(playlist_title|)s",
+                                    "%(playlist_index&{:03d} - |)s%(title)s.%(ext)s"),
             "progress_hooks": [self._progress_hook],
+            # Only affects links to a video in a playlist (watch?v=…&list=…).
+            "noplaylist": not self.playlist_var.get(),
             "quiet": True,
             "no_warnings": False,
+            # Like the yt-dlp CLI: skip unavailable entries instead of stopping.
+            "ignoreerrors": "only_download",
+            "logger": _YdlLogger(self._entry_failed),
+            # "auto" colors the ERROR: prefix when started from a terminal.
+            "color": {"stdout": "never", "stderr": "never"},
         }
 
         opts.update(format_opts(fmt))
@@ -428,6 +476,9 @@ class YouTubeDownloader(tk.Tk):
     # Runs on the download thread.
     def _progress_hook(self, d):
         streams = self._stream_count
+        entry = d.get("info_dict") or {}
+        index, count = entry.get("playlist_index"), entry.get("n_entries")
+        video = f"Video {index}/{count} · " if index and count else ""
         if d["status"] == "downloading":
             total   = d.get("total_bytes") or d.get("total_bytes_estimate", 0)
             downloaded = d.get("downloaded_bytes", 0)
@@ -441,14 +492,45 @@ class YouTubeDownloader(tk.Tk):
             eta_str   = f"ETA {eta}s" if eta > 0 else ""
             info      = " · ".join(filter(None, [speed_str, eta_str]))
 
-            self._latest_progress = (pct, f"Downloading… {pct:.1f}%  {info}",
-                                     WARNING)
+            self._latest_progress = (
+                pct, f"{video}Downloading… {pct:.1f}%  {info}", WARNING)
 
         elif d["status"] == "finished":
             self._stream_index += 1
             if self._stream_index >= streams:
-                self._latest_progress = (99, "Processing…", WARNING)
-            self._post(self._log, f"✔ Saved: {d.get('filename', '')}")
+                self._latest_progress = (99, f"{video}Processing…", WARNING)
+
+    # Runs on the download thread as an after_move post-processor: once per
+    # video, with its final file (the progress hook only sees the temporary
+    # per-stream files).
+    def _file_done(self, info):
+        path = info.get("filepath", "")
+        if info.get("__real_download"):
+            self._saved += 1
+            self._post(self._log, f"✔ Saved: {path}")
+        else:
+            self._already += 1
+            self._post(self._log, f"• Already downloaded: {path}")
+
+    # Runs on the download thread (yt-dlp's logger).
+    def _entry_failed(self, msg):
+        msg = msg.removeprefix("ERROR: ")
+        self._skipped.append(msg)
+        self._post(self._log, f"✘ {msg}")
+
+    # Runs on the download thread; blocks it until the user answers.
+    def _ask_on_main(self, title, question):
+        answer, done = [], threading.Event()
+
+        def ask():
+            answer.append(messagebox.askyesno(title, question))
+            done.set()
+
+        self._post(ask)
+        while not done.wait(0.1):
+            if self._closing:
+                return False
+        return answer[0]
 
     def _start_download(self):
         if not YT_DLP_AVAILABLE:
@@ -478,25 +560,78 @@ class YouTubeDownloader(tk.Tk):
 
         self._stream_index = 0
         self._stream_count = 1
+        self._saved = self._already = 0
+        self._skipped = []
         self._latest_progress = self._shown_progress = None
-        self._start_worker(self._download_thread, url, opts)
+        self._start_worker(self._download_thread, url, opts,
+                           not self.playlist_var.get())
 
-    def _download_thread(self, url, opts):
+    def _download_thread(self, url, opts, ask_playlist):
         try:
             with yt_dlp.YoutubeDL(opts) as ydl:
-                counter = _stream_counter_class(yt_dlp.postprocessor.PostProcessor)(self)
-                ydl.add_post_processor(counter, when="before_dl")
-                ydl.download([url])
+                base = yt_dlp.postprocessor.PostProcessor
+                ydl.add_post_processor(_stream_counter_class(base)(self),
+                                       when="before_dl")
+                ydl.add_post_processor(_callback_pp_class(base)(self._file_done),
+                                       when="after_move")
+                if not ask_playlist:
+                    ydl.download([url])
+                elif not self._download_unless_declined(ydl, url):
+                    self._post(self._download_declined)
+                    return
             self._post(self._download_done, True, None)
         except Exception as exc:
             self._post(self._download_done, False, str(exc))
 
-    def _download_done(self, success, error):
+    # With the box unticked, ask before downloading a playlist, channel or tab
+    # (decided from what yt-dlp extracts, not from the URL).
+    def _download_unless_declined(self, ydl, url):
+        info = ydl.extract_info(url, download=False, process=False)
+        target = info
+        while target and target.get("_type") in ("url", "url_transparent"):
+            target = ydl.extract_info(target["url"], download=False, process=False,
+                                      ie_key=target.get("ie_key"))
+        if target is None or info.get("_type") == "url":
+            info = target   # what process_ie_result would extract again
+        if info is None:
+            return True     # the extraction error is already logged
+        if target.get("_type") == "playlist":
+            title = target.get("title") or "This link"
+            if not self._ask_on_main(
+                    "Playlist", f"\"{title}\" is a playlist or channel.\n\n"
+                                "Download all its videos?"):
+                return False
+        ydl.process_ie_result(info, download=True)
+        return True
+
+    def _end_download(self):
         self._worker_finished()
         self.is_running = False
         self.dl_btn.config(state="normal", text="⬇  Download")
 
-        if success:
+    def _download_declined(self):
+        self._end_download()
+        self.progress_var.set(0)
+        self._set_status("Playlist not downloaded.")
+        self._log("✘ Playlist not downloaded.\n")
+
+    def _download_done(self, success, error):
+        self._end_download()
+        logged = False
+        if success and self._skipped and not (self._saved or self._already):
+            success, error, logged = False, self._skipped[0], True
+        if success and (self._skipped or self._saved + self._already > 1):
+            parts = [f"{self._saved} saved"]
+            if self._already:
+                parts.append(f"{self._already} already downloaded")
+            if self._skipped:
+                parts.append(f"{len(self._skipped)} skipped")
+            summary = "Done: " + ", ".join(parts)
+            self.progress_var.set(100)
+            self._set_status(f"✔ {summary}", WARNING if self._skipped else SUCCESS)
+            self._log(f"✔ {summary}" + chr(10))
+            messagebox.showinfo("Done", summary)
+        elif success:
             self.progress_var.set(100)
             self._set_status("✔ Download complete!", SUCCESS)
             self._log("✔ Done!\n")
@@ -504,7 +639,8 @@ class YouTubeDownloader(tk.Tk):
         else:
             self.progress_var.set(0)
             self._set_status(f"✘ Error: {error}", ACCENT)
-            self._log(f"✘ Error: {error}\n")
+            if not logged:
+                self._log(f"✘ Error: {error}\n")
             messagebox.showerror("Download Failed", str(error))
 
     def _recheck_ffmpeg(self, event=None):
