@@ -14,3 +14,7 @@ Run the tests:
 ```
 python -m unittest discover -s tests -v
 ```
+
+## License
+
+MIT. See [LICENSE](LICENSE).
