@@ -1,0 +1,25 @@
+{
+  "title": "lifeupnorth/YouTubeDownloader Wiki",
+  "repo_url": "https://github.com/lifeupnorth/YouTubeDownloader",
+  "sha": "bd3fd4242f83ee2cf111812e71b6d2db5aa71bdf",
+  "permalink_base": "https://github.com/lifeupnorth/YouTubeDownloader/blob/bd3fd4242f83ee2cf111812e71b6d2db5aa71bdf",
+  "generated": "2026-10-10",
+  "pages": [
+    {"id": "overview", "title": "1 Overview", "file": "01-overview.md",
+     "sources": ["README.md", "LICENSE", "youtube_downloader.py"]},
+    {"id": "getting-started", "title": "2 Getting Started", "file": "02-getting-started.md",
+     "sources": ["README.md", "youtube_downloader.py", ".gitignore"]},
+    {"id": "architecture", "title": "3 Architecture and Threading", "file": "03-architecture.md",
+     "sources": ["youtube_downloader.py"]},
+    {"id": "download-pipeline", "title": "4 Download Pipeline", "file": "04-download-pipeline.md",
+     "sources": ["youtube_downloader.py"]},
+    {"id": "formats-ffmpeg", "title": "5 Formats and ffmpeg", "file": "05-formats-ffmpeg.md",
+     "sources": ["youtube_downloader.py"]},
+    {"id": "user-interface", "title": "6 User Interface", "file": "06-user-interface.md",
+     "sources": ["youtube_downloader.py"]},
+    {"id": "testing", "title": "7 Testing", "file": "07-testing.md",
+     "sources": ["tests/test_thread_safety.py", "tests/test_formats.py", "README.md"]},
+    {"id": "glossary", "title": "8 Glossary", "file": "08-glossary.md",
+     "sources": ["youtube_downloader.py"]}
+  ]
+}
