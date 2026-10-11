@@ -33,6 +33,7 @@ Sources: [README.md:1-11](https://github.com/lifeupnorth/YouTubeDownloader/blob/
 | Log of the final files, with "already downloaded" and skipped entries reported separately | `_file_done`, `_entry_failed` |
 | ffmpeg detection at startup and before each download, including a Windows install made while the app is open | `find_ffmpeg`, `_recheck_ffmpeg` |
 | Offers to install the pinned yt-dlp version with pip when it's missing | `_prompt_install`, `_install_ytdlp` |
+| Cancel a running download; its partial files are removed, finished videos are kept | `_cancel_download`, `_remove_partial_files` |
 | UI that stays responsive: downloads run on a worker thread, and UI updates go through a queue | `_post`, `_poll_ui_queue` |
 
 Sources: [youtube_downloader.py:84-115](https://github.com/lifeupnorth/YouTubeDownloader/blob/bd3fd4242f83ee2cf111812e71b6d2db5aa71bdf/youtube_downloader.py#L84-L115), [youtube_downloader.py:401-434](https://github.com/lifeupnorth/YouTubeDownloader/blob/bd3fd4242f83ee2cf111812e71b6d2db5aa71bdf/youtube_downloader.py#L401-L434), [youtube_downloader.py:476-519](https://github.com/lifeupnorth/YouTubeDownloader/blob/bd3fd4242f83ee2cf111812e71b6d2db5aa71bdf/youtube_downloader.py#L476-L519), [youtube_downloader.py:586-605](https://github.com/lifeupnorth/YouTubeDownloader/blob/bd3fd4242f83ee2cf111812e71b6d2db5aa71bdf/youtube_downloader.py#L586-L605), [youtube_downloader.py:657-695](https://github.com/lifeupnorth/YouTubeDownloader/blob/bd3fd4242f83ee2cf111812e71b6d2db5aa71bdf/youtube_downloader.py#L657-L695)
@@ -84,9 +85,9 @@ Sources: [youtube_downloader.py:7-22](https://github.com/lifeupnorth/YouTubeDown
 
 | Path | Lines | Contents |
 |---|---|---|
-| `youtube_downloader.py` | 701 | The entire app: helpers, the `YouTubeDownloader` window class, entry point |
-| `tests/test_thread_safety.py` | 352 | Simulated downloads through a real Tk window, using a fake `YoutubeDL` |
-| `tests/test_formats.py` | 249 | Format selection with real yt-dlp, ffmpeg detection, help text, error formatting |
+| `youtube_downloader.py` | 789 | The entire app: helpers, the `YouTubeDownloader` window class, entry point |
+| `tests/test_thread_safety.py` | 441 | Simulated downloads through a real Tk window, using a fake `YoutubeDL` |
+| `tests/test_formats.py` | 271 | Format selection with real yt-dlp, ffmpeg detection, help text, error formatting |
 | `tests/test_requirements.py` | 53 | Checks the app installs the yt-dlp pin from `requirements.txt` |
 | `requirements.txt` | 5 | The pinned yt-dlp version |
 | `.github/dependabot.yml` | 19 | Weekly Dependabot checks for newer yt-dlp and GitHub Actions versions |

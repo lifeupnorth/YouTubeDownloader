@@ -5,6 +5,7 @@ Run: python -m unittest discover -s tests -v
 import gc
 import os
 import sys
+import tempfile
 import threading
 import time
 import tkinter
@@ -23,10 +24,21 @@ GUARDED = [
 ]
 
 
+class FakeCancelled(Exception):
+    """Stands in for yt_dlp.utils.DownloadCancelled."""
+
+
 def make_fake_ydl(streams=2, videos=1, overshoot=0, error=None, fail=(),
-                  already=(), probe=("video",)):
-    """probe: the _type returned by each extract_info(process=False) call."""
+                  already=(), probe=("video",), files_dir=None, on_progress=None):
+    """probe: the _type returned by each extract_info(process=False) call.
+
+    files_dir: write real stream files there (.part while downloading, then
+    renamed, then "merged" into v<N>.mp4), as yt-dlp does.
+    on_progress(video, stream, done): called on the download thread before
+    each progress event, and with stream=-1 before each video starts.
+    """
     probes = list(probe)
+    on_progress = on_progress or (lambda *a: None)
 
     class FakeYDL:
         calls = []
@@ -74,21 +86,39 @@ def make_fake_ydl(streams=2, videos=1, overshoot=0, error=None, fail=(),
                     if not self.opts.get("ignoreerrors"):
                         raise RuntimeError("Private video")
                     continue
+                on_progress(video, -1, 0)
                 self.run_pps("before_dl", info)
+                names = []
                 for stream in range(streams):
+                    name = f"v{video}.f{stream}.webm"
+                    files = {}
+                    if files_dir:
+                        name = os.path.join(files_dir, name)
+                        files = {"filename": name, "tmpfilename": name + ".part"}
+                        open(name + ".part", "wb").close()
+                    names.append(name)
                     # total_bytes_estimate can be exceeded (overshoot).
                     for done in range(0, 101 + overshoot, 5):
+                        on_progress(video, stream, done)
                         for hook in hooks:
                             hook({"status": "downloading", "video": video,
                                   "total_bytes_estimate": 100,
                                   "downloaded_bytes": done, "speed": 1e6,
-                                  "eta": 1, "info_dict": info})
+                                  "eta": 1, "info_dict": info, **files})
                         time.sleep(0.002)
+                    if files_dir:
+                        os.replace(name + ".part", name)
                     for hook in hooks:
                         hook({"status": "finished", "video": video,
-                              "filename": f"v{video}.f{stream}.webm"})
+                              "filename": name})
+                final = f"v{video}.mp4"
+                if files_dir:
+                    final = os.path.join(files_dir, final)
+                    open(final, "wb").close()
+                    for name in names:
+                        os.remove(name)
                 self.run_pps("after_move", {
-                    **info, "filepath": f"v{video}.mp4",
+                    **info, "filepath": final,
                     "__real_download": video not in already})
             if error:
                 raise error
@@ -165,6 +195,13 @@ class ThreadSafetyTest(unittest.TestCase):
             self.app.quit()
 
         self.app._download_declined = declined
+        orig_canceled = self.app._download_canceled
+
+        def canceled(removed):
+            orig_canceled(removed)
+            self.app.quit()
+
+        self.app._download_canceled = canceled
         self.app.url_entry.delete(0, "end")
         self.app.url_entry.insert(0, "https://www.youtube.com/watch?v=test")
         self.on_dialog = lambda name: self.app.quit()
@@ -182,7 +219,8 @@ class ThreadSafetyTest(unittest.TestCase):
     def run_download(self, fake):
         fake_module = types.SimpleNamespace(
             YoutubeDL=fake,
-            postprocessor=types.SimpleNamespace(PostProcessor=object))
+            postprocessor=types.SimpleNamespace(PostProcessor=object),
+            utils=types.SimpleNamespace(DownloadCancelled=FakeCancelled))
         with mock.patch.object(ytd, "yt_dlp", fake_module, create=True):
             self.app.after(10, self.app._start_download)
             timeout = self.app.after(10000, self.app.quit)
@@ -298,6 +336,57 @@ class ThreadSafetyTest(unittest.TestCase):
         self.assertIn("Already downloaded: v0.mp4", self.log())
         self.assertNotIn("Saved: v0.mp4", self.log())
         self.assertEqual(self.statuses[-1], "✔ Done: 1 saved, 1 already downloaded")
+
+    def cancel_at(self, point):
+        """on_progress callback that clicks Cancel when the fake reaches point."""
+        def on_progress(*where):
+            if where == point:
+                self.app._post(self.app._cancel_download)
+                self.app._cancel.wait(5)   # until the main thread clicked it
+        return on_progress
+
+    def files(self, folder):
+        return sorted(os.listdir(folder))
+
+    def test_cancel_removes_only_the_unfinished_video(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            open(os.path.join(tmp, "unrelated.mp4"), "wb").close()
+            # Video 1's first stream has finished, its second is half done.
+            self.run_download(make_fake_ydl(
+                streams=2, videos=2, files_dir=tmp,
+                on_progress=self.cancel_at((1, 1, 50))))
+            self.assertEqual(self.files(tmp), ["unrelated.mp4", "v0.mp4"])
+        self.assertIn("Canceling…", self.statuses)
+        self.assertEqual(self.statuses[-1],
+                         "Download canceled (1 saved, 2 partial files removed).")
+        self.assertEqual(self.dialogs, [])
+        self.assertIn("Saved: ", self.log())
+        self.assertEqual(self.app.dl_btn.cget("text"), "⬇  Download")
+        self.assertEqual(str(self.app.dl_btn.cget("state")), "normal")
+        self.assertFalse(self.app.is_running)
+        self.assertIsNone(self.app._after_id, "poll should stop when idle")
+        self.assertEqual(self.violations, [])
+        self.assertEqual(self.callback_errors, [])
+
+    def test_cancel_between_playlist_videos(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            # Clicked after video 0 finished, before video 1 starts.
+            self.run_download(make_fake_ydl(
+                streams=2, videos=3, files_dir=tmp,
+                on_progress=self.cancel_at((1, -1, 0))))
+            self.assertEqual(self.files(tmp), ["v0.mp4"])
+        self.assertEqual(self.statuses[-1], "Download canceled (1 saved).")
+        self.assertEqual(self.violations, [])
+
+    def test_cancel_then_download_again(self):
+        self.run_download(make_fake_ydl(
+            streams=1, on_progress=self.cancel_at((0, 0, 30))))
+        self.assertEqual(self.statuses[-1], "Download canceled.")
+        # The button is Download again, and a new run isn't canceled.
+        self.run_download(make_fake_ydl(streams=1))
+        self.assertEqual(self.dialogs, ["showinfo"])
+        self.assertEqual(self.statuses[-1], "✔ Download complete!")
+        self.assertEqual(self.violations, [])
 
     def test_single_video_error_is_reported_once(self):
         self.run_download(make_fake_ydl(streams=1, fail={0}))

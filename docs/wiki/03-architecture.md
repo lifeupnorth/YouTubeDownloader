@@ -59,7 +59,7 @@ Sources: [youtube_downloader.py:401-434](https://github.com/lifeupnorth/YouTubeD
 
 ## When polling runs
 
-Polling isn't permanent. `_start_worker` increments `_active_workers` and schedules the first poll only if none is pending (`_after_id is None`). Each tick sets `_after_id = None` and reschedules itself only while a worker is active or the queue still has items. The "done" handlers (`_download_done` and `_download_declined` via `_end_download`, and `_install_done`) call `_worker_finished`, so polling stops on the same tick that handles the final event. When nothing is running, the app has no timer at all.
+Polling isn't permanent. `_start_worker` increments `_active_workers` and schedules the first poll only if none is pending (`_after_id is None`). Each tick sets `_after_id = None` and reschedules itself only while a worker is active or the queue still has items. The "done" handlers (`_download_done`, `_download_declined` and `_download_canceled` via `_end_download`, and `_install_done`) call `_worker_finished`, so polling stops on the same tick that handles the final event. When nothing is running, the app has no timer at all.
 
 Sources: [youtube_downloader.py:407-414](https://github.com/lifeupnorth/YouTubeDownloader/blob/bd3fd4242f83ee2cf111812e71b6d2db5aa71bdf/youtube_downloader.py#L407-L414), [youtube_downloader.py:433-434](https://github.com/lifeupnorth/YouTubeDownloader/blob/bd3fd4242f83ee2cf111812e71b6d2db5aa71bdf/youtube_downloader.py#L433-L434), [youtube_downloader.py:607-610](https://github.com/lifeupnorth/YouTubeDownloader/blob/bd3fd4242f83ee2cf111812e71b6d2db5aa71bdf/youtube_downloader.py#L607-L610), [youtube_downloader.py:685-686](https://github.com/lifeupnorth/YouTubeDownloader/blob/bd3fd4242f83ee2cf111812e71b6d2db5aa71bdf/youtube_downloader.py#L685-L686)
 
@@ -76,13 +76,13 @@ Sources: [youtube_downloader.py:521-533](https://github.com/lifeupnorth/YouTubeD
 - If yt-dlp is missing, it schedules `_prompt_install` 300 ms later.
 - If ffmpeg isn't found, it shows a warning in the status line and the log. A `<FocusIn>` binding (`_recheck_ffmpeg`) checks again whenever the window regains focus.
 
-`_on_close` sets `_closing`, cancels any pending poll and destroys the window. `_closing` stops the poll loop from draining or rescheduling, and makes `_ask_on_main` return. Worker threads are daemons, so a download still in progress ends when the process exits. There is no Cancel button.
+`_on_close` sets `_closing`, cancels any pending poll and destroys the window. `_closing` stops the poll loop from draining or rescheduling, and makes `_ask_on_main` return. Worker threads are daemons, so a download still in progress ends when the process exits, leaving its partial file behind. The Cancel button stops a download cleanly instead (see [Download Pipeline](04-download-pipeline.md)).
 
 ```mermaid
 stateDiagram-v2
     [*] --> Idle: __init__
     Idle --> Downloading: _start_download
-    Downloading --> Idle: _download_done or _download_declined
+    Downloading --> Idle: _download_done, _download_declined or _download_canceled
     Idle --> Installing: _prompt_install answered Yes
     Installing --> Idle: _install_done
     Idle --> Closed: _on_close

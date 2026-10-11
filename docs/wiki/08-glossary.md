@@ -20,6 +20,7 @@ Terms used in the code and in this wiki. For the overall picture, see [Overview]
 | **Main thread / worker** | The Tk thread that owns all widgets, and the daemon threads that run downloads and installs. |
 | **`_post`** | Queues a callable for the main thread. The only way workers trigger UI changes besides progress. |
 | **Coalesced progress** | `_latest_progress`: a single slot the worker overwrites; the main thread shows only its newest value every 50 ms. |
+| **Cancel** | Stops a running download: a `threading.Event` checked by `_check_canceled`, which raises yt-dlp's `DownloadCancelled`; the unfinished video's files are then removed. |
 | **Saved / already downloaded / skipped** | The three per-file outcomes counted in `_saved`, `_already` and `_skipped`, and reported in the final "Done: …" summary. |
 
 Sources: [youtube_downloader.py:84-166](https://github.com/lifeupnorth/YouTubeDownloader/blob/bd3fd4242f83ee2cf111812e71b6d2db5aa71bdf/youtube_downloader.py#L84-L166), [youtube_downloader.py:401-434](https://github.com/lifeupnorth/YouTubeDownloader/blob/bd3fd4242f83ee2cf111812e71b6d2db5aa71bdf/youtube_downloader.py#L401-L434), [youtube_downloader.py:449-519](https://github.com/lifeupnorth/YouTubeDownloader/blob/bd3fd4242f83ee2cf111812e71b6d2db5aa71bdf/youtube_downloader.py#L449-L519), [youtube_downloader.py:586-605](https://github.com/lifeupnorth/YouTubeDownloader/blob/bd3fd4242f83ee2cf111812e71b6d2db5aa71bdf/youtube_downloader.py#L586-L605)
