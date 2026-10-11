@@ -1,4 +1,4 @@
-"""The pinned yt-dlp version is the same everywhere it's used.
+"""The app uses the yt-dlp pin from requirements.txt.
 
 Run with:  python -m unittest discover -s tests -v
 """
@@ -21,6 +21,17 @@ def requirements():
 class RequirementsTest(unittest.TestCase):
     def test_requirements_txt_matches_the_app(self):
         self.assertEqual(requirements(), [ytd.YT_DLP_REQUIREMENT])
+
+    def test_unpinned_without_requirements_txt(self):
+        with mock.patch("builtins.open", side_effect=FileNotFoundError):
+            self.assertEqual(ytd._yt_dlp_requirement(), "yt-dlp")
+
+    def test_dependabot_watches_requirements_txt(self):
+        with open(os.path.join(ROOT, ".github", "dependabot.yml"),
+                  encoding="utf-8") as f:
+            config = f.read()
+        self.assertIn('package-ecosystem: "pip"', config)
+        self.assertIn('directory: "/"', config)
 
     def test_pin_is_exact(self):
         name, sep, version = ytd.YT_DLP_REQUIREMENT.partition("==")

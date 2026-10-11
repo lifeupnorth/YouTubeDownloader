@@ -1,4 +1,5 @@
-# Pinned to the version the app and tests were checked with.
-# yt-dlp needs regular updates to keep working with YouTube: when downloads
-# start failing, bump this and YT_DLP_REQUIREMENT in youtube_downloader.py.
+# Pinned to the version the app and tests were checked with. The app reads
+# this file for its built-in installer too, so this is the only place to bump.
+# Dependabot (.github/dependabot.yml) opens a PR when a new yt-dlp is out;
+# run the tests before merging it.
 yt-dlp==2026.8.19
