@@ -146,6 +146,9 @@ class ThreadSafetyTest(unittest.TestCase):
         self.assertEqual(self.app.progress_var.get(), 100)
         self.assertEqual(self.progress, sorted(self.progress),
                          "progress went backwards between streams")
+        self.assertLessEqual(max(self.progress), 99,
+                             "bar reached 100 before the done callback")
+        self.assertEqual(self.progress[-1], 99)
         self.assertIsNone(self.app._after_id, "poll should stop when idle")
 
     def test_progress_restarts_per_playlist_video(self):
@@ -164,7 +167,8 @@ class ThreadSafetyTest(unittest.TestCase):
             self.assertEqual(values, sorted(values),
                              f"video {video} progress went backwards")
             self.assertEqual(values[0], 0, f"video {video} didn't restart")
-            self.assertLessEqual(max(values), 100)
+            self.assertLessEqual(max(values), 99)
+            self.assertEqual(values[-1], 99)
 
     def test_failed_download(self):
         self.run_download(make_fake_ydl(streams=1, error=RuntimeError("boom")))

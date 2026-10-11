@@ -372,7 +372,8 @@ class YouTubeDownloader(tk.Tk):
             eta     = d.get("eta", 0) or 0
 
             pct = min(downloaded / total * 100, 100) if total else 0
-            pct = (min(self._stream_index, streams - 1) * 100 + pct) / streams
+            # Tops out at 99; only _download_done moves the bar to 100.
+            pct = (min(self._stream_index, streams - 1) * 100 + pct) / streams * 0.99
             speed_str = f"{speed/1024/1024:.1f} MB/s" if speed > 0 else ""
             eta_str   = f"ETA {eta}s" if eta > 0 else ""
             info      = " · ".join(filter(None, [speed_str, eta_str]))
@@ -383,7 +384,7 @@ class YouTubeDownloader(tk.Tk):
         elif d["status"] == "finished":
             self._stream_index += 1
             if self._stream_index >= streams:
-                self._latest_progress = (100, "Processing…", WARNING)
+                self._latest_progress = (99, "Processing…", WARNING)
             self._post(self._log, f"✔ Saved: {d.get('filename', '')}")
 
     def _start_download(self):
