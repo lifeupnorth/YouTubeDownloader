@@ -62,9 +62,10 @@ def _registry_path():
     # (winget, Chocolatey, Scoop, manual); os.environ only has the old one.
     import winreg
     parts = []
-    for root, key in ((winreg.HKEY_CURRENT_USER, r"Environment"),
-                      (winreg.HKEY_LOCAL_MACHINE,
-                       r"SYSTEM\CurrentControlSet\Control\Session Manager\Environment")):
+    # Machine Path before user Path, the order Windows builds PATH in.
+    for root, key in ((winreg.HKEY_LOCAL_MACHINE,
+                       r"SYSTEM\CurrentControlSet\Control\Session Manager\Environment"),
+                      (winreg.HKEY_CURRENT_USER, r"Environment")):
         try:
             with winreg.OpenKey(root, key) as k:
                 parts.append(os.path.expandvars(winreg.QueryValueEx(k, "Path")[0]))
@@ -506,8 +507,9 @@ class YouTubeDownloader(tk.Tk):
             self._log(f"✘ Error: {error}\n")
             messagebox.showerror("Download Failed", str(error))
 
-    def _recheck_ffmpeg(self, _event=None):
-        if not self._ffmpeg_missing:
+    def _recheck_ffmpeg(self, event=None):
+        # The root's <FocusIn> binding also fires for each child widget.
+        if not self._ffmpeg_missing or (event is not None and event.widget is not self):
             return
         ffmpeg = find_ffmpeg()
         if ffmpeg:

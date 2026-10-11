@@ -2,6 +2,7 @@
 
 Run: python -m unittest discover -s tests -v
 """
+import gc
 import os
 import sys
 import threading
@@ -63,6 +64,9 @@ def make_fake_ydl(streams=2, videos=1, overshoot=0, error=None):
 
 class ThreadSafetyTest(unittest.TestCase):
     def setUp(self):
+        # Collect destroyed apps from earlier tests here: on a worker thread
+        # their Variable.__del__ blocks ~1 s per variable on the dead Tcl.
+        gc.collect()
         self.violations = []
         main = threading.main_thread()
         for cls, name in GUARDED:

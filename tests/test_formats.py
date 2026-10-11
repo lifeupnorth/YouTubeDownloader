@@ -2,6 +2,7 @@
 
 Run with:  python -m unittest discover -s tests -v
 """
+import gc
 import os
 import sys
 import tkinter
@@ -53,9 +54,20 @@ def select(opts, formats):
 
 
 def registered_pps(opts, cls):
-    # Builds the post-processors from the options without downloading.
+    # Relies on yt-dlp internals (YoutubeDL._pps, PP.mapping); skips if they
+    # change, since that says nothing about downloads.
     with yt_dlp.YoutubeDL({**opts, "quiet": True}) as ydl:
-        return [pp for pp in ydl._pps["post_process"] if isinstance(pp, cls)]
+        pps = getattr(ydl, "_pps", None)
+        if not isinstance(pps, dict) or "post_process" not in pps:
+            raise unittest.SkipTest("yt-dlp internals changed: no YoutubeDL._pps")
+        return [pp for pp in pps["post_process"] if isinstance(pp, cls)]
+
+
+def mapping(pp):
+    if not hasattr(pp, "mapping"):
+        raise unittest.SkipTest(
+            f"yt-dlp internals changed: no {type(pp).__name__}.mapping")
+    return pp.mapping
 
 
 @unittest.skipIf(yt_dlp is None, "yt-dlp not installed")
@@ -92,7 +104,7 @@ class FormatSelectionTest(unittest.TestCase):
             opts = ytd.format_opts(choice)
             self.assertEqual(opts["merge_output_format"], "mp4")
             remuxers = registered_pps(opts, FFmpegVideoRemuxerPP)
-            self.assertEqual([pp.mapping for pp in remuxers], ["mp4"], choice)
+            self.assertEqual([mapping(pp) for pp in remuxers], ["mp4"], choice)
 
     def test_audio_choices(self):
         formats = [mp4(720), M4A, OPUS]
@@ -101,7 +113,7 @@ class FormatSelectionTest(unittest.TestCase):
         for choice in ("mp3", "m4a"):
             extractors = registered_pps(ytd.format_opts(choice),
                                         FFmpegExtractAudioPP)
-            self.assertEqual([pp.mapping for pp in extractors], [choice])
+            self.assertEqual([mapping(pp) for pp in extractors], [choice])
 
 
 class FindFfmpegTest(unittest.TestCase):
@@ -152,6 +164,7 @@ class FfmpegHelpTest(unittest.TestCase):
 
 class FfmpegCheckTest(unittest.TestCase):
     def make_app(self, ffmpeg):
+        gc.collect()
         self.find = mock.Mock(return_value=ffmpeg)
         for patcher in (
                 mock.patch.object(ytd, "YT_DLP_AVAILABLE", True),
@@ -164,6 +177,7 @@ class FfmpegCheckTest(unittest.TestCase):
             app = ytd.YouTubeDownloader()
         except tkinter.TclError as exc:
             self.skipTest(f"no display: {exc}")
+        self.addCleanup(gc.collect)
         self.addCleanup(app.destroy)
         app.url_entry.delete(0, "end")
         app.url_entry.insert(0, "https://www.youtube.com/watch?v=test")
@@ -185,6 +199,9 @@ class FfmpegCheckTest(unittest.TestCase):
         app = self.make_app(None)
         app.event_generate("<FocusIn>")
         self.assertEqual(app.status_var.get(), ytd.FFMPEG_MISSING_STATUS)
+        calls = self.find.call_count
+        app._recheck_ffmpeg(mock.Mock(widget=app.url_entry))
+        self.assertEqual(self.find.call_count, calls, "rechecked on child focus")
         self.find.return_value = "/bin/ffmpeg"
         app.event_generate("<FocusIn>")
         self.assertEqual(app.status_var.get(), "Ready")
