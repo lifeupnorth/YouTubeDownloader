@@ -237,12 +237,32 @@ def _tracked_popen_class(base):
     # starts (ffmpeg converting or merging), so cancel() can stop it.
     class TrackedPopen(base):
         def __init__(self, args, *a, **k):
+            # Checked before it starts: only a file this run creates counts.
+            output = _new_ffmpeg_output(args)
             super().__init__(args, *a, **k)
             job = getattr(_current, "job", None)
             if job is not None:
-                job._process_started(self, args)
+                job._process_started(self, output)
 
     return TrackedPopen
+
+
+def _new_ffmpeg_output(args):
+    """The file an ffmpeg run is about to create, or None. yt-dlp passes the
+    output last, as "file:<path>". None for ffprobe, for ffmpeg only reading a
+    file (["ffmpeg", "-i", "file:<path>"]), for anything not written to a file
+    (a URL, "-" for stdout), and for a file that's already there: files on
+    disk before this run are never removed."""
+    if not isinstance(args, (list, tuple)) or len(args) < 2:
+        return None
+    exe = os.path.basename(str(args[0])).lower()
+    last = args[-1]
+    if exe.startswith("ffprobe") or args[-2] == "-i":
+        return None
+    if not isinstance(last, str) or not last.startswith("file:"):
+        return None
+    path = last.removeprefix("file:")
+    return None if os.path.exists(path) else path
 
 
 def _track_processes():
@@ -368,8 +388,8 @@ class DownloadJob:
         self._stream_index = 0      # which stream of the current video
         self._stream_count = 1      # how many it has (video + audio = 2)
         self._entry_files = set()   # files written for the unfinished video
-        self._processes = []        # ffmpeg processes this job started
-        self._killed_outputs = []   # what the stopped ones were writing
+        self._processes = []        # (process, file it creates or None)
+        self._killed_outputs = []   # files the stopped ones were creating
         self._lock = threading.Lock()
 
     def cancel(self):
@@ -378,20 +398,22 @@ class DownloadJob:
 
     def stop_processes(self):
         """Stops the ffmpeg this job is running, if any (after a cancel)."""
+        # The outputs are noted before the kill, so the worker waking up from
+        # it always finds them in _remove_partial_files.
         with self._lock:
-            running = [(p, args) for p, args in self._processes if p.poll() is None]
-        for proc, args in running:
+            running = [(p, out) for p, out in self._processes if p.poll() is None]
+            self._killed_outputs.extend(out for _p, out in running if out)
+        for proc, _out in running:
+            # An ffmpeg that is a .bat/.cmd wrapper runs under "cmd.exe /C";
+            # kill() then stops only cmd.exe. Rare enough to leave.
             try:
                 proc.kill()
             except OSError:
                 pass
-            # yt-dlp passes the output file last, as "file:<path>".
-            if args and isinstance(args[-1], str):
-                self._killed_outputs.append(args[-1].removeprefix("file:"))
 
-    def _process_started(self, proc, args):
+    def _process_started(self, proc, output):
         with self._lock:
-            self._processes.append((proc, args))
+            self._processes.append((proc, output))
         if self.canceled:   # canceled just before it started
             self.stop_processes()
 
@@ -554,7 +576,9 @@ class DownloadJob:
     # are kept.
     def _remove_partial_files(self):
         removed = 0
-        for path in {*self._entry_files, *self._killed_outputs}:
+        with self._lock:
+            killed = list(self._killed_outputs)
+        for path in {*self._entry_files, *killed}:
             for p in [path, path + ".ytdl", *glob.glob(glob.escape(path) + "-Frag*")]:
                 try:
                     os.remove(p)

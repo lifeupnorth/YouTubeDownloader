@@ -132,6 +132,8 @@ Sources: [download_engine.py:37-72](https://github.com/lifeupnorth/YouTubeDownlo
 | `_closing`, `_close_when_stopped` | main (`_on_close`) | main, worker | Shutdown |
 | `_queue` | main (`_start_download`) | main, worker | The running `DownloadQueue`; its jobs hold the per-run state (stream counters, files written, counts) |
 | `_preview_token` | main | main | Drops preview answers for an older link |
+| `DownloadJob._processes`, `_killed_outputs` | worker (`_process_started`), main (`stop_processes` on Cancel) | main, worker (`_remove_partial_files`) | ffmpeg runs of the job and the new files they were creating; both guarded by `DownloadJob._lock` |
+| `_current` (engine, `threading.local`) | worker | worker | Which job the thread's ffmpeg runs belong to |
 | `is_running` | main | main | Blocks a second concurrent download |
 
 Sources: [youtube_downloader.py:133-155](https://github.com/lifeupnorth/YouTubeDownloader/blob/fed021846b04c093d045f0ec3de2b53d5ea42060/youtube_downloader.py#L133-L155), [download_engine.py:306-324](https://github.com/lifeupnorth/YouTubeDownloader/blob/fed021846b04c093d045f0ec3de2b53d5ea42060/download_engine.py#L306-L324), [download_engine.py:516-521](https://github.com/lifeupnorth/YouTubeDownloader/blob/fed021846b04c093d045f0ec3de2b53d5ea42060/download_engine.py#L516-L521)
