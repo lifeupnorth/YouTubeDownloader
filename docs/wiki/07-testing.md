@@ -10,7 +10,6 @@
 - [tests/test_requirements.py](https://github.com/lifeupnorth/YouTubeDownloader/blob/b369bd269cac691e2563e27391dbd3702c986e50/tests/test_requirements.py)
 - [tests/test_build_exe.py](https://github.com/lifeupnorth/YouTubeDownloader/blob/b369bd269cac691e2563e27391dbd3702c986e50/tests/test_build_exe.py)
 - [tests/test_check_pins.py](https://github.com/lifeupnorth/YouTubeDownloader/blob/b369bd269cac691e2563e27391dbd3702c986e50/tests/test_check_pins.py)
-- [tests/test_sign_exe.py](https://github.com/lifeupnorth/YouTubeDownloader/blob/b369bd269cac691e2563e27391dbd3702c986e50/tests/test_sign_exe.py)
 - [tests/test_smoke.py](https://github.com/lifeupnorth/YouTubeDownloader/blob/b369bd269cac691e2563e27391dbd3702c986e50/tests/test_smoke.py)
 - [tests/fakes.py](https://github.com/lifeupnorth/YouTubeDownloader/blob/b369bd269cac691e2563e27391dbd3702c986e50/tests/fakes.py)
 - [packaging/smoke_test.py](https://github.com/lifeupnorth/YouTubeDownloader/blob/b369bd269cac691e2563e27391dbd3702c986e50/packaging/smoke_test.py)
@@ -20,7 +19,7 @@
 
 </details>
 
-The tests use the standard library `unittest`, and nothing touches the internet: most downloads run against a fake yt-dlp, and `test_real_yt_dlp.py` runs the real one against a local server. There are 176 tests in nine files. The engine's tests need no display; the window's tests open real Tk windows. GitHub Actions runs them on every push to `main` and every pull request, together with a ruff lint check.
+The tests use the standard library `unittest`, and nothing touches the internet: most downloads run against a fake yt-dlp, and `test_real_yt_dlp.py` runs the real one against a local server. There are 171 tests in eight files. The engine's tests need no display; the window's tests open real Tk windows. GitHub Actions runs them on every push to `main` and every pull request, together with a ruff lint check.
 
 ```
 python -m unittest discover -s tests -v
@@ -33,9 +32,8 @@ python -m unittest discover -s tests -v
 | `test_thread_safety.py` | 50 | The real window driven through simulated downloads; worker threads must never call Tk | A display |
 | `test_app.py` | 15 | Settings file, Open folder, ffmpeg help text and checks in the window, the update check's once-a-day limit and its setting, what the .exe does differently (no pip install, the `--self-check` report) | A display for the window checks |
 | `test_requirements.py` | 10 | The yt-dlp pin in `requirements.txt` is exact (`yt-dlp[default]==…`) and is what the in-app installer uses; the `default` extra brings yt-dlp-ejs; every requirement is pinned; Dependabot watches the file | Tkinter (it imports the window) |
-| `test_build_exe.py` | 7 | `packaging/build_exe.py`: checksum-checked downloads and unpacking, and the `--check` verdict on the .exe's self-check | Nothing |
+| `test_build_exe.py` | 10 | `packaging/build_exe.py`: checksum-checked downloads and unpacking, the Windows version information it embeds, and the `--check` verdict on the .exe's self-check | Nothing |
 | `test_check_pins.py` | 4 | `packaging/check_pins.py` with GitHub's API faked: newer ffmpeg and deno releases, version comparison, an issue opened only once | Nothing |
-| `test_sign_exe.py` | 8 | `packaging/sign_exe.py` with a fake signtool: unsigned without a certificate, signing and verifying, the password kept out of errors, wrapped base64, finding the newest Windows SDK | Nothing |
 | `test_smoke.py` | 10 | `packaging/smoke_test.py` and `--smoke-download` with a fake job: the report, retries, timeouts, the bot check | Tkinter (it imports the window) |
 
 ### The nightly smoke test

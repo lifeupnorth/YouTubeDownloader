@@ -114,14 +114,12 @@ Sources: [requirements.txt:6-14](https://github.com/lifeupnorth/YouTubeDownloade
 | `tests/test_requirements.py` | 93 | The yt-dlp pin is exact, brings yt-dlp-ejs, and is what the installer uses |
 | `tests/test_build_exe.py` | 147 | Checksum-checked downloads and the `--check` verdict of `packaging/build_exe.py` |
 | `tests/test_check_pins.py` | 77 | `packaging/check_pins.py` with GitHub's API faked |
-| `tests/test_sign_exe.py` | 108 | Code signing with a fake signtool |
 | `tests/test_smoke.py` | 123 | The smoke test's report, retries, timeouts and bot check, with a fake job |
 | `tests/fakes.py` | 124 | The fake yt-dlp shared by the tests |
 | `requirements.txt` / `requirements-dev.txt` | 14 / 3 | Pinned `yt-dlp[default]` (which brings yt-dlp-ejs) and Pillow / ruff |
 | `ruff.toml` | 8 | Lint rules |
 | `packaging/build_exe.py` | 189 | Builds the one-file Windows app with PyInstaller, with ffmpeg and deno downloaded and checked against pinned checksums (`FFMPEG_VERSION`, `DENO_VERSION`); `--check` runs the .exe's `--self-check` |
 | `packaging/requirements-build.txt` | 38 | PyInstaller and its dependencies, pinned with hashes |
-| `packaging/sign_exe.py` | 92 | Signs and verifies the .exe with signtool when a certificate is set up |
 | `packaging/smoke_test.py` | 108 | One real MP4 and MP3 download via `--smoke-download`, from source or with the .exe |
 | `packaging/check_pins.py` | 115 | Reports newer ffmpeg and deno releases; `--open-issues` opens an issue for each |
 | `packaging/THIRD-PARTY-NOTICES.txt` / `DENO-LICENSE.txt` | 54 / 20 | Licenses of the bundled programs, shipped next to the .exe |
