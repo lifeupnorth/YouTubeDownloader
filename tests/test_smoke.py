@@ -14,8 +14,11 @@ import youtube_downloader as ytd
 
 
 class FakeJob:
+    last = None   # the newest FakeJob
+
     def __init__(self, url, **options):
         self.url, self.options = url, options
+        FakeJob.last = self
         self.outcome = self.error = self.last_file = None
 
     def run(self):
@@ -42,6 +45,12 @@ class SmokeDownloadTest(unittest.TestCase):
         self.assertEqual(self.smoke(FakeJob), {"outcome": "done", "error": None,
                                                "file": "x.mp3", "log": ["✔ Saved: x.mp3"]})
 
+    def test_never_asks_and_never_downloads_a_playlist(self):
+        self.smoke(FakeJob)
+        options = FakeJob.last.options
+        self.assertFalse(options["whole_playlist"])
+        self.assertFalse(options["ask"]("Download all its videos?"))
+
     def test_a_crash_is_reported(self):
         report = self.smoke(CrashingJob)
         self.assertEqual(report["outcome"], "failed")
@@ -62,6 +71,46 @@ class SmokeCheckTest(unittest.TestCase):
             with open(mp3, "wb") as f:
                 f.write(b"x")
             self.assertIn("only 1 bytes", smoke_test.problem(done, "mp3"))
+        bot = {"outcome": "failed", "error": "ERROR: [youtube] x: Sign in to "
+               "confirm you're not a bot", "log": []}
+        self.assertIn(smoke_test.BOT_CHECK_FAILURE, smoke_test.problem(bot, "mp3"))
+
+
+class SmokeRunTest(unittest.TestCase):
+    def test_timeout(self):
+        timeout = smoke_test.subprocess.TimeoutExpired("app", 1)
+        with mock.patch.object(smoke_test.subprocess, "run", side_effect=timeout):
+            self.assertIn("took over", smoke_test.download(["app"], "https://x", "mp3"))
+
+    def test_missing_report(self):
+        with mock.patch.object(smoke_test.subprocess, "run"):
+            self.assertEqual(smoke_test.download(["app"], "https://x", "mp3"),
+                             "the app wrote no report")
+
+    def run_main(self, results):
+        with (mock.patch.object(smoke_test, "download", side_effect=results) as download,
+              mock.patch("builtins.print")):
+            try:
+                smoke_test.main([])
+                exit_message = None
+            except SystemExit as exc:
+                exit_message = str(exc.code)
+        return download.call_count, exit_message
+
+    def test_a_retry_that_works_passes(self):
+        self.assertEqual(self.run_main(["offline", None, None]), (3, None))
+
+    def test_failures_are_listed(self):
+        calls, message = self.run_main(["offline", "offline", None])
+        self.assertEqual(calls, 3)
+        self.assertIn("mp4_best: offline", message)
+        self.assertNotIn("mp3:", message)
+
+    def test_only_the_bot_check_warns_but_passes(self):
+        bot = smoke_test.BOT_CHECK_FAILURE + ": sign in"
+        self.assertEqual(self.run_main([bot] * 4), (4, None))
+        _calls, message = self.run_main([bot, bot, "offline", "offline"])
+        self.assertIn("mp3: offline", message)
 
 
 if __name__ == "__main__":

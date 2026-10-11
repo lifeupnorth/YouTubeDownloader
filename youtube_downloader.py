@@ -794,15 +794,23 @@ def self_check(path):
 # ── Entry point ─────────────────────────────────────────────────────────────
 def smoke_download(url, fmt, folder, report_path):
     """--smoke-download: one real download without the window, for the nightly
-    smoke test (packaging/smoke_test.py); writes the outcome to report_path."""
+    smoke test (packaging/smoke_test.py); writes the outcome to report_path.
+    The log also goes to report_path + ".log" as it happens, so a run that
+    times out still shows how far it got."""
     log = []
-    job = engine.DownloadJob(url, fmt=fmt, folder=folder, ffmpeg=engine.find_ffmpeg(),
-                             whole_playlist=False, on_progress=lambda pct, msg: None,
-                             on_log=log.append, ask=lambda question: False)
-    try:
-        job.run()
-    except Exception as exc:   # still write the report, with the reason
-        job.outcome, job.error = "failed", f"{type(exc).__name__}: {exc}"
+    with open(report_path + ".log", "w", encoding="utf-8") as live:
+        def on_log(line):
+            log.append(line)
+            live.write(line + "\n")
+            live.flush()
+
+        job = engine.DownloadJob(url, fmt=fmt, folder=folder, ffmpeg=engine.find_ffmpeg(),
+                                 whole_playlist=False, on_progress=lambda pct, msg: None,
+                                 on_log=on_log, ask=lambda question: False)
+        try:
+            job.run()
+        except Exception as exc:   # still write the report, with the reason
+            job.outcome, job.error = "failed", f"{type(exc).__name__}: {exc}"
     with open(report_path, "w", encoding="utf-8") as f:
         json.dump({"outcome": job.outcome, "error": job.error,
                    "file": job.last_file, "log": log}, f, indent=2)

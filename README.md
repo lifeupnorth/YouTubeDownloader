@@ -83,6 +83,11 @@ any links still waiting.
 python -m unittest discover -s tests -v
 ```
 
+A nightly workflow (`.github/workflows/smoke.yml`) also downloads one short
+video for real, from source and with the .exe. Run it locally with
+`python packaging/smoke_test.py` (add `--exe dist/YT-Downloader.exe` for the
+.exe).
+
 Check the code style (the rules are in `ruff.toml`):
 ```
 pip install -r requirements-dev.txt

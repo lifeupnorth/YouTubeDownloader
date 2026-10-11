@@ -24,6 +24,11 @@ python -m unittest discover -s tests -v
 | `test_thread_safety.py` | 37 | The real window driven through simulated downloads; worker threads must never call Tk | A display |
 | `test_app.py` | 10 | Settings file, Open folder, ffmpeg help text and checks in the window | A display for the window checks |
 | `test_requirements.py` | 6 | The yt-dlp pin in `requirements.txt` is what the in-app installer uses; every requirement is pinned | Nothing |
+| `test_smoke.py` | 10 | `packaging/smoke_test.py` and `--smoke-download` with a fake job: the report, retries, timeouts, the bot check | Nothing |
+
+### The nightly smoke test
+
+The unit tests never touch the network, so they can't see YouTube breaking yt-dlp. `.github/workflows/smoke.yml` does, every night, by hand, and on pull requests that change it: `packaging/smoke_test.py` downloads one 19-second video as MP4 and as MP3, from source on Linux and with a freshly built .exe on Windows. Each download runs `youtube_downloader.py --smoke-download URL FORMAT FOLDER REPORT` (no window; the log also streams to `REPORT.log`), gets two attempts of 4 minutes, and passes when the file has the right extension and size. If YouTube only answers with its "Sign in to confirm you're not a bot" check, which says nothing about the app, the job warns and passes. `SMOKE_URL` (a repository variable) picks another video.
 
 Sources: [README.md:60-73](https://github.com/lifeupnorth/YouTubeDownloader/blob/fed021846b04c093d045f0ec3de2b53d5ea42060/README.md#L60-L73), [tests/test_engine.py:1-4](https://github.com/lifeupnorth/YouTubeDownloader/blob/fed021846b04c093d045f0ec3de2b53d5ea42060/tests/test_engine.py#L1-L4), [tests/test_thread_safety.py:1-4](https://github.com/lifeupnorth/YouTubeDownloader/blob/fed021846b04c093d045f0ec3de2b53d5ea42060/tests/test_thread_safety.py#L1-L4)
 

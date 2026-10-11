@@ -8,6 +8,11 @@ on:
   schedule:
     - cron: "23 4 * * *"
   workflow_dispatch:
+  # And when the smoke test itself changes, so a change to it gets tried.
+  pull_request:
+    paths:
+      - "packaging/smoke_test.py"
+      - ".github/workflows/smoke.yml"
 
 permissions:
   contents: read
