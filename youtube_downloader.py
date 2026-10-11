@@ -713,6 +713,12 @@ class YouTubeDownloader(tk.Tk):
                       f"with {pinned}. To match: pip install {engine.YT_DLP_REQUIREMENT}")
 
     def _prompt_install(self):
+        if getattr(sys, "frozen", False):
+            # The .exe has yt-dlp built in and no pip to install it with.
+            messagebox.showerror(
+                "yt-dlp not found",
+                "This copy of the app is missing yt-dlp. Please download it again.")
+            return
         ans = messagebox.askyesno(
             "yt-dlp not found",
             "yt-dlp is required but not installed.\n\n"
@@ -758,7 +764,37 @@ class YouTubeDownloader(tk.Tk):
                              ACCENT)
 
 
+def self_check(path):
+    """Writes what this build found to a JSON file, then exits. Used to test
+    the one-file .exe (packaging/build_exe.py --check), where there's no
+    console to print to."""
+    ffmpeg = engine.find_ffmpeg()
+    ffmpeg_version = None
+    if ffmpeg:
+        run = subprocess.run([ffmpeg, "-version"], capture_output=True, text=True,
+                             creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0))
+        ffmpeg_version = run.stdout.splitlines()[0] if run.stdout else None
+    result = {"frozen": bool(getattr(sys, "frozen", False)),
+              "yt_dlp": engine.yt_dlp_version(),
+              "yt_dlp_pin": engine.pinned_yt_dlp_version(),
+              "ffmpeg": ffmpeg, "ffmpeg_bundled": engine.bundled_ffmpeg() is not None,
+              "ffmpeg_version": ffmpeg_version,
+              "thumbnails": ImageTk is not None and engine.Image is not None}
+    try:
+        app = YouTubeDownloader()   # also checks that Tk works in this build
+        app.update()
+        result["window"] = app.title()
+        app.destroy()
+    except tk.TclError as exc:
+        result["window"] = f"failed: {exc}"
+    with open(path, "w", encoding="utf-8") as f:
+        json.dump(result, f, indent=2)
+
+
 # ── Entry point ─────────────────────────────────────────────────────────────
 if __name__ == "__main__":
-    app = YouTubeDownloader()
-    app.mainloop()
+    if len(sys.argv) == 3 and sys.argv[1] == "--self-check":
+        self_check(sys.argv[2])
+    else:
+        app = YouTubeDownloader()
+        app.mainloop()

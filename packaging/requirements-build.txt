@@ -1,0 +1,2 @@
+# Pinned like requirements.txt; Dependabot keeps it current.
+pyinstaller==6.22.3

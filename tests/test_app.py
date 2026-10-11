@@ -3,6 +3,7 @@
 Run with:  python -m unittest discover -s tests -v
 """
 import gc
+import json
 import os
 import sys
 import tempfile
@@ -85,6 +86,45 @@ class FfmpegHelpTest(unittest.TestCase):
     def test_startup_text(self):
         self.assertIn("click Download again", ytd.ffmpeg_help())
         self.assertNotIn("again", ytd.ffmpeg_help(startup=True))
+
+
+class ExeBuildTest(unittest.TestCase):
+    """What the app does differently as the one-file .exe."""
+
+    def setUp(self):
+        gc.collect()
+        settings_dir = tempfile.TemporaryDirectory()
+        self.addCleanup(settings_dir.cleanup)
+        self.folder = settings_dir.name
+        patcher = mock.patch.object(ytd, "settings_path", return_value=os.path.join(
+            self.folder, "settings.json"))
+        patcher.start()
+        self.addCleanup(patcher.stop)
+
+    def test_no_pip_install_inside_the_exe(self):
+        app = mock.Mock()
+        with mock.patch.object(ytd.sys, "frozen", True, create=True), \
+                mock.patch.object(ytd.messagebox, "showerror") as error, \
+                mock.patch.object(ytd.messagebox, "askyesno") as ask:
+            ytd.YouTubeDownloader._prompt_install(app)
+        self.assertIn("missing yt-dlp", error.call_args.args[1])
+        ask.assert_not_called()
+        app._install_ytdlp.assert_not_called()
+
+    def test_self_check_report(self):
+        report = os.path.join(self.folder, "report.json")
+        with mock.patch.object(engine, "find_ffmpeg", return_value=None), \
+                mock.patch.object(engine, "YT_DLP_AVAILABLE", True), \
+                mock.patch.object(engine, "yt_dlp_version", return_value="2026.08.19"):
+            ytd.self_check(report)
+        with open(report, encoding="utf-8") as f:
+            result = json.load(f)
+        self.assertFalse(result["frozen"])
+        self.assertEqual(result["yt_dlp"], "2026.08.19")
+        self.assertFalse(result["ffmpeg_bundled"])
+        self.assertIsNone(result["ffmpeg_version"])
+        if not result["window"].startswith("failed"):   # no display: still reported
+            self.assertEqual(result["window"], "YT Downloader")
 
 
 class FfmpegCheckTest(unittest.TestCase):

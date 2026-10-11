@@ -33,6 +33,26 @@ On Windows, `pythonw youtube_downloader.py` starts it without a console window.
 If yt-dlp isn't installed, the app offers to install it for you, and you can
 start downloading right after. The header shows which yt-dlp version is in use.
 
+## Windows app (one file)
+
+`YT-Downloader.exe` is the whole app in one file: Python, yt-dlp, Pillow and
+ffmpeg are built in, so there's nothing else to install. Each
+[release](https://github.com/lifeupnorth/YouTubeDownloader/releases) will have
+it attached, and the "Windows app" GitHub Actions workflow builds it on demand. It starts a little
+slower than the script, because it unpacks itself first, and some antivirus
+programs are wary of this kind of .exe.
+
+To build it yourself on Windows:
+```
+pip install -r requirements.txt -r packaging/requirements-build.txt
+python packaging/build_exe.py
+python packaging/build_exe.py --check
+```
+This writes `dist/YT-Downloader.exe`. The build downloads ffmpeg (gyan.dev's
+GPL "essentials" build) and checks it against a pinned checksum; its license and
+the other third-party notices are in `packaging/THIRD-PARTY-NOTICES.txt` and go
+next to the .exe.
+
 ## Use
 
 1. Paste a link into **YouTube URLs**, or click **Paste**. A preview with the
