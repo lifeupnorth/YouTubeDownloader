@@ -77,11 +77,15 @@ jobs:
   build:
     needs: version
     runs-on: windows-latest
-    timeout-minutes: 20
+    # A release build also waits for SignPath's approval of the signing.
+    timeout-minutes: ${{ needs.version.outputs.tag != '' && 75 || 20 }}
     # Only a release build uses the "code-signing" environment (its secrets,
     # and your approval; it's limited to main and v* tags), so other builds
     # never wait. Pull requests never get it.
     environment: ${{ needs.version.outputs.tag != '' && 'code-signing' || '' }}
+    permissions:
+      contents: read
+      actions: read   # SignPath's action reads this run's details and artifact
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -107,22 +111,54 @@ jobs:
         env:
           APP_VERSION: ${{ needs.version.outputs.tag }}
 
-      # Optional code signing of a release, so Windows doesn't show the .exe's
-      # publisher as unknown. Runs only if the "code-signing" environment has
-      # the secrets WINDOWS_SIGNING_CERT (the .pfx, base64-encoded) and
-      # WINDOWS_SIGNING_PASSWORD; see packaging/sign_exe.py.
-      - name: Check for a signing certificate
+      # Code signing of a release, through SignPath Foundation (free for open
+      # source; see "Code signing policy" in the README), so Windows doesn't
+      # show the .exe's publisher as unknown. Runs only once the
+      # "code-signing" environment has the SIGNPATH_API_TOKEN secret and the
+      # SIGNPATH_ORGANIZATION_ID variable. SignPath fetches the .exe from this
+      # run, checks that this repository's workflow built it, waits for an
+      # approver, and returns it signed.
+      - name: Check for SignPath
         id: signing
         shell: bash
-        run: echo "enabled=${{ secrets.WINDOWS_SIGNING_CERT != '' }}" >> "$GITHUB_OUTPUT"
+        run: >-
+          echo "enabled=${{ needs.version.outputs.tag != ''
+          && secrets.SIGNPATH_API_TOKEN != '' && vars.SIGNPATH_ORGANIZATION_ID != '' }}"
+          >> "$GITHUB_OUTPUT"
 
-      - name: Sign the .exe
-        if: steps.signing.outputs.enabled == 'true' && needs.version.outputs.tag != ''
-        env:
-          WINDOWS_SIGNING_CERT: ${{ secrets.WINDOWS_SIGNING_CERT }}
-          WINDOWS_SIGNING_PASSWORD: ${{ secrets.WINDOWS_SIGNING_PASSWORD }}
-          SIGNING_TIMESTAMP_URL: ${{ vars.SIGNING_TIMESTAMP_URL }}
-        run: python packaging/sign_exe.py dist/YT-Downloader.exe
+      - name: Upload the unsigned .exe for SignPath
+        id: unsigned
+        if: steps.signing.outputs.enabled == 'true'
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          path: dist/YT-Downloader.exe
+          archive: false   # the .exe itself, not a zip
+          if-no-files-found: error
+
+      - name: Sign the .exe with SignPath
+        if: steps.signing.outputs.enabled == 'true'
+        uses: signpath/github-action-submit-signing-request@f6d04783b4569d051e0c80105fe66e82819d0092 # v3.0
+        with:
+          api-token: ${{ secrets.SIGNPATH_API_TOKEN }}
+          organization-id: ${{ vars.SIGNPATH_ORGANIZATION_ID }}
+          project-slug: ${{ vars.SIGNPATH_PROJECT_SLUG || 'YouTubeDownloader' }}
+          signing-policy-slug: ${{ vars.SIGNPATH_SIGNING_POLICY_SLUG || 'release-signing' }}
+          github-artifact-id: ${{ steps.unsigned.outputs.artifact-id }}
+          skip-decompress: true
+          wait-for-completion: true
+          wait-for-completion-timeout-in-seconds: 3000   # time for the approval
+          output-artifact-directory: dist/signed
+
+      - name: Use the signed .exe
+        if: steps.signing.outputs.enabled == 'true'
+        shell: pwsh
+        run: |
+          $signed = Get-ChildItem dist/signed -Recurse -Filter *.exe | Select-Object -First 1
+          if (-not $signed) { throw "SignPath returned no .exe" }
+          $status = (Get-AuthenticodeSignature $signed.FullName).Status
+          if ($status -ne "Valid") { throw "The signature isn't valid: $status" }
+          Move-Item -Force $signed.FullName dist/YT-Downloader.exe
+          Write-Output "Signed: $((Get-AuthenticodeSignature dist/YT-Downloader.exe).SignerCertificate.Subject)"
 
       # Runs the .exe: yt-dlp, the bundled ffmpeg and deno, Pillow and the window must work.
       - name: Check the .exe
@@ -182,6 +218,7 @@ jobs:
             echo "**YT-Downloader.exe** SHA-256: \`$sha\` (all files: SHA256SUMS.txt)."
             echo "To check that this .exe was built by this repository's workflow:"
             echo "\`gh attestation verify YT-Downloader.exe --repo $GITHUB_REPOSITORY\`"
+            echo "Code signing policy: https://github.com/$GITHUB_REPOSITORY#code-signing-policy"
             echo
             gh release view "$TAG" --repo "$GITHUB_REPOSITORY" --json body -q .body
           } > notes.md

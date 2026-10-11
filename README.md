@@ -76,22 +76,19 @@ weekly workflow opens an issue when either has a newer release); its license and
 the other third-party notices are in `packaging/THIRD-PARTY-NOTICES.txt` and go
 next to the .exe.
 
-The .exe is unsigned unless you add a code-signing certificate, so Windows
-shows its publisher as unknown. Signing names you as the publisher; SmartScreen
-may still warn until the certificate (or the file) has built up reputation. To
-sign it in the workflow, create an environment named `code-signing` (Settings →
-Environments), limit its deployment branches to `main` and `v*` tags, and add two
-secrets to it: `WINDOWS_SIGNING_CERT` (the certificate's `.pfx` file,
-base64-encoded; in PowerShell:
-`[Convert]::ToBase64String([IO.File]::ReadAllBytes('cert.pfx'))`) and
-`WINDOWS_SIGNING_PASSWORD`. Pull requests are never signed. A timestamp server
-other than DigiCert's can be set in the `SIGNING_TIMESTAMP_URL` variable. This
-needs a certificate you can export as a `.pfx`; publicly trusted code-signing
-certificates issued since June 2023 keep the key on a hardware token or a cloud
-service (Azure Trusted Signing, SSL.com eSigner, DigiCert KeyLocker), which need
-that provider's own signing step instead. Locally, set the
-same environment variables and run `python packaging/sign_exe.py dist/YT-Downloader.exe`
-(it needs `signtool.exe` from the Windows SDK).
+Releases are signed through SignPath Foundation, which signs open-source
+projects for free (see [Code signing policy](#code-signing-policy)). Until the
+project's SignPath setup is complete, the .exe is unsigned and Windows shows
+its publisher as unknown; signed, it names SignPath Foundation. SmartScreen may
+still warn about a new release until it has built up reputation. A release
+build uploads the .exe to SignPath, which checks that this repository's
+workflow built it and waits for an approver; the signed .exe's signature is
+verified, and `--check` runs it before it's released. To turn it on, add to the
+`code-signing` environment (Settings → Environments) the secret
+`SIGNPATH_API_TOKEN` and the variable `SIGNPATH_ORGANIZATION_ID`, and, if the
+SignPath project and policy aren't named `YouTubeDownloader` and
+`release-signing`, the variables `SIGNPATH_PROJECT_SLUG` and
+`SIGNPATH_SIGNING_POLICY_SLUG`. Pull requests and other builds are never signed.
 
 ## Use
 
@@ -143,6 +140,38 @@ ruff check .
 
 The tests and the style check also run on GitHub Actions for every push to
 `main` and every pull request. The [wiki](docs/wiki/README.md) explains how the app works.
+
+## Code signing policy
+
+Free code signing provided by [SignPath.io](https://about.signpath.io/),
+certificate by [SignPath Foundation](https://signpath.org/).
+
+Only release builds are signed: the .exe built by this repository's "Windows
+app" workflow on GitHub-hosted runners, from `main` or a version tag. Each
+signing request is approved by hand.
+
+Team roles:
+- Committers and reviewers: [lifeupnorth](https://github.com/lifeupnorth), the
+  repository's owner. Changes from anyone else, including bots such as
+  Dependabot, are reviewed by the owner before they're merged.
+- Approvers: [lifeupnorth](https://github.com/lifeupnorth).
+
+### Privacy policy
+
+This program doesn't send information to other networked systems unless you
+ask it to, with one exception, the update check:
+- Downloads and link previews contact YouTube (or the site of a link you
+  enter), through yt-dlp, only for the links you enter.
+- The release .exe asks GitHub (api.github.com) for the latest release at most
+  once a day. The request carries nothing about you or your downloads beyond
+  what any web request does (your IP address, and "YT-Downloader" as the user
+  agent). Untick **Check for updates at startup** in the app's header to turn
+  it off. Running from source never checks.
+- Run from source without yt-dlp, the app can install it with pip (from PyPI)
+  if you agree.
+
+The bundled ffmpeg and deno run on your computer only: ffmpeg converts and
+merges files, and deno runs yt-dlp's solver for YouTube's JavaScript challenges.
 
 ## Disclaimer
 

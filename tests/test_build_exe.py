@@ -93,20 +93,24 @@ def good_report(**changes):
 class CheckTest(unittest.TestCase):
     """build_exe.py --check, which decides whether a release .exe is good."""
 
-    def check(self, report, app_version=""):
+    def check(self, report, app_version="", product=None):
         def run_exe(args, **kwargs):
             with open(args[2], "w", encoding="utf-8") as f:
                 json.dump(report, f)
 
+        version = app_version.removeprefix("v") or "0.0.0"
+        if product is None:
+            product = {"ProductName": build_exe.PRODUCT_NAME, "ProductVersion": version}
         with (mock.patch.object(build_exe.subprocess, "run", side_effect=run_exe),
+              mock.patch.object(build_exe, "product_info", return_value=product),
               mock.patch.dict(os.environ, {"APP_VERSION": app_version}),
               contextlib.redirect_stdout(io.StringIO()) as out):
             build_exe.check()
         return out.getvalue()
 
-    def problems(self, report, app_version=""):
+    def problems(self, report, app_version="", product=None):
         with self.assertRaises(SystemExit) as stop:
-            self.check(report, app_version)
+            self.check(report, app_version, product)
         return str(stop.exception)
 
     def test_a_good_build_passes(self):
@@ -136,11 +140,43 @@ class CheckTest(unittest.TestCase):
         del report["yt_dlp_extras_missing"]
         self.assertIn("yt-dlp's extras", self.problems(report))
 
+    def test_the_version_information_must_be_there(self):
+        # SignPath checks the product name when it signs a release.
+        self.assertIn("the version information is {}",
+                      self.problems(good_report(), product={}))
+        self.assertIn("the version information",
+                      self.problems(good_report(app_version="1.0.3"), app_version="v1.0.3",
+                                    product={"ProductName": build_exe.PRODUCT_NAME,
+                                             "ProductVersion": "0.0.0"}))
+
     def test_the_version_must_be_the_release(self):
         self.assertIn("the version is None, not 1.0.3",
                       self.problems(good_report(), app_version="v1.0.3"))
         self.assertIn("the version is 1.0.3, not None",
                       self.problems(good_report(app_version="1.0.3")))
+
+
+class VersionResourceTest(unittest.TestCase):
+    def test_release_and_test_builds(self):
+        for version, numbers in (("1.0.3", "(1, 0, 3, 0)"), ("", "(0, 0, 0, 0)")):
+            with self.subTest(version=version):
+                text = build_exe.version_resource(version)
+                self.assertIn(f"filevers={numbers}", text)
+                self.assertIn(f"StringStruct('ProductVersion', '{version or '0.0.0'}')", text)
+                self.assertIn(f"StringStruct('ProductName', '{build_exe.PRODUCT_NAME}')", text)
+
+    def test_pyinstaller_can_read_it(self):
+        try:
+            from PyInstaller.utils.win32 import versioninfo
+        except ImportError:
+            self.skipTest("PyInstaller isn't installed")
+        with tempfile.TemporaryDirectory() as tmp:
+            path = os.path.join(tmp, "version.txt")
+            with open(path, "w", encoding="utf-8") as f:
+                f.write(build_exe.version_resource("1.0.3"))
+            info = versioninfo.load_version_info_from_text_file(path)
+        self.assertEqual(info.ffi.fileVersionMS, (1 << 16) | 0)
+        self.assertEqual(info.ffi.fileVersionLS, 3 << 16)
 
 
 if __name__ == "__main__":
