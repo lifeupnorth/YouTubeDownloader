@@ -151,6 +151,22 @@ class SmallHelpersTest(unittest.TestCase):
         self.assertEqual(ytd.format_eta(138.7), "2:18")
         self.assertEqual(ytd.format_eta(3725), "1:02:05")
 
+    def test_reveal_selects_the_file_on_windows(self):
+        path = os.path.join("C:" + os.sep, "dl", "a b.mp4")
+        with mock.patch.object(ytd.sys, "platform", "win32"), \
+                mock.patch.object(ytd.os.path, "isfile", return_value=True), \
+                mock.patch.object(ytd.subprocess, "Popen") as popen:
+            ytd.reveal_in_file_manager(path)
+        command = popen.call_args.args[0]
+        self.assertTrue(command.startswith('explorer /select,"'), command)
+        self.assertTrue(command.endswith('a b.mp4"'), command)
+
+    def test_reveal_opens_the_folder_on_linux(self):
+        with mock.patch.object(ytd.sys, "platform", "linux"), \
+                mock.patch.object(ytd.subprocess, "Popen") as popen:
+            ytd.reveal_in_file_manager("/home/me/dl/a.mp4")
+        popen.assert_called_once_with(["xdg-open", "/home/me/dl"])
+
     def test_logger_sends_warnings_and_errors_apart(self):
         errors, warnings = [], []
         logger = ytd._YdlLogger(errors.append, warnings.append)

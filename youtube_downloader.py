@@ -76,6 +76,22 @@ def format_eta(seconds):
     return f"{hours}:{minutes:02d}:{secs:02d}" if hours else f"{minutes}:{secs:02d}"
 
 
+def reveal_in_file_manager(path):
+    """Open the folder holding path, with the file selected where possible."""
+    folder = os.path.dirname(path)
+    if sys.platform == "win32":
+        if os.path.isfile(path):
+            # Windows paths can't contain quotes, so this quoting is safe.
+            subprocess.Popen(f'explorer /select,"{os.path.normpath(path)}"')
+        else:
+            os.startfile(folder)
+    elif sys.platform == "darwin":
+        subprocess.Popen(["open", "-R", path] if os.path.isfile(path)
+                         else ["open", folder])
+    else:
+        subprocess.Popen(["xdg-open", folder])
+
+
 def _ffmpeg_install_hint():
     if sys.platform == "win32":
         return "Install it from a terminal:\n    winget install ffmpeg"
@@ -242,6 +258,7 @@ class YouTubeDownloader(tk.Tk):
         self._entry_files = set()
         self._close_when_stopped = False
         self._placeholder_shown = False
+        self._last_file = None
 
         self._build_ui()
         self._fit_window()
@@ -382,11 +399,21 @@ class YouTubeDownloader(tk.Tk):
         self.progress.grid(row=row, column=0, columnspan=2, sticky="ew", pady=(0, 6))
         row += 1
 
-        # Status label
-        self.status_lbl = tk.Label(card, textvariable=self.status_var,
+        # Status label, with an "Open folder" button after a download
+        status_row = tk.Frame(card, bg=SURFACE)
+        status_row.grid(row=row, column=0, columnspan=2, sticky="ew")
+        status_row.columnconfigure(0, weight=1)
+        self.status_lbl = tk.Label(status_row, textvariable=self.status_var,
                                    font=(UI_FONT, 10), bg=SURFACE, fg=TEXT_DIM,
                                    wraplength=580, justify="left", anchor="w")
-        self.status_lbl.grid(row=row, column=0, columnspan=2, sticky="ew")
+        self.status_lbl.grid(row=0, column=0, sticky="ew")
+        self.open_btn = tk.Button(status_row, text="📂  Open folder",
+                                  font=(UI_FONT, 9), bg=SURFACE2, fg=TEXT,
+                                  relief="flat", bd=0, padx=10, cursor="hand2",
+                                  activebackground=BORDER, activeforeground=TEXT,
+                                  command=self._open_folder)
+        self.open_btn.grid(row=0, column=1, sticky="ne", padx=(8, 0))
+        self.open_btn.grid_remove()   # shown once a download has saved a file
         # Wrap long messages at the label's current width, not a fixed one.
         self.status_lbl.bind("<Configure>", lambda e: self.status_lbl.config(
             wraplength=max(e.width - 4, 100)))
@@ -607,6 +634,7 @@ class YouTubeDownloader(tk.Tk):
     def _file_done(self, info):
         self._entry_files.clear()   # finished: nothing for Cancel to remove
         path = info.get("filepath", "")
+        self._last_file = path      # for "Open folder"
         if info.get("__real_download"):
             self._saved += 1
             self._post(self._log, f"✔ Saved: {path}")
@@ -671,6 +699,8 @@ class YouTubeDownloader(tk.Tk):
         self._cancel = threading.Event()
         self._entry_files = set()
         self._latest_progress = self._shown_progress = None
+        self._last_file = None
+        self.open_btn.grid_remove()
         self._start_worker(self._download_thread, url, opts,
                            not self.playlist_var.get())
 
@@ -756,6 +786,7 @@ class YouTubeDownloader(tk.Tk):
         detail = f" ({', '.join(parts)})" if parts else ""
         self._set_status(f"Download canceled{detail}.")
         self._log(f"✘ Download canceled{detail}.\n")
+        self._offer_open_folder()
 
     def _download_declined(self):
         self._end_download()
@@ -782,18 +813,35 @@ class YouTubeDownloader(tk.Tk):
             self.progress_var.set(100)
             self._set_status(f"✔ {summary}", WARNING if self._skipped else SUCCESS)
             self._log(f"✔ {summary}" + chr(10))
-            messagebox.showinfo("Done", summary)
+            self._offer_open_folder()
         elif success:
             self.progress_var.set(100)
             self._set_status("✔ Download complete!", SUCCESS)
             self._log("✔ Done!\n")
-            messagebox.showinfo("Done", "Download complete!")
+            self._offer_open_folder()
         else:
             self.progress_var.set(0)
             self._set_status(f"✘ Error: {error}", ACCENT)
             if not logged:
                 self._log(f"✘ Error: {error}\n")
             messagebox.showerror("Download Failed", str(error))
+
+    # Instead of a "Done" pop-up after every download, the status line says
+    # how it went and offers a button to open the folder.
+    def _offer_open_folder(self):
+        if self._last_file:
+            self.open_btn.grid()
+
+    def _open_folder(self):
+        path = self._last_file
+        if not path or not os.path.isdir(os.path.dirname(path)):
+            messagebox.showerror("Folder not found",
+                                 "The download folder doesn't exist anymore.")
+            return
+        try:
+            reveal_in_file_manager(path)
+        except OSError as exc:
+            messagebox.showerror("Couldn't open the folder", str(exc))
 
     def _recheck_ffmpeg(self, event=None):
         # The root's <FocusIn> binding also fires for each child widget.

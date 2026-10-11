@@ -205,6 +205,13 @@ class ThreadSafetyTest(unittest.TestCase):
             self.app.quit()
 
         self.app._download_canceled = canceled
+        orig_done = self.app._download_done
+
+        def done(success, error):   # a finished download has no pop-up
+            orig_done(success, error)
+            self.app.quit()
+
+        self.app._download_done = done
         self.app.url_entry.delete(0, "end")
         self.app.url_entry.insert(0, "https://www.youtube.com/watch?v=test")
         self.on_dialog = lambda name: self.app.quit()
@@ -235,7 +242,7 @@ class ThreadSafetyTest(unittest.TestCase):
 
     def test_successful_download(self):
         self.run_download(make_fake_ydl(streams=2))
-        self.assertEqual(self.dialogs, ["showinfo"])
+        self.assertEqual(self.dialogs, [])
         self.assertEqual(self.violations, [])
         self.assertEqual(self.callback_errors, [])
         self.assertEqual(self.app.progress_var.get(), 100)
@@ -280,10 +287,11 @@ class ThreadSafetyTest(unittest.TestCase):
         self.assertIn("boom", self.app.status_var.get())
         self.assertIsNone(self.app._after_id)
 
-    def test_close_while_done_dialog_open(self):
+    def test_close_while_error_dialog_open(self):
         self.on_dialog = lambda name: self.app._on_close()
-        self.run_download(make_fake_ydl(streams=1))
-        self.assertEqual(self.dialogs, ["showinfo"])
+        self.run_download(make_fake_ydl(streams=1, error=RuntimeError("boom")))
+        self.assertEqual(self.dialogs, ["showerror"])
+        self.assertTrue(self.app._closing)
         self.assertEqual(self.violations, [])
         self.assertEqual(self.callback_errors, [])
 
@@ -300,7 +308,7 @@ class ThreadSafetyTest(unittest.TestCase):
         fake = make_fake_ydl(streams=2, videos=3)
         self.run_download(fake)
         self.assertEqual(fake.calls, ["download"], "ticked box shouldn't probe")
-        self.assertEqual(self.dialogs, ["showinfo"])
+        self.assertEqual(self.dialogs, [])
         self.assertEqual(self.violations, [])
         for video in range(3):
             self.assertEqual(self.log().count(f"Saved: v{video}.mp4"), 1)
@@ -321,7 +329,7 @@ class ThreadSafetyTest(unittest.TestCase):
     def test_playlist_skips_unavailable_entry(self):
         self.start_playlist()
         self.run_download(make_fake_ydl(streams=1, videos=3, fail={1}))
-        self.assertEqual(self.dialogs, ["showinfo"])
+        self.assertEqual(self.dialogs, [])
         self.assertIn("Saved: v2.mp4", self.log())
         self.assertIn("✘ [youtube] v1: Private video", self.log())
         self.assertEqual(self.statuses[-1], "✔ Done: 2 saved, 1 skipped")
@@ -386,7 +394,7 @@ class ThreadSafetyTest(unittest.TestCase):
         self.assertEqual(self.statuses[-1], "Download canceled.")
         # The button is Download again, and a new run isn't canceled.
         self.run_download(make_fake_ydl(streams=1))
-        self.assertEqual(self.dialogs, ["showinfo"])
+        self.assertEqual(self.dialogs, [])
         self.assertEqual(self.statuses[-1], "✔ Download complete!")
         self.assertEqual(self.violations, [])
 
@@ -422,7 +430,7 @@ class ThreadSafetyTest(unittest.TestCase):
             self.run_download(make_fake_ydl(streams=1, on_progress=on_progress))
         self.assertTrue(asked.is_set())
         self.assertFalse(self.app._closing)
-        self.assertEqual(self.dialogs, ["showinfo"])
+        self.assertEqual(self.dialogs, [])
         self.assertEqual(self.statuses[-1], "✔ Download complete!")
 
     def test_yt_dlp_warnings_reach_the_log(self):
@@ -465,6 +473,20 @@ class ThreadSafetyTest(unittest.TestCase):
         self.assertGreater(widths[0], widths[1])
         self.assertLess(widths[1], 620)
 
+    def test_open_folder_after_download(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            self.run_download(make_fake_ydl(streams=2, files_dir=tmp))
+            self.app.update()
+            self.assertTrue(self.app.open_btn.winfo_ismapped())
+            with mock.patch.object(ytd, "reveal_in_file_manager") as reveal:
+                self.app.open_btn.invoke()
+            reveal.assert_called_once_with(os.path.join(tmp, "v0.mp4"))
+        # The next download hides it again, and a failed one doesn't show it.
+        self.run_download(make_fake_ydl(streams=1, error=RuntimeError("boom")))
+        self.app.update()
+        self.assertFalse(self.app.open_btn.winfo_ismapped())
+        self.assertEqual(self.violations, [])
+
     def test_single_video_error_is_reported_once(self):
         self.run_download(make_fake_ydl(streams=1, fail={0}))
         self.assertEqual(self.dialogs, ["showerror"])
@@ -475,7 +497,7 @@ class ThreadSafetyTest(unittest.TestCase):
         fake = make_fake_ydl(streams=1)
         self.run_download(fake)
         self.assertEqual(fake.calls, ["probe", "download"])
-        self.assertEqual(self.dialogs, ["showinfo"])
+        self.assertEqual(self.dialogs, [])
 
     def test_asks_before_downloading_a_playlist(self):
         fake = make_fake_ydl(streams=1, videos=2, probe=("playlist",))
