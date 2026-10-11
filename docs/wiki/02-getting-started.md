@@ -30,7 +30,7 @@ winget install ffmpeg          (Windows; macOS: brew install ffmpeg)
 python youtube_downloader.py
 ```
 
-The script's entry point creates `YouTubeDownloader()` and runs Tk's `mainloop()`. On Windows, starting it with `pythonw` instead avoids the console window. When started from a terminal, yt-dlp warnings are printed to stderr there (`_YdlLogger.warning`); everything else appears in the app's log.
+The script's entry point creates `YouTubeDownloader()` and runs Tk's `mainloop()`. On Windows, starting it with `pythonw` instead avoids the console window. yt-dlp's warnings and errors appear in the app's log (marked ⚠ and ✘), so nothing is lost without a console.
 
 Sources: [youtube_downloader.py:118-130](https://github.com/lifeupnorth/YouTubeDownloader/blob/bd3fd4242f83ee2cf111812e71b6d2db5aa71bdf/youtube_downloader.py#L118-L130), [youtube_downloader.py:698-701](https://github.com/lifeupnorth/YouTubeDownloader/blob/bd3fd4242f83ee2cf111812e71b6d2db5aa71bdf/youtube_downloader.py#L698-L701)
 

@@ -41,10 +41,10 @@ Sources: [youtube_downloader.py:535-605](https://github.com/lifeupnorth/YouTubeD
 
 1. yt-dlp is importable, otherwise it shows the install prompt.
 2. ffmpeg can be found (`find_ffmpeg()`, called once per download), otherwise it shows `ffmpeg_help()`.
-3. The URL isn't empty or the placeholder text.
+3. A URL was entered (`_url()` returns "" while the dimmed placeholder is showing).
 4. No download is already running (`is_running`).
 
-It then builds the options with `_get_ydl_opts(url, ffmpeg)`. Tk variables are read here, on the main thread, never on the worker. It disables the button, resets per-run counters, and starts `_download_thread`. The third argument, `ask_playlist`, is `True` when the **Whole playlist** box is unticked.
+It then builds the options with `_get_ydl_opts(ffmpeg)`. Tk variables are read here, on the main thread, never on the worker. It disables the button, resets per-run counters, and starts `_download_thread`. The third argument, `ask_playlist`, is `True` when the **Whole playlist** box is unticked.
 
 Sources: [youtube_downloader.py:535-567](https://github.com/lifeupnorth/YouTubeDownloader/blob/bd3fd4242f83ee2cf111812e71b6d2db5aa71bdf/youtube_downloader.py#L535-L567)
 
@@ -56,6 +56,7 @@ Sources: [youtube_downloader.py:535-567](https://github.com/lifeupnorth/YouTubeD
 | `progress_hooks` | `[_progress_hook]` | Progress reporting |
 | `noplaylist` | `not playlist_var` | Only affects `watch?v=…&list=…` links: unticked means just that video |
 | `ignoreerrors` | `"only_download"` | Same as the yt-dlp CLI: skip unavailable playlist entries instead of stopping. Errors go to the logger instead of raising. |
+| (logger) | `_YdlLogger(_entry_failed, _entry_warning)` | Errors are logged with ✘ and counted as skipped; warnings are logged with ⚠ |
 | `logger` | `_YdlLogger(_entry_failed)` | Collects error messages and hides yt-dlp's debug and info output |
 | `color` | `never` for stdout and stderr | Keeps ANSI color codes out of error text when the app is started from a terminal |
 | `quiet`, `no_warnings` | `True`, `False` | |
@@ -94,6 +95,7 @@ Formats that merge video and audio download two separate streams, and yt-dlp's p
 
 - `StreamCounter`, a `before_dl` post-processor that runs once per video (so once per playlist entry), resets `_stream_index` to 0 and sets `_stream_count` from `len(info["requested_formats"])`. The progress hook's own `info_dict` doesn't include that list.
 - `_progress_hook` clamps each stream's percentage to 100, combines the streams as `(stream_index × 100 + pct) / streams`, and scales the result by 0.99. Each `finished` event moves on to the next stream. After the last stream it shows `99, "Processing…"` while ffmpeg merges or converts. Only `_download_done` moves the bar to 100.
+- The status also shows the speed and the time remaining as m:ss or h:mm:ss (`format_eta`).
 - In a playlist, the status starts with `Video {playlist_index}/{n_entries} · `, and the bar restarts at 0 for each video.
 
 Sources: [youtube_downloader.py:147-166](https://github.com/lifeupnorth/YouTubeDownloader/blob/bd3fd4242f83ee2cf111812e71b6d2db5aa71bdf/youtube_downloader.py#L147-L166), [youtube_downloader.py:476-501](https://github.com/lifeupnorth/YouTubeDownloader/blob/bd3fd4242f83ee2cf111812e71b6d2db5aa71bdf/youtube_downloader.py#L476-L501)

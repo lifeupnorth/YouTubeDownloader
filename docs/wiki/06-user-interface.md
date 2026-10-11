@@ -11,7 +11,7 @@ The window is plain Tkinter with one ttk widget (the progress bar). It's built o
 
 ## Layout
 
-The root window has three grid rows: a header, the main card and the log. The card and the log share any extra height (`rowconfigure(..., weight=1)`). The window opens at 680×600 and can't be made smaller than 580×520.
+The root window has three grid rows: a header, the main card and the log. Only the log row grows and shrinks with the window (`rowconfigure(2, weight=1)`). `_fit_window` opens the window 680 px wide and as tall as its contents need (capped at the screen height), and sets a minimum size that keeps every control, the status line and a couple of log lines visible. Text uses Segoe UI on Windows (Helvetica would fall back to Arial there) and Helvetica elsewhere; the log uses Consolas or Courier.
 
 ```mermaid
 flowchart TD
@@ -32,8 +32,8 @@ Sources: [youtube_downloader.py:169-176](https://github.com/lifeupnorth/YouTubeD
 
 | Widget | Bound to | Behavior |
 |---|---|---|
-| URL `Entry` (`url_entry`) | `<FocusIn>`, `<FocusOut>`, `<Return>` | Shows a placeholder URL that's cleared on focus and restored when the box is left empty. Enter starts a download. |
-| Paste `Button` | `_paste_url` | Replaces the URL with the clipboard text; errors (e.g. an empty clipboard) are ignored |
+| URL `Entry` (`url_entry`) | `<FocusIn>`, `<FocusOut>`, `<Return>` | Shows a dimmed placeholder URL (tracked by `_placeholder_shown`) that's cleared on focus and restored when the box is left empty; `_url()` never returns it. Enter starts a download. |
+| Paste `Button` | `_paste_url` | Replaces the URL (or placeholder) with the trimmed clipboard text; an empty clipboard is ignored |
 | Format `Radiobutton` ×6 | `format_var` | Laid out with `divmod(i, 3)`, which fills columns 0–1 |
 | Whole playlist `Checkbutton` | `playlist_var` | In the free column 2 of the format grid, off by default |
 | Save To `Entry` | `download_path` | Defaults to `~/Downloads` |
@@ -49,7 +49,7 @@ Sources: [youtube_downloader.py:231-341](https://github.com/lifeupnorth/YouTubeD
 
 Two helpers write to the screen, and both must run on the main thread:
 
-- `_set_status(msg, color)` sets `status_var` and the label's text color.
+- `_set_status(msg, color)` sets `status_var` and the label's text color. The label wraps long messages at its current width, which follows the window.
 - `_log(msg)` appends a line to `log_box`.
 
 Worker threads reach them only through `_post` or the coalesced `_latest_progress` (see [Architecture and Threading](03-architecture.md)). The status color tells the user what state the app is in:
