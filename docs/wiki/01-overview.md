@@ -32,7 +32,7 @@ Sources: [README.md:1-11](https://github.com/lifeupnorth/YouTubeDownloader/blob/
 | One progress bar across video and audio streams, with "Video n/N" for playlists | `StreamCounter`, `_progress_hook` |
 | Log of the final files, with "already downloaded" and skipped entries reported separately | `_file_done`, `_entry_failed` |
 | ffmpeg detection at startup and before each download, including a Windows install made while the app is open | `find_ffmpeg`, `_recheck_ffmpeg` |
-| Offers to install the pinned yt-dlp version with pip when it's missing | `_prompt_install`, `_install_ytdlp` |
+| Offers to install the pinned yt-dlp version with pip when it's missing, and uses it without a restart; shows the version in use | `_prompt_install`, `_install_ytdlp` |
 | Link preview: thumbnail, title, and length or playlist size | `_start_preview`, `describe_info` |
 | Open folder button after a download, instead of a pop-up; last folder and format remembered | `_open_folder`, `load_settings` |
 | Cancel a running download; its partial files are removed, finished videos are kept | `_cancel_download`, `_remove_partial_files` |
@@ -87,14 +87,16 @@ Sources: [youtube_downloader.py:7-22](https://github.com/lifeupnorth/YouTubeDown
 
 | Path | Lines | Contents |
 |---|---|---|
-| `youtube_downloader.py` | 1094 | The entire app: helpers, the `YouTubeDownloader` window class, entry point |
-| `tests/test_thread_safety.py` | 652 | Simulated downloads through a real Tk window, using a fake `YoutubeDL` |
-| `tests/test_formats.py` | 388 | Format selection with real yt-dlp, ffmpeg detection, help text, error formatting |
-| `tests/test_requirements.py` | 57 | Checks the app installs the yt-dlp pin from `requirements.txt` |
+| `youtube_downloader.py` | 1157 | The entire app: helpers, the `YouTubeDownloader` window class, entry point |
+| `tests/test_thread_safety.py` | 689 | Simulated downloads through a real Tk window, using a fake `YoutubeDL` |
+| `tests/test_formats.py` | 428 | Format selection with real yt-dlp, ffmpeg detection, help text, error formatting |
+| `tests/test_requirements.py` | 59 | Checks the app installs the yt-dlp pin from `requirements.txt` |
 | `requirements.txt` | 9 | The pinned yt-dlp and (optional) Pillow versions |
 | `.github/dependabot.yml` | 19 | Weekly Dependabot checks for newer yt-dlp and GitHub Actions versions |
-| `.github/workflows/tests.yml` | 53 | Runs the tests on every push to `main` and every PR |
-| `README.md` | 70 | Requirements, install, run and usage instructions, tests, disclaimer, license |
+| `.github/workflows/tests.yml` | 73 | Runs the tests and the ruff lint check on every push to `main` and every PR |
+| `ruff.toml` | 8 | Lint rules |
+| `requirements-dev.txt` | 3 | The pinned ruff version |
+| `README.md` | 76 | Requirements, install, run and usage instructions, tests, disclaimer, license |
 | `LICENSE` | 21 | MIT |
 | `.gitignore` | 1 | `__pycache__/` |
 

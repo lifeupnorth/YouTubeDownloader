@@ -95,7 +95,7 @@ Sources: [youtube_downloader.py:169-205](https://github.com/lifeupnorth/YouTubeD
 
 ## Installing yt-dlp at runtime
 
-If yt-dlp is missing, `_prompt_install` asks whether to install it. On Yes, `_install_ytdlp` runs `python -m pip install <YT_DLP_REQUIREMENT>` (the pin read from `requirements.txt` next to the script, or plain `yt-dlp` if that file is missing) with `sys.executable` on a worker (output discarded), and `_install_done` reports the result. The module only imports `yt_dlp` once, at startup, so a successful install still requires restarting the app, and the dialog says so.
+If yt-dlp is missing, `_prompt_install` asks whether to install it. On Yes, `_install_ytdlp` runs `python -m pip install <YT_DLP_REQUIREMENT>` (the pin read from `requirements.txt` next to the script, or plain `yt-dlp` if that file is missing) with `sys.executable` on a worker (output discarded), and `_install_done` reports the result. After pip finishes, the worker calls `load_yt_dlp()`, which imports yt-dlp into the running app (adding the per-user site-packages folder if pip just created it), so the header updates and downloads work without a restart. Only if that import fails does the app ask for a restart.
 
 Sources: [youtube_downloader.py:657-695](https://github.com/lifeupnorth/YouTubeDownloader/blob/bd3fd4242f83ee2cf111812e71b6d2db5aa71bdf/youtube_downloader.py#L657-L695)
 

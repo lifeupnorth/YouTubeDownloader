@@ -12,10 +12,11 @@ import time
 import tkinter
 import types
 import unittest
+from typing import ClassVar
 from unittest import mock
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-import youtube_downloader as ytd  # noqa: E402
+import youtube_downloader as ytd
 
 GUARDED = [
     (tkinter.Variable, "get"), (tkinter.Variable, "set"),
@@ -43,7 +44,7 @@ def make_fake_ydl(streams=2, videos=1, overshoot=0, error=None, fail=(),
     on_progress = on_progress or (lambda *a: None)
 
     class FakeYDL:
-        calls = []
+        calls: ClassVar[list[str]] = []   # shared: one list per fake class
 
         def __init__(self, opts):
             self.opts = FakeYDL.last_opts = opts
@@ -554,6 +555,42 @@ class ThreadSafetyTest(unittest.TestCase):
         self.assertIsNotNone(self.app._preview_image)
         self.assertTrue(str(self.app.preview_img.cget("image")))
         self.assertEqual(self.violations, [])
+
+    def test_header_shows_the_yt_dlp_version(self):
+        with mock.patch.object(ytd, "yt_dlp_version", return_value="2026.08.19"):
+            self.assertEqual(self.app._powered_by_text(),
+                             "Powered by yt-dlp 2026.08.19")
+        with mock.patch.object(ytd, "yt_dlp_version", return_value=None):
+            self.assertEqual(self.app._powered_by_text(),
+                             "Powered by yt-dlp (not installed)")
+
+    def test_note_when_another_yt_dlp_is_installed(self):
+        with mock.patch.object(ytd, "yt_dlp_version", return_value="2026.02.21"), \
+                mock.patch.object(ytd, "pinned_yt_dlp_version", return_value="2026.8.19"):
+            self.app._note_yt_dlp_version()
+        self.assertIn("yt-dlp 2026.02.21 is installed; this app is tested with "
+                      "2026.8.19", self.log())
+        before = self.log()
+        with mock.patch.object(ytd, "yt_dlp_version", return_value="2026.08.19"), \
+                mock.patch.object(ytd, "pinned_yt_dlp_version", return_value="2026.8.19"):
+            self.app._note_yt_dlp_version()
+        self.assertEqual(self.log(), before)
+
+    def test_install_without_restart(self):
+        self.app._active_workers = 1   # as if the install worker ran
+        with mock.patch.object(ytd, "yt_dlp_version", return_value="2026.08.19"):
+            self.app._install_done(True, None, loaded=True)
+        self.assertEqual(self.app.powered_lbl.cget("text"),
+                         "Powered by yt-dlp 2026.08.19")
+        self.assertEqual(self.statuses[-1], "✔ yt-dlp installed. You can download now.")
+        self.assertIn("yt-dlp 2026.08.19 installed and ready", self.log())
+        self.assertEqual(self.dialogs, [])   # no "please restart"
+
+    def test_install_that_still_needs_a_restart(self):
+        self.app._active_workers = 1
+        self.app._install_done(True, None, loaded=False)
+        self.assertEqual(self.dialogs, ["showinfo"])
+        self.assertIn("Please restart", self.log())
 
     def test_folder_and_format_are_remembered(self):
         with tempfile.TemporaryDirectory() as folder:

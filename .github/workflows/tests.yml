@@ -51,3 +51,23 @@ jobs:
           $DISPLAY_WRAPPER python -c "import sys, unittest;
           sys.modules['yt_dlp'] = None;
           unittest.main(module=None, argv=['tests', 'discover', '-s', 'tests', '-v'])"
+
+  lint:
+    name: Lint (ruff)
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: actions/setup-python@v7
+        with:
+          python-version: "3.14"
+          cache: pip
+          cache-dependency-path: requirements-dev.txt
+
+      - name: Install ruff
+        run: python -m pip install -r requirements-dev.txt
+
+      # Rules are in ruff.toml. "github" output puts findings on the PR's lines.
+      - name: Run ruff
+        run: ruff check --output-format=github .

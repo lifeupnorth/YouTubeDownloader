@@ -46,11 +46,13 @@ class RequirementsTest(unittest.TestCase):
         app = mock.Mock()
         ytd.YouTubeDownloader._install_ytdlp(app)
         (run,), _ = app._start_worker.call_args
-        with mock.patch.object(ytd.subprocess, "check_call") as check_call:
+        with mock.patch.object(ytd.subprocess, "check_call") as check_call, \
+                mock.patch.object(ytd, "load_yt_dlp", return_value=True):
             run()
         args = check_call.call_args.args[0]
         self.assertEqual(args[1:], ["-m", "pip", "install", ytd.YT_DLP_REQUIREMENT])
-        app._post.assert_called_once_with(app._install_done, True)
+        # Loaded right away: no restart needed.
+        app._post.assert_called_once_with(app._install_done, True, None, True)
 
 
 if __name__ == "__main__":

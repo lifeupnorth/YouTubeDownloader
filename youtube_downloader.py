@@ -4,26 +4,29 @@ YouTube Video Downloader — Desktop App
 Requirements: pip install -r requirements.txt
 """
 
-import tkinter as tk
-from tkinter import ttk, filedialog, messagebox
-import threading
-import queue
 import functools
 import glob
+import importlib
 import io
 import json
 import os
+import queue
 import re
 import shutil
-import sys
+import site
 import subprocess
+import sys
+import threading
+import tkinter as tk
 import urllib.request
+from tkinter import filedialog, messagebox, ttk
 
 # ── Try importing yt-dlp; offer to install if missing ──────────────────────
 try:
     import yt_dlp
     YT_DLP_AVAILABLE = True
 except ImportError:
+    yt_dlp = None   # load_yt_dlp() can import it later, after an install
     YT_DLP_AVAILABLE = False
 
 # Optional: without Pillow, link previews show text but no thumbnail
@@ -52,6 +55,44 @@ def _yt_dlp_requirement():
 
 # What the in-app installer runs pip with, e.g. "yt-dlp==2026.8.19".
 YT_DLP_REQUIREMENT = _yt_dlp_requirement()
+
+
+def load_yt_dlp():
+    """Imports yt-dlp while the app is running, right after the built-in
+    installer ran, so no restart is needed. True if it's usable now."""
+    global yt_dlp, YT_DLP_AVAILABLE
+    importlib.invalidate_caches()
+    # pip may have just created the per-user site-packages folder (when it
+    # can't write to Python's own); Python only adds it at startup.
+    user_site = site.getusersitepackages()
+    if site.ENABLE_USER_SITE and os.path.isdir(user_site):
+        site.addsitedir(user_site)
+    try:
+        yt_dlp = importlib.import_module("yt_dlp")
+    except ImportError:
+        return False
+    YT_DLP_AVAILABLE = True
+    return True
+
+
+def yt_dlp_version():
+    """The installed yt-dlp's version, e.g. "2026.08.19", or None."""
+    if not YT_DLP_AVAILABLE:
+        return None
+    return getattr(getattr(yt_dlp, "version", None), "__version__", None)
+
+
+def pinned_yt_dlp_version():
+    """The version requirements.txt pins, e.g. "2026.8.19", or None."""
+    _name, sep, version = YT_DLP_REQUIREMENT.partition("==")
+    return version if sep else None
+
+
+def same_version(a, b):
+    """yt-dlp calls itself "2026.08.19" where pip writes "2026.8.19"."""
+    def parts(version):
+        return tuple(int(p) if p.isdigit() else p for p in version.split("."))
+    return parts(a) == parts(b)
 
 
 # ── Color palette ───────────────────────────────────────────────────────────
@@ -290,7 +331,7 @@ class _YdlLogger:
     info = debug
 
 
-@functools.lru_cache(maxsize=None)
+@functools.cache
 def _callback_pp_class(base):
     class CallbackPP(base):
         def __init__(self, fn):
@@ -304,7 +345,7 @@ def _callback_pp_class(base):
     return CallbackPP
 
 
-@functools.lru_cache(maxsize=None)
+@functools.cache
 def _stream_counter_class(base):
     # Defined lazily because yt_dlp may be missing at import time.
     class StreamCounter(base):
@@ -374,6 +415,7 @@ class YouTubeDownloader(tk.Tk):
         if self._ffmpeg_missing:
             self._set_status(FFMPEG_MISSING_STATUS, WARNING)
             self._log(ffmpeg_help(startup=True))
+        self._note_yt_dlp_version()
         self.bind("<FocusIn>", self._recheck_ffmpeg, add="+")
 
     # ── UI Construction ─────────────────────────────────────────────────────
@@ -388,8 +430,9 @@ class YouTubeDownloader(tk.Tk):
 
         tk.Label(hdr, text="▶  YT Downloader", font=(UI_FONT, 20, "bold"),
                  bg=SURFACE, fg=ACCENT).grid(row=0, column=0)
-        tk.Label(hdr, text="Powered by yt-dlp", font=(UI_FONT, 9),
-                 bg=SURFACE, fg=TEXT_DIM).grid(row=1, column=0, pady=(2, 0))
+        self.powered_lbl = tk.Label(hdr, text=self._powered_by_text(),
+                                    font=(UI_FONT, 9), bg=SURFACE, fg=TEXT_DIM)
+        self.powered_lbl.grid(row=1, column=0, pady=(2, 0))
 
         # ── Main card ──
         card = tk.Frame(self, bg=SURFACE, padx=28, pady=24,
@@ -801,7 +844,8 @@ class YouTubeDownloader(tk.Tk):
 
     def _start_download(self):
         if not YT_DLP_AVAILABLE:
-            self._prompt_install(); return
+            self._prompt_install()
+            return
 
         ffmpeg = find_ffmpeg()
         self._ffmpeg_missing = not ffmpeg
@@ -1046,7 +1090,20 @@ class YouTubeDownloader(tk.Tk):
             if self.status_var.get() == FFMPEG_MISSING_STATUS:
                 self._set_status("Ready")
 
-    # ── Install prompt ───────────────────────────────────────────────────────
+    # ── yt-dlp version and install ───────────────────────────────────────────
+
+    def _powered_by_text(self):
+        version = yt_dlp_version()
+        return f"Powered by yt-dlp {version}" if version else \
+            "Powered by yt-dlp (not installed)"
+
+    # The app is tested with the version pinned in requirements.txt; say so
+    # if another one is installed (yt-dlp often needs updates for YouTube).
+    def _note_yt_dlp_version(self):
+        installed, pinned = yt_dlp_version(), pinned_yt_dlp_version()
+        if installed and pinned and not same_version(installed, pinned):
+            self._log(f"• yt-dlp {installed} is installed; this app is tested "
+                      f"with {pinned}. To match: pip install {YT_DLP_REQUIREMENT}")
 
     def _prompt_install(self):
         ans = messagebox.askyesno(
@@ -1068,15 +1125,21 @@ class YouTubeDownloader(tk.Tk):
                     [sys.executable, "-m", "pip", "install", YT_DLP_REQUIREMENT],
                     stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL
                 )
-                self._post(self._install_done, True)
             except Exception as e:
                 self._post(self._install_done, False, str(e))
+                return
+            # Importing here, on the worker, keeps the window responsive.
+            self._post(self._install_done, True, None, load_yt_dlp())
 
         self._start_worker(run)
 
-    def _install_done(self, ok, err=None):
+    def _install_done(self, ok, err=None, loaded=False):
         self._worker_finished()
-        if ok:
+        if ok and loaded:
+            self.powered_lbl.config(text=self._powered_by_text())
+            self._log(f"✔ yt-dlp {yt_dlp_version()} installed and ready.")
+            self._set_status("✔ yt-dlp installed. You can download now.", SUCCESS)
+        elif ok:   # installed, but this Python can't import it until a restart
             self._log("✔ yt-dlp installed! Please restart the app.")
             self._set_status("✔ yt-dlp installed — please restart.", SUCCESS)
             messagebox.showinfo("Installed",

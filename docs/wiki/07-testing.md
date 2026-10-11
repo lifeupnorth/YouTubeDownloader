@@ -9,7 +9,7 @@
 
 </details>
 
-The tests use the standard library `unittest`, with no extra dependencies. They're split into three files: one drives a real Tk window through simulated downloads, one covers format selection and ffmpeg detection, and `test_requirements.py` checks that the in-app installer uses the exact yt-dlp pin from `requirements.txt` and that Dependabot watches that file. Nothing touches the network. GitHub Actions (`.github/workflows/tests.yml`) runs them on every push to `main` and every pull request, on Windows and Ubuntu (under a virtual display, `xvfb-run`) with Python 3.10 and 3.14. Each job runs the suite twice: once normally, and once with yt-dlp blocked, so the tests that need it must skip rather than fail.
+The tests use the standard library `unittest`, with no extra dependencies. They're split into three files: one drives a real Tk window through simulated downloads, one covers format selection and ffmpeg detection, and `test_requirements.py` checks that the in-app installer uses the exact yt-dlp pin from `requirements.txt` and that Dependabot watches that file. Nothing touches the network. GitHub Actions (`.github/workflows/tests.yml`) runs them on every push to `main` and every pull request, on Windows and Ubuntu (under a virtual display, `xvfb-run`) with Python 3.10 and 3.14. Each job runs the suite twice: once normally, and once with yt-dlp blocked, so the tests that need it must skip rather than fail. A separate `lint` job runs `ruff check .` with the rules in `ruff.toml` (ruff is pinned in `requirements-dev.txt`), and findings show up on the PR's lines.
 
 ```
 python -m unittest discover -s tests -v
