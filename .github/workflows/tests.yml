@@ -21,7 +21,8 @@ jobs:
     timeout-minutes: 15
     env:
       # The tests open real Tk windows; Linux runners need a virtual display.
-      DISPLAY_WRAPPER: ${{ runner.os == 'Linux' && 'xvfb-run -a' || '' }}
+      # (The runner context isn't available at job level, so go by matrix.os.)
+      DISPLAY_WRAPPER: ${{ startsWith(matrix.os, 'ubuntu') && 'xvfb-run -a' || '' }}
     steps:
       - uses: actions/checkout@v7
 
