@@ -14,11 +14,12 @@ import types
 import unittest
 from unittest import mock
 
-sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-from fakes import fake_yt_dlp, make_fake_ydl
+TESTS = os.path.dirname(os.path.abspath(__file__))
+sys.path[:0] = [os.path.dirname(TESTS), TESTS]   # the app, and tests/fakes.py
+from fakes import fake_yt_dlp, make_fake_ydl  # noqa: E402
 
-import download_engine as engine
-import youtube_downloader as ytd
+import download_engine as engine  # noqa: E402
+import youtube_downloader as ytd  # noqa: E402
 
 GUARDED = [
     (tkinter.Variable, "get"), (tkinter.Variable, "set"),
@@ -103,8 +104,7 @@ class ThreadSafetyTest(unittest.TestCase):
             self.app.quit()
 
         self.app._download_finished = finished
-        self.app.url_entry.delete(0, "end")
-        self.app.url_entry.insert(0, "https://www.youtube.com/watch?v=test")
+        self.app._replace_url_text("https://www.youtube.com/watch?v=test")
         self.on_dialog = lambda name: self.app.quit()
 
     def _on_dialog(self, name):
@@ -160,8 +160,7 @@ class ThreadSafetyTest(unittest.TestCase):
 
     def start_playlist(self, url="https://www.youtube.com/watch?v=test&list=x"):
         self.app.playlist_var.set(True)
-        self.app.url_entry.delete(0, "end")
-        self.app.url_entry.insert(0, url)
+        self.app._replace_url_text(url)
 
     def log(self):
         return self.app.log_box.get("1.0", "end")
@@ -169,7 +168,7 @@ class ThreadSafetyTest(unittest.TestCase):
     def wait_until_canceled(self, timeout=5):
         """On the download thread: waits until the job has been canceled."""
         deadline = time.time() + timeout
-        while not self.app._job.canceled and time.time() < deadline:
+        while not self.app._queue.canceled and time.time() < deadline:
             time.sleep(0.01)
 
     def test_whole_playlist(self):
@@ -298,28 +297,77 @@ class ThreadSafetyTest(unittest.TestCase):
 
     def test_placeholder_is_not_a_url(self):
         entry = self.app.url_entry
-        entry.delete(0, "end")
+        self.app._replace_url_text("")
         self.app._restore_placeholder()
-        self.assertEqual(entry.get(), ytd.URL_PLACEHOLDER)
+        self.assertEqual(self.app._url_text(), ytd.URL_PLACEHOLDER)
         self.assertEqual(str(entry.cget("fg")), ytd.TEXT_DIM)
-        self.assertEqual(self.app._url(), "")
+        self.assertEqual(self.app._urls(), [])
         self.app._start_download()
         self.assertEqual(self.dialogs, ["showwarning"])
         self.assertFalse(self.app.is_running)
         self.app._clear_placeholder()             # clicking into the box
-        self.assertEqual(entry.get(), "")
+        self.assertEqual(self.app._url_text(), "")
         self.assertEqual(str(entry.cget("fg")), ytd.TEXT)
-        entry.insert(0, "https://youtu.be/abc")
+        entry.insert("1.0", "https://youtu.be/abc")
         self.assertEqual(self.app._url(), "https://youtu.be/abc")
 
     def test_paste_replaces_the_placeholder(self):
-        self.app.url_entry.delete(0, "end")
+        self.app._replace_url_text("")
         self.app._restore_placeholder()
         with mock.patch.object(self.app, "clipboard_get",
-                               return_value="  https://youtu.be/abc \n"):
+                               return_value="  https://youtu.be/abc \n"), \
+                mock.patch.object(self.app, "_schedule_preview"):
             self.app._paste_url()
-        self.assertEqual(self.app._url(), "https://youtu.be/abc")
+        self.assertEqual(self.app._urls(), ["https://youtu.be/abc"])
         self.assertFalse(self.app._placeholder_shown)
+
+    def test_several_links_one_per_line(self):
+        with mock.patch.object(self.app, "clipboard_get",
+                               return_value="https://a https://b\nhttps://a\n\nhttps://c"), \
+                mock.patch.object(self.app, "_schedule_preview"):
+            self.app._paste_url()
+        # Pasted links go one per line, without repeats; the box grows.
+        self.assertEqual(self.app._urls(), ["https://a", "https://b", "https://c"])
+        self.assertEqual(self.app._url_text(),
+                         "https://a\nhttps://b\nhttps://a\nhttps://c")
+        self.assertEqual(int(self.app.url_entry.cget("height")), 4)
+        self.app._replace_url_text("https://a\nhttps://b")
+        self.assertEqual(int(self.app.url_entry.cget("height")), 2)
+        self.app._replace_url_text("\n".join(f"https://{n}" for n in range(9)))
+        self.assertEqual(int(self.app.url_entry.cget("height")), 4, "at most 4")
+
+    def test_enter_downloads_instead_of_adding_a_line(self):
+        with mock.patch.object(self.app, "_start_download") as start:
+            self.assertEqual(self.app._on_url_enter(), "break")
+        start.assert_called_once_with()
+
+    def test_queue_of_links(self):
+        self.app.playlist_var.set(True)   # downloads without asking each time
+        self.app._replace_url_text("https://a\nhttps://b\nhttps://c")
+        self.run_download(make_fake_ydl(streams=1))
+        self.assertEqual(self.statuses[-1], "✔ Done: 3 saved")
+        for n, url in enumerate(("https://a", "https://b", "https://c"), 1):
+            self.assertIn(f"▶ Link {n}/3: {url}", self.log())
+        self.assertIn("▶ 3 links", self.log())
+        self.assertEqual(self.dialogs, [])
+        self.assertEqual(self.violations, [])
+
+    def test_queue_goes_on_after_a_failed_link(self):
+        fake = make_fake_ydl(streams=1)
+
+        class FailsOnB(fake):
+            def download(self, urls):
+                if urls == ["https://b"]:
+                    raise RuntimeError("no such video")
+                super().download(urls)
+
+        self.app.playlist_var.set(True)
+        self.app._replace_url_text("https://a\nhttps://b\nhttps://c")
+        self.run_download(FailsOnB)
+        self.assertEqual(self.statuses[-1], "✔ Done: 2 saved, 1 link failed")
+        self.assertIn("✘ Error: no such video", self.log())
+        self.assertEqual(self.dialogs, [], "a partial success has no error pop-up")
+        self.assertEqual(str(self.app.status_lbl.cget("fg")), ytd.WARNING)
 
     def test_status_wraps_at_the_window_width(self):
         widths = []
@@ -351,8 +399,7 @@ class ThreadSafetyTest(unittest.TestCase):
                 mock.patch.object(engine, "fetch_thumbnail", return_value=thumbnail):
             self.app.playlist_var.set(playlist)
             for url in urls:
-                self.app.url_entry.delete(0, "end")
-                self.app.url_entry.insert(0, url)
+                self.app._replace_url_text(url)
                 self.app._start_preview()
             deadline = time.time() + 5
             while self.app._active_workers and time.time() < deadline:
@@ -515,8 +562,7 @@ class ThreadSafetyTest(unittest.TestCase):
         # Yes is for this download only: a later video-in-a-Mix link must
         # still get just that video, and be probed again.
         self.assertFalse(self.app.playlist_var.get())
-        self.app.url_entry.delete(0, "end")
-        self.app.url_entry.insert(0, "https://www.youtube.com/watch?v=t&list=RDx")
+        self.app._replace_url_text("https://www.youtube.com/watch?v=t&list=RDx")
         fake = make_fake_ydl(streams=1)
         self.run_download(fake)
         self.assertEqual(fake.calls, ["probe", "download"])

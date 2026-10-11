@@ -9,10 +9,11 @@ import tempfile
 import unittest
 from unittest import mock
 
-sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-from fakes import fake_yt_dlp, make_fake_ydl
+TESTS = os.path.dirname(os.path.abspath(__file__))
+sys.path[:0] = [os.path.dirname(TESTS), TESTS]   # the app, and tests/fakes.py
+from fakes import fake_yt_dlp, make_fake_ydl  # noqa: E402
 
-import download_engine as engine
+import download_engine as engine  # noqa: E402
 
 try:
     import yt_dlp
@@ -449,6 +450,109 @@ class DownloadJobTest(unittest.TestCase):
                 mock.patch.object(engine, "fetch_thumbnail", return_value=None):
             self.assertEqual(engine.preview_link("https://link", False),
                              ("T\n1:01 · c", None, True))
+
+
+class DownloadQueueTest(unittest.TestCase):
+    """Several links in a row, with a fake yt-dlp: no window, no Tk."""
+
+    def run_queue(self, fake, urls, *, ask=None, whole_playlist=True, on_queue=None):
+        progress, log = [], []
+        queue = engine.DownloadQueue(
+            urls, fmt="mp4_best", folder="dl", ffmpeg="ffmpeg",
+            whole_playlist=whole_playlist, ask=ask or (lambda question: True),
+            on_progress=lambda pct, message: progress.append(message),
+            on_log=log.append)
+        if on_queue:
+            on_queue(queue)
+        with mock.patch.object(engine, "yt_dlp", fake_yt_dlp(fake)):
+            queue.run()
+        queue.progress, queue.log = progress, log
+        return queue
+
+    @staticmethod
+    def failing_on(*bad_urls):
+        fake = make_fake_ydl(streams=1)
+
+        class Fake(fake):
+            def download(self, urls):
+                if urls[0] in bad_urls:
+                    raise RuntimeError(f"no video at {urls[0]}")
+                super().download(urls)
+
+        return Fake
+
+    def test_one_link_is_just_a_job(self):
+        queue = self.run_queue(make_fake_ydl(streams=2), ["https://a"])
+        self.assertEqual(queue.outcome, "done")
+        self.assertEqual(queue.summary(), "Download complete!")
+        self.assertFalse(any(m.startswith("Link") for m in queue.progress))
+        self.assertNotIn("▶ Link 1/1: https://a", queue.log)
+
+    def test_links_download_in_order(self):
+        queue = self.run_queue(make_fake_ydl(streams=1), ["https://a", "https://b"])
+        self.assertEqual([job.url for job in queue.jobs], ["https://a", "https://b"])
+        self.assertEqual(queue.summary(), "Done: 2 saved")
+        self.assertEqual(queue.log[0], "▶ Link 1/2: https://a")
+        self.assertTrue(queue.progress[-1].startswith("Link 2/2 · "), queue.progress[-1])
+        self.assertEqual(queue.last_file, "v0.mp4")
+        self.assertFalse(queue.had_problems)
+
+    def test_a_failed_link_doesnt_stop_the_rest(self):
+        queue = self.run_queue(self.failing_on("https://b"),
+                               ["https://a", "https://b", "https://c"])
+        self.assertEqual([job.outcome for job in queue.jobs], ["done", "failed", "done"])
+        self.assertEqual(queue.outcome, "done")
+        self.assertEqual(queue.summary(), "Done: 2 saved, 1 link failed")
+        self.assertIn("✘ Error: no video at https://b", queue.log)
+        self.assertTrue(queue.had_problems)
+
+    def test_an_unavailable_video_counts_once(self):
+        fake = make_fake_ydl(streams=1)
+
+        class Fake(fake):
+            def download(self, urls):
+                if urls == ["https://gone"]:   # what yt-dlp does for one video
+                    self.opts["logger"].error("ERROR: [youtube] gone: unavailable")
+                    return
+                super().download(urls)
+
+        queue = self.run_queue(Fake, ["https://a", "https://gone"])
+        self.assertEqual(queue.summary(), "Done: 1 saved, 1 link failed")
+        self.assertEqual(queue.log.count("✘ [youtube] gone: unavailable"), 1)
+
+    def test_all_links_failed(self):
+        queue = self.run_queue(self.failing_on("https://a", "https://b"),
+                               ["https://a", "https://b"])
+        self.assertEqual(queue.outcome, "failed")
+        self.assertEqual(queue.error, "no video at https://a")
+        self.assertTrue(queue.error_logged)
+        self.assertEqual(queue.summary(), "Nothing downloaded: 2 links failed")
+
+    def test_declined_playlists(self):
+        fake = make_fake_ydl(streams=1, probe=("playlist", "video"))
+        queue = self.run_queue(fake, ["https://list", "https://video"],
+                               whole_playlist=False, ask=lambda q: False)
+        self.assertEqual(queue.summary(), "Done: 1 saved, 1 playlist not downloaded")
+        fake = make_fake_ydl(streams=1, probe=("playlist", "playlist"))
+        queue = self.run_queue(fake, ["https://l1", "https://l2"],
+                               whole_playlist=False, ask=lambda q: False)
+        self.assertEqual(queue.outcome, "declined")
+        self.assertEqual(queue.summary(), "Nothing downloaded: 2 playlists not downloaded")
+
+    def test_cancel_skips_the_remaining_links(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            holder = {}
+
+            def on_progress(video, stream, done):
+                if (stream, done) == (0, 50):
+                    holder["queue"].cancel()
+            fake = make_fake_ydl(streams=1, files_dir=tmp, on_progress=on_progress)
+            queue = self.run_queue(fake, ["https://a", "https://b", "https://c"],
+                                   on_queue=lambda q: holder.update(queue=q))
+            self.assertEqual(os.listdir(tmp), [], "the partial file is removed")
+        self.assertEqual(len(queue.jobs), 1, "links 2 and 3 never started")
+        self.assertEqual(queue.outcome, "canceled")
+        self.assertEqual(queue.summary(), "Download canceled (1 partial file removed).")
 
 
 if __name__ == "__main__":

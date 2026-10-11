@@ -108,8 +108,7 @@ class FfmpegCheckTest(unittest.TestCase):
             self.skipTest(f"no display: {exc}")
         self.addCleanup(gc.collect)
         self.addCleanup(app.destroy)
-        app.url_entry.delete(0, "end")
-        app.url_entry.insert(0, "https://www.youtube.com/watch?v=test")
+        app._replace_url_text("https://www.youtube.com/watch?v=test")
         return app
 
     def log(self, app):
@@ -146,8 +145,8 @@ class FfmpegCheckTest(unittest.TestCase):
         app._start_worker = mock.Mock()
         app._start_download()
         self.find.assert_called_once_with()
-        _target, job = app._start_worker.call_args.args
-        self.assertEqual(job.options()["ffmpeg_location"], "/bin/ffmpeg")
+        _target, queue = app._start_worker.call_args.args
+        self.assertEqual(queue.job_options["ffmpeg"], "/bin/ffmpeg")
 
 
 if __name__ == "__main__":

@@ -143,13 +143,13 @@ class YouTubeDownloader(tk.Tk):
         self._closing      = False
         self._latest_progress = None
         self._shown_progress  = None
-        self._job = None               # the running engine.DownloadJob
+        self._queue = None             # the running engine.DownloadQueue
         self._close_when_stopped = False
         self._placeholder_shown = False
         self._last_file = None
         self.preview_text  = tk.StringVar(value=PREVIEW_HINT)
         self._preview_after = None     # pending lookup (waits for typing to pause)
-        self._preview_key   = None     # (url, whole playlist) last looked up
+        self._preview_key   = None     # (links, whole playlist) last looked up
         self._preview_token = 0        # newest lookup; older answers are dropped
         self._preview_image = None     # keeps the PhotoImage alive
         self._apply_saved_settings()
@@ -192,7 +192,7 @@ class YouTubeDownloader(tk.Tk):
         row = 0
 
         # URL
-        tk.Label(card, text="YouTube URL", font=(UI_FONT, 11, "bold"),
+        tk.Label(card, text="YouTube URLs (one per line)", font=(UI_FONT, 11, "bold"),
                  bg=SURFACE, fg=TEXT).grid(row=row, column=0, columnspan=2,
                                            sticky="w", pady=(0, 6))
         row += 1
@@ -202,16 +202,21 @@ class YouTubeDownloader(tk.Tk):
         url_frame.grid(row=row, column=0, columnspan=2, sticky="ew", pady=(0, 8))
         url_frame.columnconfigure(0, weight=1)
 
-        self.url_entry = tk.Entry(url_frame, font=(UI_FONT, 12),
-                                  bg=SURFACE2, fg=TEXT, insertbackground=TEXT,
-                                  relief="flat", bd=8)
+        # Several links can go in, one per line; they download in order. The
+        # box grows to 4 lines. Enter downloads, Shift+Enter adds a line.
+        self.url_entry = tk.Text(url_frame, height=1, wrap="none",
+                                 font=(UI_FONT, 12), bg=SURFACE2, fg=TEXT,
+                                 insertbackground=TEXT, relief="flat", bd=0,
+                                 padx=8, pady=8, highlightthickness=0, undo=True)
         self.url_entry.grid(row=0, column=0, sticky="ew")
         self._restore_placeholder()
         self.url_entry.bind("<FocusIn>",  self._clear_placeholder)
         self.url_entry.bind("<FocusOut>", self._restore_placeholder)
         self.url_entry.bind("<FocusOut>", self._schedule_preview, add="+")
-        self.url_entry.bind("<KeyRelease>", self._schedule_preview)
-        self.url_entry.bind("<Return>",   lambda e: self._start_download())
+        self.url_entry.bind("<KeyRelease>", self._on_url_typed)
+        self.url_entry.bind("<Return>", self._on_url_enter)
+        self.url_entry.bind("<Shift-Return>", lambda e: None)   # a new line
+        self.url_entry.bind("<Tab>", self._focus_next)
 
         btn_paste = tk.Button(url_frame, text="Paste", font=(UI_FONT, 9),
                               bg=ACCENT, fg=TEXT, relief="flat", bd=0,
@@ -379,22 +384,51 @@ class YouTubeDownloader(tk.Tk):
     def _clear_placeholder(self, _e=None):
         if self._placeholder_shown:
             self._placeholder_shown = False
-            self.url_entry.delete(0, "end")
-            self.url_entry.config(fg=TEXT)
+            self._replace_url_text("")
 
     def _restore_placeholder(self, _e=None):
-        if not self.url_entry.get().strip():
-            self.url_entry.delete(0, "end")
-            self.url_entry.insert(0, URL_PLACEHOLDER)
+        if not self._url_text().strip():
+            self._replace_url_text(URL_PLACEHOLDER)
             self.url_entry.config(fg=TEXT_DIM)
             self._placeholder_shown = True
 
-    def _url(self):
-        """The entered URL, or "" while the placeholder is showing."""
-        text = self.url_entry.get().strip()
+    def _url_text(self):
+        return self.url_entry.get("1.0", "end-1c")
+
+    def _replace_url_text(self, text):
+        self.url_entry.delete("1.0", "end")
+        self.url_entry.insert("1.0", text)
+        self.url_entry.config(fg=TEXT)
+        self._fit_url_box()
+
+    def _urls(self):
+        """The links entered (one per line, or separated by spaces) in order
+        and without repeats; none while the placeholder is showing."""
+        text = self._url_text().strip()
         if self._placeholder_shown and text == URL_PLACEHOLDER:
-            return ""
-        return text
+            return []
+        return list(dict.fromkeys(text.split()))
+
+    def _url(self):
+        """The first link, or "" if there's none."""
+        urls = self._urls()
+        return urls[0] if urls else ""
+
+    def _fit_url_box(self):
+        lines = int(self.url_entry.index("end-1c").split(".")[0])
+        self.url_entry.config(height=min(max(lines, 1), 4))
+
+    def _on_url_typed(self, _e=None):
+        self._fit_url_box()
+        self._schedule_preview()
+
+    def _on_url_enter(self, _e=None):
+        self._start_download()
+        return "break"   # no new line
+
+    def _focus_next(self, event):
+        event.widget.tk_focusNext().focus()
+        return "break"   # no tab character
 
     def _paste_url(self):
         try:
@@ -402,9 +436,7 @@ class YouTubeDownloader(tk.Tk):
         except tk.TclError:   # empty clipboard, or not text
             return
         self._placeholder_shown = False
-        self.url_entry.delete(0, "end")
-        self.url_entry.insert(0, clip.strip())
-        self.url_entry.config(fg=TEXT)
+        self._replace_url_text("\n".join(clip.split()))   # one link per line
         self._schedule_preview(delay=100)
 
     def _browse_folder(self):
@@ -468,7 +500,7 @@ class YouTubeDownloader(tk.Tk):
                     "Cancel it and close the app?"):
                 return
             self._close_when_stopped = True
-            if not self._job.canceled:
+            if not self._queue.canceled:
                 self._cancel_download()
             self._set_status("Canceling… the app closes when it has stopped.",
                              WARNING)
@@ -485,7 +517,7 @@ class YouTubeDownloader(tk.Tk):
         self.progress_var.set(pct)
         self._set_status(msg, color)
 
-    # ── Downloading (the work itself is engine.DownloadJob) ─────────────────
+    # ── Downloading (the work itself is engine.DownloadQueue) ───────────────
 
     def _start_download(self):
         if not engine.YT_DLP_AVAILABLE:
@@ -498,8 +530,8 @@ class YouTubeDownloader(tk.Tk):
             messagebox.showerror("ffmpeg not found", ffmpeg_help())
             return
 
-        url = self._url()
-        if not url:
+        urls = self._urls()
+        if not urls:
             messagebox.showwarning("No URL", "Please enter a YouTube URL.")
             return
 
@@ -507,9 +539,9 @@ class YouTubeDownloader(tk.Tk):
             messagebox.showinfo("Busy", "A download is already in progress.")
             return
 
-        # Tk variables are read here, on the main thread; the job gets values.
-        self._job = engine.DownloadJob(
-            url, fmt=self.format_var.get(), folder=self.download_path.get(),
+        # Tk variables are read here, on the main thread; the queue gets values.
+        self._queue = engine.DownloadQueue(
+            urls, fmt=self.format_var.get(), folder=self.download_path.get(),
             ffmpeg=ffmpeg, whole_playlist=self.playlist_var.get(),
             on_progress=self._job_progress, on_log=self._job_log,
             ask=self._job_ask)
@@ -518,13 +550,13 @@ class YouTubeDownloader(tk.Tk):
         self.dl_btn.config(text="✖  Cancel", command=self._cancel_download)
         self.progress_var.set(0)
         self._set_status("Starting download…", WARNING)
-        self._log(f"▶ {url}")
+        self._log(f"▶ {urls[0]}" if len(urls) == 1 else f"▶ {len(urls)} links")
         self._latest_progress = self._shown_progress = None
         self._last_file = None
         self.open_btn.grid_remove()
-        self._start_worker(self._run_job, self._job)
+        self._start_worker(self._run_queue, self._queue)
 
-    # The job's callbacks run on the download thread: they only hand things
+    # The queue's callbacks run on the download thread: they only hand things
     # to the main thread (see _post and _poll_ui_queue).
     def _job_progress(self, pct, message):
         self._latest_progress = (pct, message, WARNING)
@@ -536,9 +568,9 @@ class YouTubeDownloader(tk.Tk):
         return self._ask_on_main("Playlist", question)
 
     # Runs on the download thread.
-    def _run_job(self, job):
-        job.run()
-        self._post(self._download_finished, job)
+    def _run_queue(self, queue):
+        queue.run()
+        self._post(self._download_finished, queue)
 
     # Runs on the download thread; blocks it until the user answers.
     def _ask_on_main(self, title, question):
@@ -558,7 +590,7 @@ class YouTubeDownloader(tk.Tk):
     # stops at its next progress update, or before the next playlist video;
     # it can't stop ffmpeg mid-merge, so that video still finishes.
     def _cancel_download(self):
-        self._job.cancel()
+        self._queue.cancel()
         # A progress update set just before must not overwrite "Canceling…".
         self._shown_progress = self._latest_progress
         self.dl_btn.config(state="disabled", text="Canceling…")
@@ -570,7 +602,7 @@ class YouTubeDownloader(tk.Tk):
         self.dl_btn.config(state="normal", text="⬇  Download",
                            command=self._start_download)
 
-    def _download_finished(self, job):
+    def _download_finished(self, job):   # job: the DownloadQueue
         self._end_download()
         if self._close_when_stopped:   # the user is closing the app
             return self._on_close()
@@ -589,7 +621,7 @@ class YouTubeDownloader(tk.Tk):
             self._offer_open_folder()
         else:
             self.progress_var.set(100)
-            self._set_status(f"✔ {summary}", WARNING if job.skipped else SUCCESS)
+            self._set_status(f"✔ {summary}", WARNING if job.had_problems else SUCCESS)
             self._log("✔ Done!\n" if summary == "Download complete!"
                       else f"✔ {summary}\n")
             self._offer_open_folder()
@@ -621,8 +653,9 @@ class YouTubeDownloader(tk.Tk):
 
     def _start_preview(self):
         self._preview_after = None
-        url = self._url()
-        key = (url, self.playlist_var.get())
+        urls = self._urls()
+        url = urls[0] if urls else ""
+        key = (tuple(urls), self.playlist_var.get())
         if key == self._preview_key:
             return
         self._preview_key = key
@@ -633,11 +666,13 @@ class YouTubeDownloader(tk.Tk):
             return self._set_preview("No preview for this link.", dim=True)
         self._set_preview("Loading preview…", dim=True)
         self._start_worker(self._preview_thread, url, self.playlist_var.get(),
-                           self._preview_token)
+                           self._preview_token, len(urls) - 1)
 
     # Runs on a worker thread.
-    def _preview_thread(self, url, whole_playlist, token):
+    def _preview_thread(self, url, whole_playlist, token, more):
         text, image, found = engine.preview_link(url, whole_playlist)
+        if more:   # several links: the preview shows the first one
+            text += f"\n+ {more} more link{'s' * (more != 1)}"
         self._post(self._preview_done, text, image, found, token)
 
     def _preview_done(self, text, image, found, token):
