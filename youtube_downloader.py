@@ -10,6 +10,7 @@ import threading
 import queue
 import functools
 import os
+import shutil
 import sys
 import subprocess
 
@@ -32,6 +33,61 @@ TEXT_DIM  = "#aaaaaa"
 SUCCESS   = "#22c55e"
 WARNING   = "#f59e0b"
 BORDER    = "#333333"
+
+FFMPEG_HELP = (
+    "ffmpeg is required to merge video and audio and to convert to MP3/M4A, "
+    "but it wasn't found.\n\n"
+    "Install it from a terminal:\n"
+    "    winget install ffmpeg\n\n"
+    "Then click Download again (restart the app if it still isn't found)."
+)
+
+VIDEO_MAX_HEIGHT = {"mp4_best": None, "1080p": 1080, "720p": 720, "480p": 480}
+
+
+def find_ffmpeg():
+    found = shutil.which("ffmpeg")
+    if found:
+        return found
+    # winget's PATH change only reaches processes started after the install.
+    links = [os.path.join(os.environ[var], *sub) for var, sub in (
+        ("LOCALAPPDATA", ("Microsoft", "WinGet", "Links")),
+        ("ProgramFiles", ("WinGet", "Links"))) if os.environ.get(var)]
+    return shutil.which("ffmpeg", path=os.pathsep.join(links)) if links else None
+
+
+def format_opts(fmt):
+    """yt-dlp options for one of the Format radio button values."""
+    if fmt in VIDEO_MAX_HEIGHT:
+        height = VIDEO_MAX_HEIGHT[fmt]
+        # Sort instead of filter: when nothing matches exactly, yt-dlp picks
+        # the closest format rather than failing with "format not available".
+        return {
+            "format": "bv*+ba/b",
+            "format_sort": ([f"res:{height}"] if height else []) + ["ext:mp4:m4a"],
+            "merge_output_format": "mp4",
+            # The single-file fallback ("b") is not always MP4.
+            "postprocessors": [{"key": "FFmpegVideoRemuxer",
+                                "preferedformat": "mp4"}],
+        }
+    if fmt == "mp3":
+        return {
+            "format": "bestaudio/best",
+            "postprocessors": [{
+                "key": "FFmpegExtractAudio",
+                "preferredcodec": "mp3",
+                "preferredquality": "192",
+            }],
+        }
+    if fmt == "m4a":
+        return {
+            "format": "bestaudio[ext=m4a]/bestaudio/best",
+            "postprocessors": [{
+                "key": "FFmpegExtractAudio",
+                "preferredcodec": "m4a",
+            }],
+        }
+    raise ValueError(f"unknown format: {fmt}")
 
 
 @functools.lru_cache(maxsize=None)
@@ -85,6 +141,9 @@ class YouTubeDownloader(tk.Tk):
 
         if not YT_DLP_AVAILABLE:
             self.after(300, self._prompt_install)
+        if not find_ffmpeg():
+            self._set_status("ffmpeg not found, see the log below", WARNING)
+            self._log(FFMPEG_HELP)
 
     # ── UI Construction ─────────────────────────────────────────────────────
 
@@ -334,31 +393,10 @@ class YouTubeDownloader(tk.Tk):
             "no_warnings": False,
         }
 
-        if fmt == "mp4_best":
-            opts["format"] = "bestvideo[ext=mp4]+bestaudio[ext=m4a]/best[ext=mp4]/best"
-            opts["merge_output_format"] = "mp4"
-        elif fmt == "1080p":
-            opts["format"] = "bestvideo[height<=1080][ext=mp4]+bestaudio[ext=m4a]/best[height<=1080]"
-            opts["merge_output_format"] = "mp4"
-        elif fmt == "720p":
-            opts["format"] = "bestvideo[height<=720][ext=mp4]+bestaudio[ext=m4a]/best[height<=720]"
-            opts["merge_output_format"] = "mp4"
-        elif fmt == "480p":
-            opts["format"] = "bestvideo[height<=480][ext=mp4]+bestaudio[ext=m4a]/best[height<=480]"
-            opts["merge_output_format"] = "mp4"
-        elif fmt == "mp3":
-            opts["format"] = "bestaudio/best"
-            opts["postprocessors"] = [{
-                "key": "FFmpegExtractAudio",
-                "preferredcodec": "mp3",
-                "preferredquality": "192",
-            }]
-        elif fmt == "m4a":
-            opts["format"] = "bestaudio[ext=m4a]/bestaudio/best"
-            opts["postprocessors"] = [{
-                "key": "FFmpegExtractAudio",
-                "preferredcodec": "m4a",
-            }]
+        opts.update(format_opts(fmt))
+        ffmpeg = find_ffmpeg()
+        if ffmpeg:
+            opts["ffmpeg_location"] = ffmpeg
 
         return opts
 
@@ -390,6 +428,10 @@ class YouTubeDownloader(tk.Tk):
     def _start_download(self):
         if not YT_DLP_AVAILABLE:
             self._prompt_install(); return
+
+        if not find_ffmpeg():
+            messagebox.showerror("ffmpeg not found", FFMPEG_HELP)
+            return
 
         url = self.url_entry.get().strip()
         if not url or url.startswith("https://www.youtube.com/watch?v=..."):

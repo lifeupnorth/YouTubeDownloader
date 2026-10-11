@@ -7,6 +7,9 @@ Install ffmpeg before running:
 - Wait 10 seconds.
 - Done.
 
+The app checks for ffmpeg at startup and before each download (it also finds a
+winget install made while the app is open).
+
 Run the tests:
 ```
 python -m unittest discover -s tests -v

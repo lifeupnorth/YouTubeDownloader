@@ -89,6 +89,7 @@ class ThreadSafetyTest(unittest.TestCase):
         # __init__ would schedule a real (blocking) install prompt.
         for patcher in (
                 mock.patch.object(ytd, "YT_DLP_AVAILABLE", True),
+                mock.patch.object(ytd, "find_ffmpeg", return_value="ffmpeg"),
                 mock.patch.object(ytd.messagebox, "askyesno",
                                   side_effect=lambda *a, **k:
                                   self._on_dialog("askyesno"))):
