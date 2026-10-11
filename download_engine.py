@@ -9,6 +9,7 @@ window (youtube_downloader.py) turns those callbacks into screen updates.
 import functools
 import glob
 import importlib
+import importlib.util
 import io
 import json
 import os
@@ -35,6 +36,10 @@ except ImportError:
     Image = None
 
 
+# "yt-dlp", "yt-dlp[default]==2026.8.19", ... but not "yt-dlp-ejs==0.8.0".
+_YT_DLP_LINE = re.compile(r"yt-dlp\s*(\[[^\]]*\])?\s*(==|>=|~=|<|$)", re.IGNORECASE)
+
+
 def _yt_dlp_requirement():
     # requirements.txt next to this file is the only place the yt-dlp pin is
     # kept (Dependabot bumps it). Unpinned if the app was copied on its own.
@@ -44,15 +49,26 @@ def _yt_dlp_requirement():
         with open(path, encoding="utf-8") as f:
             for line in f:
                 line = line.split("#", 1)[0].strip()
-                if line.lower().startswith("yt-dlp"):
+                if _YT_DLP_LINE.match(line):
                     return line
     except OSError:
         pass
-    return "yt-dlp"
+    return "yt-dlp[default]"
 
 
-# What the in-app installer runs pip with, e.g. "yt-dlp==2026.8.19".
+# What the in-app installer runs pip with, e.g. "yt-dlp[default]==2026.8.19":
+# the "default" extra brings yt-dlp-ejs (YouTube's challenge solver) and the
+# libraries yt-dlp's own builds include (websockets, requests, brotli, ...).
 YT_DLP_REQUIREMENT = _yt_dlp_requirement()
+
+# Modules from that extra the .exe must bundle (mutagen, used only to embed
+# thumbnails and metadata, is left out: the app doesn't do either).
+YT_DLP_EXTRAS = ("requests", "urllib3", "websockets", "brotli", "certifi", "Cryptodome")
+
+
+def missing_yt_dlp_extras():
+    """The modules in YT_DLP_EXTRAS that can't be imported."""
+    return [name for name in YT_DLP_EXTRAS if importlib.util.find_spec(name) is None]
 
 
 def load_yt_dlp():
@@ -153,7 +169,12 @@ VIDEO_MAX_RES = {"mp4_best": None, "1080p": 1080, "720p": 720, "480p": 480}
 
 
 def format_opts(fmt):
-    """yt-dlp options for one of the Format choices ("mp4_best", "mp3", ...)."""
+    """yt-dlp options for one of the Format choices ("mp4_best", "mp3", ...).
+
+    "final_ext" is the extension after conversion. yt-dlp needs it to see
+    that a converted file (an MP3 made from a WebM) is already there; without
+    it a second run downloads and converts everything again.
+    """
     if fmt in VIDEO_MAX_RES:
         res = VIDEO_MAX_RES[fmt]
         # Sort instead of filter: when nothing matches exactly, yt-dlp picks
@@ -162,6 +183,7 @@ def format_opts(fmt):
             "format": "bv*+ba/b",
             "format_sort": ([f"res:{res}"] if res else []) + ["ext:mp4:m4a"],
             "merge_output_format": "mp4",
+            "final_ext": "mp4",
             # The single-file fallback ("b") is not always MP4.
             "postprocessors": [{"key": "FFmpegVideoRemuxer",
                                 "preferedformat": "mp4"}],
@@ -169,6 +191,7 @@ def format_opts(fmt):
     if fmt == "mp3":
         return {
             "format": "bestaudio/best",
+            "final_ext": "mp3",
             "postprocessors": [{
                 "key": "FFmpegExtractAudio",
                 "preferredcodec": "mp3",
@@ -178,6 +201,7 @@ def format_opts(fmt):
     if fmt == "m4a":
         return {
             "format": "bestaudio[ext=m4a]/bestaudio/best",
+            "final_ext": "m4a",
             "postprocessors": [{
                 "key": "FFmpegExtractAudio",
                 "preferredcodec": "m4a",
@@ -620,10 +644,7 @@ class DownloadJob:
     # or tab (decided from what yt-dlp extracts, not from the URL).
     def _download_unless_declined(self, ydl):
         info = ydl.extract_info(self.url, download=False, process=False)
-        target = info
-        while target and target.get("_type") in ("url", "url_transparent"):
-            target = ydl.extract_info(target["url"], download=False, process=False,
-                                      ie_key=target.get("ie_key"))
+        target = _follow_url_results(ydl, info)   # at most 3 hops
         if target is None or info.get("_type") == "url":
             info = target   # what process_ie_result would extract again
         if info is None:
@@ -778,7 +799,11 @@ class DownloadQueue:
                     pct, prefix + msg),
                 **self.job_options)
             self.jobs.append(job)
-            job.run()
+            try:
+                job.run()
+            except Exception as exc:   # a bug, not a download problem
+                job.outcome = "failed"
+                job.error = f"Unexpected error: {type(exc).__name__}: {exc}"
             if total > 1 and job.outcome == "failed" and not job.error_logged:
                 self._on_log(f"✘ {job.summary()}")
         return self.outcome
@@ -787,9 +812,14 @@ class DownloadQueue:
 
     @property
     def outcome(self):
-        if self.canceled:
+        # A cancel only counts if it stopped something: clicked just as the
+        # last link finished, the result is that link's.
+        if self.canceled and (len(self.jobs) < len(self.urls)
+                              or self.jobs[-1].outcome == "canceled"):
             return "canceled"
         outcomes = [job.outcome for job in self.jobs]
+        if not outcomes:   # it never ran, or crashed before the first link
+            return None
         if len(outcomes) == 1:
             return outcomes[0]
         if "done" in outcomes:

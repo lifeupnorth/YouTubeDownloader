@@ -24,6 +24,8 @@ The radio buttons (`FORMATS` in the window) store a value in `format_var`. When 
 | Audio Only (MP3) | `mp3` | `bestaudio/best` | `FFmpegExtractAudio`, codec `mp3`, quality `192` |
 | Audio Only (M4A) | `m4a` | `bestaudio[ext=m4a]/bestaudio/best` | `FFmpegExtractAudio`, codec `m4a` |
 
+Every choice also sets `final_ext` (`mp4`, `mp3` or `m4a`), the extension after conversion. yt-dlp needs it to recognize a converted file that's already there (an MP3 made from a WebM), so a second run says "Already downloaded" instead of downloading and converting again.
+
 Any other value raises `ValueError`.
 
 Sources: [download_engine.py:95-133](https://github.com/lifeupnorth/YouTubeDownloader/blob/fed021846b04c093d045f0ec3de2b53d5ea42060/download_engine.py#L95-L133), [download_engine.py:352-353](https://github.com/lifeupnorth/YouTubeDownloader/blob/fed021846b04c093d045f0ec3de2b53d5ea42060/download_engine.py#L352-L353), [youtube_downloader.py:50-57](https://github.com/lifeupnorth/YouTubeDownloader/blob/fed021846b04c093d045f0ec3de2b53d5ea42060/youtube_downloader.py#L50-L57)

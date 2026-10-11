@@ -4,10 +4,10 @@ A small app to download YouTube videos written in Python.
 ## Requirements
 
 - **Python 3.10 or newer**, with Tkinter. The python.org installers for Windows and macOS include it; on Linux you may need a separate package, e.g. `sudo apt install python3-tk`.
-- **yt-dlp**, pinned to a tested version in `requirements.txt`.
+- **yt-dlp** with its recommended extras (`yt-dlp[default]`), pinned to a tested version in `requirements.txt`. The extras include **yt-dlp-ejs**, the solver for YouTube's JavaScript challenges.
 - **Pillow** (optional, also in `requirements.txt`), for thumbnails in the link preview.
 - **ffmpeg**, used to merge video and audio and to convert to MP3/M4A.
-- **A JavaScript runtime** for YouTube: deno (yt-dlp's default; `winget install DenoLand.Deno`), node or bun, plus **yt-dlp-ejs** (in `requirements.txt`), the challenge solver it runs. Without them some formats may be missing. The .exe includes both.
+- **A JavaScript runtime** for YouTube: deno (yt-dlp's default; `winget install DenoLand.Deno`), node or bun, which runs yt-dlp-ejs. Without it some formats may be missing. The .exe includes deno.
 
 ## Install
 

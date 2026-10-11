@@ -28,6 +28,18 @@ yt-dlp-ejs
   into the public domain (The Unlicense); it includes astring (MIT license)
   and meriyah (ISC license).
 
+yt-dlp's other bundled dependencies (its "default" extra)
+  requests       https://github.com/psf/requests          Apache License 2.0
+  urllib3        https://github.com/urllib3/urllib3       MIT license
+  charset-normalizer  https://github.com/jawah/charset_normalizer  MIT license
+  idna           https://github.com/kjd/idna              BSD 3-Clause
+  websockets     https://github.com/python-websockets/websockets  BSD 3-Clause
+  Brotli         https://github.com/google/brotli         MIT license
+  certifi        https://github.com/certifi/python-certifi
+                 Mozilla Public License 2.0; unmodified, source at that link
+  pycryptodomex  https://github.com/Legrandin/pycryptodome
+                 BSD 2-Clause and public domain parts
+
 Pillow
   https://python-pillow.github.io/
   MIT-CMU license.
