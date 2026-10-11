@@ -24,8 +24,13 @@ GUARDED = [
 
 
 def make_fake_ydl(streams=2, videos=1, overshoot=0, error=None, fail=(),
-                  already=()):
+                  already=(), probe=("video",)):
+    """probe: the _type returned by each extract_info(process=False) call."""
+    probes = list(probe)
+
     class FakeYDL:
+        calls = []
+
         def __init__(self, opts):
             self.opts = opts
             self.pps = []
@@ -44,7 +49,20 @@ def make_fake_ydl(streams=2, videos=1, overshoot=0, error=None, fail=(),
         def __exit__(self, *exc):
             return False
 
+        def extract_info(self, url, download=True, process=True, ie_key=None):
+            FakeYDL.calls.append("probe")
+            return {"_type": probes.pop(0), "title": "Fake list",
+                    "url": "https://example.com/next", "ie_key": "Fake"}
+
+        def process_ie_result(self, info, download=True):
+            FakeYDL.calls.append("download")
+            self._run()
+
         def download(self, urls):
+            FakeYDL.calls.append("download")
+            self._run()
+
+        def _run(self):
             hooks = self.opts["progress_hooks"]
             for video in range(videos):
                 info = {"requested_formats": [{}] * streams} if streams > 1 else {}
@@ -140,6 +158,13 @@ class ThreadSafetyTest(unittest.TestCase):
             orig_set_status(msg, color)
 
         self.app._set_status = record_status
+        orig_declined = self.app._download_declined
+
+        def declined():
+            orig_declined()
+            self.app.quit()
+
+        self.app._download_declined = declined
         self.app.url_entry.delete(0, "end")
         self.app.url_entry.insert(0, "https://www.youtube.com/watch?v=test")
         self.on_dialog = lambda name: self.app.quit()
@@ -232,24 +257,33 @@ class ThreadSafetyTest(unittest.TestCase):
 
     def test_whole_playlist(self):
         self.start_playlist()
-        self.run_download(make_fake_ydl(streams=2, videos=3))
+        fake = make_fake_ydl(streams=2, videos=3)
+        self.run_download(fake)
+        self.assertEqual(fake.calls, ["download"], "ticked box shouldn't probe")
         self.assertEqual(self.dialogs, ["showinfo"])
         self.assertEqual(self.violations, [])
         for video in range(3):
             self.assertEqual(self.log().count(f"Saved: v{video}.mp4"), 1)
         self.assertEqual(self.statuses[-1], "✔ Done: 3 saved")
-        for n in (1, 2, 3):
-            self.assertTrue(any(m.startswith(f"Video {n}/3 · ") for m in self.statuses),
-                            f"no status for video {n}")
-        self.assertEqual(sum(1 for a, b in zip(self.progress, self.progress[1:])
-                             if b < a), 2, "progress should restart per video")
+
+    # Directly, as coalescing can drop a whole video's updates in the UI.
+    def test_status_names_the_playlist_entry(self):
+        self.app._stream_index, self.app._stream_count = 0, 1
+        entry = {"playlist_index": 3, "n_entries": 30}
+        self.app._progress_hook({"status": "downloading", "total_bytes": 100,
+                                 "downloaded_bytes": 45, "speed": 1e6, "eta": 1,
+                                 "info_dict": entry})
+        self.assertTrue(self.app._latest_progress[1].startswith(
+            "Video 3/30 · Downloading… "), self.app._latest_progress)
+        self.app._progress_hook({"status": "finished", "info_dict": entry})
+        self.assertEqual(self.app._latest_progress[1], "Video 3/30 · Processing…")
 
     def test_playlist_skips_unavailable_entry(self):
         self.start_playlist()
         self.run_download(make_fake_ydl(streams=1, videos=3, fail={1}))
         self.assertEqual(self.dialogs, ["showinfo"])
         self.assertIn("Saved: v2.mp4", self.log())
-        self.assertIn("Skipped: [youtube] v1: Private video", self.log())
+        self.assertIn("✘ [youtube] v1: Private video", self.log())
         self.assertEqual(self.statuses[-1], "✔ Done: 2 saved, 1 skipped")
 
     def test_playlist_with_nothing_saved_fails(self):
@@ -265,31 +299,45 @@ class ThreadSafetyTest(unittest.TestCase):
         self.assertNotIn("Saved: v0.mp4", self.log())
         self.assertEqual(self.statuses[-1], "✔ Done: 1 saved, 1 already downloaded")
 
-    def test_playlist_link_asks_first(self):
-        url = "https://www.youtube.com/playlist?list=x"
-        self.app.url_entry.delete(0, "end")
-        self.app.url_entry.insert(0, url)
-        self.app._start_worker = mock.Mock()
+    def test_single_video_error_is_reported_once(self):
+        self.run_download(make_fake_ydl(streams=1, fail={0}))
+        self.assertEqual(self.dialogs, ["showerror"])
+        self.assertEqual(self.log().count("Private video"), 1)
+        self.assertIn("Private video", self.statuses[-1])
+
+    def test_single_video_does_not_ask(self):
+        fake = make_fake_ydl(streams=1)
+        self.run_download(fake)
+        self.assertEqual(fake.calls, ["probe", "download"])
+        self.assertEqual(self.dialogs, ["showinfo"])
+
+    def test_asks_before_downloading_a_playlist(self):
+        fake = make_fake_ydl(streams=1, videos=2, probe=("playlist",))
         with mock.patch.object(ytd.messagebox, "askyesno", return_value=False) as ask:
-            self.app._start_download()
+            self.run_download(fake)
         ask.assert_called_once()
-        self.app._start_worker.assert_not_called()
+        self.assertIn('"Fake list" is a playlist or channel', ask.call_args.args[1])
+        self.assertEqual(fake.calls, ["probe"])
         self.assertFalse(self.app.playlist_var.get())
+        self.assertFalse(self.app.is_running)
+        self.assertEqual(self.statuses[-1], "Playlist not downloaded.")
+
+        fake = make_fake_ydl(streams=1, videos=2, probe=("playlist",))
         with mock.patch.object(ytd.messagebox, "askyesno", return_value=True):
-            self.app._start_download()
+            self.run_download(fake)
+        self.assertEqual(fake.calls, ["probe", "download"])
         self.assertTrue(self.app.playlist_var.get())
-        opts = self.app._start_worker.call_args.args[2]
-        self.assertIs(opts["noplaylist"], False)
-        self.assertEqual(opts["ignoreerrors"], "only_download")
-        self.assertIn("%(playlist_index)03d - ", opts["outtmpl"])
-        # A video in a playlist doesn't ask.
-        self.app.playlist_var.set(False)
-        self.app.is_running = False
-        self.app.url_entry.delete(0, "end")
-        self.app.url_entry.insert(0, "https://www.youtube.com/watch?v=t&list=x")
-        with mock.patch.object(ytd.messagebox, "askyesno") as ask:
-            self.app._start_download()
-        ask.assert_not_called()
+        self.assertEqual(self.statuses[-1], "✔ Done: 2 saved")
+        self.assertEqual(self.violations, [])
+        self.assertEqual(self.callback_errors, [])
+
+    def test_follows_url_results_before_asking(self):
+        # e.g. a channel's home page redirecting to its Videos tab.
+        fake = make_fake_ydl(streams=1, videos=2, probe=("url", "playlist"))
+        with mock.patch.object(ytd.messagebox, "askyesno", return_value=True) as ask:
+            self.run_download(fake)
+        ask.assert_called_once()
+        self.assertEqual(fake.calls, ["probe", "probe", "download"])
 
 
 if __name__ == "__main__":

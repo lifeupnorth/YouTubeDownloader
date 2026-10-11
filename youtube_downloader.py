@@ -13,7 +13,6 @@ import os
 import shutil
 import sys
 import subprocess
-from urllib.parse import parse_qs, urlparse
 
 # ── Try importing yt-dlp; offer to install if missing ──────────────────────
 try:
@@ -114,15 +113,6 @@ def format_opts(fmt):
             }],
         }
     raise ValueError(f"unknown format: {fmt}")
-
-
-def has_playlist(url):
-    return "list" in parse_qs(urlparse(url).query)
-
-
-def is_playlist_link(url):
-    """A link to a playlist itself, not to a video in one (watch?v=…&list=…)."""
-    return urlparse(url).path.rstrip("/").endswith("/playlist") and has_playlist(url)
 
 
 class _YdlLogger:
@@ -459,24 +449,24 @@ class YouTubeDownloader(tk.Tk):
     def _get_ydl_opts(self, url, ffmpeg):
         fmt = self.format_var.get()
         out_dir = self.download_path.get()
-        playlist = self.playlist_var.get() and has_playlist(url)
-        name = "%(title)s.%(ext)s"
-        if playlist:
-            # A folder per playlist; the index keeps same-title videos apart.
-            name = os.path.join("%(playlist_title)s", "%(playlist_index)03d - " + name)
 
         opts = {
-            "outtmpl": os.path.join(out_dir, name),
+            # Playlist entries go to "<playlist>/<NNN> - <title>.<ext>" (the
+            # index keeps same-title videos apart); single videos to
+            # "<title>.<ext>", as an empty folder name collapses.
+            "outtmpl": os.path.join(out_dir, "%(playlist_title|)s",
+                                    "%(playlist_index&{:03d} - |)s%(title)s.%(ext)s"),
             "progress_hooks": [self._progress_hook],
             # Only affects links to a video in a playlist (watch?v=…&list=…).
-            "noplaylist": not playlist,
+            "noplaylist": not self.playlist_var.get(),
             "quiet": True,
             "no_warnings": False,
-        }
-        if playlist:
             # Like the yt-dlp CLI: skip unavailable entries instead of stopping.
-            opts["ignoreerrors"] = "only_download"
-            opts["logger"] = _YdlLogger(self._entry_failed)
+            "ignoreerrors": "only_download",
+            "logger": _YdlLogger(self._entry_failed),
+            # "auto" colors the ERROR: prefix when started from a terminal.
+            "color": {"stdout": "never", "stderr": "never"},
+        }
 
         opts.update(format_opts(fmt))
         opts["ffmpeg_location"] = ffmpeg
@@ -522,11 +512,25 @@ class YouTubeDownloader(tk.Tk):
             self._already += 1
             self._post(self._log, f"• Already downloaded: {path}")
 
-    # Runs on the download thread (yt-dlp's logger, playlist mode only).
+    # Runs on the download thread (yt-dlp's logger).
     def _entry_failed(self, msg):
         msg = msg.removeprefix("ERROR: ")
         self._skipped.append(msg)
-        self._post(self._log, f"✘ Skipped: {msg}")
+        self._post(self._log, f"✘ {msg}")
+
+    # Runs on the download thread; blocks it until the user answers.
+    def _ask_on_main(self, title, question):
+        answer, done = [], threading.Event()
+
+        def ask():
+            answer.append(messagebox.askyesno(title, question))
+            done.set()
+
+        self._post(ask)
+        while not done.wait(0.1):
+            if self._closing:
+                return False
+        return answer[0]
 
     def _start_download(self):
         if not YT_DLP_AVAILABLE:
@@ -547,12 +551,6 @@ class YouTubeDownloader(tk.Tk):
             messagebox.showinfo("Busy", "A download is already in progress.")
             return
 
-        if is_playlist_link(url) and not self.playlist_var.get():
-            if not messagebox.askyesno(
-                    "Playlist link", "This is a playlist link. Download all videos?"):
-                return
-            self.playlist_var.set(True)
-
         opts = self._get_ydl_opts(url, ffmpeg)
         self.is_running = True
         self.dl_btn.config(state="disabled", text="Downloading…")
@@ -565,9 +563,10 @@ class YouTubeDownloader(tk.Tk):
         self._saved = self._already = 0
         self._skipped = []
         self._latest_progress = self._shown_progress = None
-        self._start_worker(self._download_thread, url, opts)
+        self._start_worker(self._download_thread, url, opts,
+                           not self.playlist_var.get())
 
-    def _download_thread(self, url, opts):
+    def _download_thread(self, url, opts, ask_playlist):
         try:
             with yt_dlp.YoutubeDL(opts) as ydl:
                 base = yt_dlp.postprocessor.PostProcessor
@@ -575,18 +574,53 @@ class YouTubeDownloader(tk.Tk):
                                        when="before_dl")
                 ydl.add_post_processor(_callback_pp_class(base)(self._file_done),
                                        when="after_move")
-                ydl.download([url])
+                if not ask_playlist:
+                    ydl.download([url])
+                elif not self._download_unless_declined(ydl, url):
+                    self._post(self._download_declined)
+                    return
             self._post(self._download_done, True, None)
         except Exception as exc:
             self._post(self._download_done, False, str(exc))
 
-    def _download_done(self, success, error):
+    # With the box unticked, ask before downloading a playlist, channel or tab
+    # (decided from what yt-dlp extracts, not from the URL).
+    def _download_unless_declined(self, ydl, url):
+        info = ydl.extract_info(url, download=False, process=False)
+        target = info
+        while target and target.get("_type") in ("url", "url_transparent"):
+            target = ydl.extract_info(target["url"], download=False, process=False,
+                                      ie_key=target.get("ie_key"))
+        if target is None or info.get("_type") == "url":
+            info = target   # what process_ie_result would extract again
+        if info is None:
+            return True     # the extraction error is already logged
+        if target.get("_type") == "playlist":
+            title = target.get("title") or "This link"
+            if not self._ask_on_main(
+                    "Playlist", f"\"{title}\" is a playlist or channel.\n\n"
+                                "Download all its videos?"):
+                return False
+            self._post(self.playlist_var.set, True)
+        ydl.process_ie_result(info, download=True)
+        return True
+
+    def _end_download(self):
         self._worker_finished()
         self.is_running = False
         self.dl_btn.config(state="normal", text="⬇  Download")
 
+    def _download_declined(self):
+        self._end_download()
+        self.progress_var.set(0)
+        self._set_status("Playlist not downloaded.")
+        self._log("✘ Playlist not downloaded.\n")
+
+    def _download_done(self, success, error):
+        self._end_download()
+        logged = False
         if success and self._skipped and not (self._saved or self._already):
-            success, error = False, self._skipped[0]
+            success, error, logged = False, self._skipped[0], True
         if success and (self._skipped or self._saved + self._already > 1):
             parts = [f"{self._saved} saved"]
             if self._already:
@@ -606,7 +640,8 @@ class YouTubeDownloader(tk.Tk):
         else:
             self.progress_var.set(0)
             self._set_status(f"✘ Error: {error}", ACCENT)
-            self._log(f"✘ Error: {error}\n")
+            if not logged:
+                self._log(f"✘ Error: {error}\n")
             messagebox.showerror("Download Failed", str(error))
 
     def _recheck_ffmpeg(self, event=None):
