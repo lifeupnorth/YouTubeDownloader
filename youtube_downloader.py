@@ -13,6 +13,7 @@ import queue
 import subprocess
 import sys
 import threading
+import time
 import tkinter as tk
 from tkinter import filedialog, messagebox, ttk
 
@@ -89,6 +90,9 @@ def save_settings(data):
         pass   # not being able to remember settings isn't worth an error
 
 
+UPDATE_CHECK_INTERVAL = 24 * 60 * 60   # seconds
+
+
 PREVIEW_HINT = "Paste a link to see its title and length here."
 
 
@@ -116,6 +120,24 @@ def _ffmpeg_install_hint():
     return "Install it with your package manager, e.g.:\n    sudo apt install ffmpeg"
 
 
+def js_solver_help():
+    return ("⚠ yt-dlp-ejs isn't installed, so the JavaScript runtime can't solve "
+            "YouTube's challenges and some formats may be missing. Install it:  "
+            "pip install -r requirements.txt")
+
+
+def js_runtime_help():
+    if sys.platform == "win32":
+        install = "winget install DenoLand.Deno"
+    elif sys.platform == "darwin":
+        install = "brew install deno"
+    else:
+        install = "curl -fsSL https://deno.land/install.sh | sh"
+    return ("⚠ No JavaScript runtime found. yt-dlp uses one (deno) for YouTube; "
+            "without it some formats may be missing. Install it from a terminal:"
+            f"\n    {install}\nThe app picks it up on the next download.")
+
+
 def ffmpeg_help(startup=False):
     then = ("Once it's installed, the app detects it (restart it if it doesn't)."
             if startup else
@@ -125,7 +147,7 @@ def ffmpeg_help(startup=False):
 
 
 class YouTubeDownloader(tk.Tk):
-    def __init__(self):
+    def __init__(self, *, update_check=True):
         super().__init__()
         self.title("YT Downloader")
         self.configure(bg=BG)
@@ -152,6 +174,7 @@ class YouTubeDownloader(tk.Tk):
         self._preview_key   = None     # (links, whole playlist) last looked up
         self._preview_token = 0        # newest lookup; older answers are dropped
         self._preview_image = None     # keeps the PhotoImage alive
+        self.update_check_var = tk.BooleanVar(value=True)
         self._apply_saved_settings()
 
         self._build_ui()
@@ -164,7 +187,12 @@ class YouTubeDownloader(tk.Tk):
         if self._ffmpeg_missing:
             self._set_status(FFMPEG_MISSING_STATUS, WARNING)
             self._log(ffmpeg_help(startup=True))
+        self._js_runtime = None
+        if engine.YT_DLP_AVAILABLE:   # it runs "<runtime> --version": a worker's job
+            self._start_worker(self._find_js_runtime_thread)
         self._note_yt_dlp_version()
+        if update_check:
+            self._maybe_check_for_update()
         self.bind("<FocusIn>", self._recheck_ffmpeg, add="+")
 
     # ── UI Construction ─────────────────────────────────────────────────────
@@ -182,6 +210,13 @@ class YouTubeDownloader(tk.Tk):
         self.powered_lbl = tk.Label(hdr, text=self._powered_by_text(),
                                     font=(UI_FONT, 9), bg=SURFACE, fg=TEXT_DIM)
         self.powered_lbl.grid(row=1, column=0, pady=(2, 0))
+        if engine.app_version():   # only a release .exe checks
+            tk.Checkbutton(hdr, text="Check for updates at startup",
+                           variable=self.update_check_var, font=(UI_FONT, 8),
+                           bg=SURFACE, fg=TEXT_DIM, selectcolor=SURFACE2,
+                           activebackground=SURFACE, activeforeground=TEXT,
+                           cursor="hand2", command=self._save_settings,
+                           ).grid(row=2, column=0)
 
         # ── Main card ──
         card = tk.Frame(self, bg=SURFACE, padx=28, pady=24,
@@ -360,10 +395,15 @@ class YouTubeDownloader(tk.Tk):
         folder = saved.get("folder")
         if isinstance(folder, str) and os.path.isdir(folder):
             self.download_path.set(folder)
+        if isinstance(saved.get("check_updates"), bool):
+            self.update_check_var.set(saved["check_updates"])
 
     def _save_settings(self):
-        save_settings({"folder": self.download_path.get(),
-                       "format": self.format_var.get()})
+        # Keeps the other keys, e.g. when updates were last checked.
+        save_settings({**load_settings(),
+                       "folder": self.download_path.get(),
+                       "format": self.format_var.get(),
+                       "check_updates": self.update_check_var.get()})
 
     def _fit_window(self):
         # Open tall enough to show everything (but no taller than the screen).
@@ -466,6 +506,19 @@ class YouTubeDownloader(tk.Tk):
             self._after_id = self.after(50, self._poll_ui_queue)
         threading.Thread(target=target, args=args, daemon=True).start()
 
+    # Runs on a worker thread.
+    def _find_js_runtime_thread(self):
+        self._post(self._js_runtime_found, engine.find_js_runtime(),
+                   engine.js_solver_version())
+
+    def _js_runtime_found(self, runtime, solver):
+        self._worker_finished()
+        self._js_runtime = runtime
+        if runtime is None:
+            self._log(js_runtime_help())
+        elif solver is None:
+            self._log(js_solver_help())
+
     def _worker_finished(self):
         self._active_workers -= 1
 
@@ -492,7 +545,7 @@ class YouTubeDownloader(tk.Tk):
     def _on_close(self):
         # During a download, ask first, then cancel it and close once it has
         # stopped, so its partial files are removed. Closing again while that
-        # runs (e.g. ffmpeg can't be interrupted) closes right away.
+        # runs (e.g. stuck on a slow network request) closes right away.
         if self.is_running and not self._close_when_stopped:
             if not messagebox.askyesno(
                     "Download in progress",
@@ -543,6 +596,7 @@ class YouTubeDownloader(tk.Tk):
         self._queue = engine.DownloadQueue(
             urls, fmt=self.format_var.get(), folder=self.download_path.get(),
             ffmpeg=ffmpeg, whole_playlist=self.playlist_var.get(),
+            js_runtime=self._js_runtime,
             on_progress=self._job_progress, on_log=self._job_log,
             ask=self._job_ask)
         self._save_settings()
@@ -569,6 +623,8 @@ class YouTubeDownloader(tk.Tk):
 
     # Runs on the download thread.
     def _run_queue(self, queue):
+        if queue.job_options.get("js_runtime") is None:   # installed since startup?
+            queue.job_options["js_runtime"] = engine.find_js_runtime()
         queue.run()
         self._post(self._download_finished, queue)
 
@@ -576,19 +632,27 @@ class YouTubeDownloader(tk.Tk):
     def _ask_on_main(self, title, question):
         answer, done = [], threading.Event()
 
+        # If the dialog fails, the error goes to the log (the windowed .exe has
+        # no stderr for Tk's report) and the answer is No; either way the
+        # download thread stops waiting.
         def ask():
-            answer.append(messagebox.askyesno(title, question))
-            done.set()
+            try:
+                answer.append(messagebox.askyesno(title, question))
+            except Exception as exc:
+                self._log(f"✘ Couldn't ask about the playlist: {exc}")
+                raise
+            finally:
+                done.set()
 
         self._post(ask)
         while not done.wait(0.1):
             if self._closing:
                 return False
-        return answer[0]
+        return bool(answer and answer[0])
 
     # The Download button turns into Cancel while a download runs. yt-dlp
-    # stops at its next progress update, or before the next playlist video;
-    # it can't stop ffmpeg mid-merge, so that video still finishes.
+    # stops at its next progress update or status message (also while it
+    # reads a playlist), and a running ffmpeg conversion or merge is stopped.
     def _cancel_download(self):
         self._queue.cancel()
         # A progress update set just before must not overwrite "Canceling…".
@@ -666,11 +730,11 @@ class YouTubeDownloader(tk.Tk):
             return self._set_preview("No preview for this link.", dim=True)
         self._set_preview("Loading preview…", dim=True)
         self._start_worker(self._preview_thread, url, self.playlist_var.get(),
-                           self._preview_token, len(urls) - 1)
+                           self._preview_token, len(urls) - 1, self._js_runtime)
 
     # Runs on a worker thread.
-    def _preview_thread(self, url, whole_playlist, token, more):
-        text, image, found = engine.preview_link(url, whole_playlist)
+    def _preview_thread(self, url, whole_playlist, token, more, js_runtime=None):
+        text, image, found = engine.preview_link(url, whole_playlist, js_runtime)
         if more:   # several links: the preview shows the first one
             text += f"\n+ {more} more link{'s' * (more != 1)}"
         self._post(self._preview_done, text, image, found, token)
@@ -701,8 +765,31 @@ class YouTubeDownloader(tk.Tk):
 
     def _powered_by_text(self):
         version = engine.yt_dlp_version()
-        return f"Powered by yt-dlp {version}" if version else \
+        text = f"Powered by yt-dlp {version}" if version else \
             "Powered by yt-dlp (not installed)"
+        app = engine.app_version()
+        return f"v{app} · {text}" if app else text
+
+    # A release .exe asks GitHub (api.github.com) for its latest release, at
+    # most once a day, while "Check for updates at startup" is ticked.
+    def _maybe_check_for_update(self):
+        if engine.app_version() is None or not self.update_check_var.get():
+            return
+        saved = load_settings()
+        last, now = saved.get("last_update_check"), time.time()
+        if isinstance(last, (int, float)) and 0 <= now - last < UPDATE_CHECK_INTERVAL:
+            return
+        save_settings({**saved, "last_update_check": now})
+        self._start_worker(self._update_thread)
+
+    # Says once, in the log, when a newer release is out.
+    def _update_thread(self):
+        self._post(self._update_checked, engine.check_for_update())
+
+    def _update_checked(self, notice):
+        self._worker_finished()
+        if notice:
+            self._log(notice)
 
     # The app is tested with the version pinned in requirements.txt; say so
     # if another one is installed (yt-dlp often needs updates for YouTube).
@@ -774,14 +861,25 @@ def self_check(path):
         run = subprocess.run([ffmpeg, "-version"], capture_output=True, text=True,
                              creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0))
         ffmpeg_version = run.stdout.splitlines()[0] if run.stdout else None
+    js_runtime = engine.find_js_runtime()
+    js_runtime_version = None
+    if js_runtime:
+        run = subprocess.run([js_runtime[1], "--version"], capture_output=True, text=True,
+                             creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0))
+        js_runtime_version = run.stdout.splitlines()[0] if run.stdout else None
     result = {"frozen": bool(getattr(sys, "frozen", False)),
+              "app_version": engine.app_version(),
               "yt_dlp": engine.yt_dlp_version(),
               "yt_dlp_pin": engine.pinned_yt_dlp_version(),
               "ffmpeg": ffmpeg, "ffmpeg_bundled": engine.bundled_ffmpeg() is not None,
               "ffmpeg_version": ffmpeg_version,
+              "js_runtime": js_runtime and js_runtime[1],
+              "js_runtime_version": js_runtime_version,
+              "deno_bundled": engine.bundled_deno() is not None,
+              "js_solver": engine.js_solver_version(),
               "thumbnails": ImageTk is not None and engine.Image is not None}
     try:
-        app = YouTubeDownloader()   # also checks that Tk works in this build
+        app = YouTubeDownloader(update_check=False)   # also checks that Tk works
         app.update()
         result["window"] = app.title()
         app.destroy()

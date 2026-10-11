@@ -4,6 +4,11 @@
 # out; run the tests before merging it.
 yt-dlp==2026.8.19
 
+# YouTube's challenge solver, which yt-dlp runs with the JavaScript runtime
+# (deno). yt-dlp pins it in its "default" extra; bump the two together
+# (tests/test_requirements.py checks that they match).
+yt-dlp-ejs==0.8.0
+
 # Optional: thumbnails in link previews. Without it the app still works and
 # previews show text only.
 Pillow==12.3.0

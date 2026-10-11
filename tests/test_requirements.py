@@ -2,6 +2,7 @@
 
 Run with:  python -m unittest discover -s tests -v
 """
+import importlib.metadata
 import os
 import sys
 import unittest
@@ -37,6 +38,17 @@ class RequirementsTest(unittest.TestCase):
             config = f.read()
         self.assertIn('package-ecosystem: "pip"', config)
         self.assertIn('directory: "/"', config)
+
+    def test_ejs_pin_matches_yt_dlp(self):
+        # yt-dlp lists e.g. 'yt-dlp-ejs==0.8.0; extra == "default"'.
+        try:
+            requires = importlib.metadata.requires("yt-dlp") or []
+        except importlib.metadata.PackageNotFoundError:
+            self.skipTest("yt-dlp isn't installed")
+        ejs = [r.split(";")[0].replace(" ", "") for r in requires
+               if r.startswith("yt-dlp-ejs")]
+        self.assertTrue(ejs, "yt-dlp no longer names yt-dlp-ejs")
+        self.assertIn(ejs[0], requirements())
 
     def test_pin_is_exact(self):
         name, sep, version = engine.YT_DLP_REQUIREMENT.partition("==")
