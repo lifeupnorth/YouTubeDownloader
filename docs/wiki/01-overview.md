@@ -70,7 +70,7 @@ Sources: [youtube_downloader.py:209-290](https://github.com/lifeupnorth/YouTubeD
 
 | Component | Role |
 |---|---|
-| Python 3.9+ | Language (uses `str.removeprefix`) |
+| Python 3.10+ | Language (the pinned yt-dlp requires 3.10) |
 | Tkinter / ttk | Window and widgets, standard library |
 | yt-dlp | Extraction, format selection, downloading, post-processing |
 | ffmpeg | External tool for merging, remuxing and audio conversion |
@@ -89,7 +89,8 @@ Sources: [youtube_downloader.py:7-22](https://github.com/lifeupnorth/YouTubeDown
 | `tests/test_formats.py` | 249 | Format selection with real yt-dlp, ffmpeg detection, help text, error formatting |
 | `tests/test_requirements.py` | 53 | Checks the app installs the yt-dlp pin from `requirements.txt` |
 | `requirements.txt` | 5 | The pinned yt-dlp version |
-| `.github/dependabot.yml` | 11 | Weekly Dependabot checks for a newer yt-dlp |
+| `.github/dependabot.yml` | 19 | Weekly Dependabot checks for newer yt-dlp and GitHub Actions versions |
+| `.github/workflows/tests.yml` | 52 | Runs the tests on every push to `main` and every PR |
 | `README.md` | 30 | Install commands, test command, disclaimer, license |
 | `LICENSE` | 21 | MIT |
 | `.gitignore` | 1 | `__pycache__/` |

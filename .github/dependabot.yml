@@ -9,3 +9,11 @@ updates:
       interval: "weekly"
     commit-message:
       prefix: "deps"
+
+  # Keeps the action versions in .github/workflows current.
+  - package-ecosystem: "github-actions"
+    directory: "/"
+    schedule:
+      interval: "weekly"
+    commit-message:
+      prefix: "ci"
