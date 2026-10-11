@@ -2,6 +2,7 @@
 
 Run: python -m unittest discover -s tests -v
 """
+import gc
 import os
 import sys
 import threading
@@ -63,6 +64,9 @@ def make_fake_ydl(streams=2, videos=1, overshoot=0, error=None):
 
 class ThreadSafetyTest(unittest.TestCase):
     def setUp(self):
+        # Collect destroyed apps from earlier tests here: on a worker thread
+        # their Variable.__del__ blocks ~1 s per variable on the dead Tcl.
+        gc.collect()
         self.violations = []
         main = threading.main_thread()
         for cls, name in GUARDED:
@@ -89,6 +93,7 @@ class ThreadSafetyTest(unittest.TestCase):
         # __init__ would schedule a real (blocking) install prompt.
         for patcher in (
                 mock.patch.object(ytd, "YT_DLP_AVAILABLE", True),
+                mock.patch.object(ytd, "find_ffmpeg", return_value="ffmpeg"),
                 mock.patch.object(ytd.messagebox, "askyesno",
                                   side_effect=lambda *a, **k:
                                   self._on_dialog("askyesno"))):
@@ -154,7 +159,7 @@ class ThreadSafetyTest(unittest.TestCase):
     def test_progress_restarts_per_playlist_video(self):
         seen = {}
         url = "https://www.youtube.com/playlist?list=x"
-        opts = self.app._get_ydl_opts(url)
+        opts = self.app._get_ydl_opts(url, "ffmpeg")
         opts["progress_hooks"].append(
             lambda d: seen.setdefault(d["video"], []).append(
                 self.app._latest_progress[0]))
