@@ -288,10 +288,6 @@ def fetch_thumbnail(url, canceled=lambda: False):
         return None
 
 
-class _PreviewCanceled(Exception):
-    pass
-
-
 def preview_link(url, whole_playlist, cancel_event=None):
     """Looks a link up without downloading: (text, PIL image or None, found).
 
@@ -303,9 +299,11 @@ def preview_link(url, whole_playlist, cancel_event=None):
     """
     canceled = cancel_event.is_set if cancel_event else lambda: False
 
+    # yt-dlp's own cancel exception: it stops even with ignoreerrors set and
+    # isn't caught by its broad "except Exception" handlers.
     def check():
         if canceled():
-            raise _PreviewCanceled
+            raise yt_dlp.utils.DownloadCancelled()
 
     try:
         opts = {"quiet": True, "skip_download": True,

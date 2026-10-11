@@ -494,6 +494,7 @@ class YouTubeDownloader(tk.Tk):
         # During a download, ask first, then cancel it and close once it has
         # stopped, so its partial files are removed. Closing again while that
         # runs (e.g. ffmpeg can't be interrupted) closes right away.
+        self._preview_cancel.set()
         if self.is_running and not self._close_when_stopped:
             if not messagebox.askyesno(
                     "Download in progress",
@@ -508,7 +509,6 @@ class YouTubeDownloader(tk.Tk):
             return
         self._save_settings()
         self._closing = True
-        self._preview_cancel.set()
         for pending in (self._after_id, self._preview_after):
             if pending is not None:
                 self.after_cancel(pending)
