@@ -11,13 +11,14 @@ class FakeCancelled(Exception):
 
 def make_fake_ydl(streams=2, videos=1, overshoot=0, error=None, fail=(),
                   already=(), probe=("video",), files_dir=None, on_progress=None,
-                  warn=None):
+                  warn=None, delay=0):
     """probe: the _type returned by each extract_info(process=False) call.
 
     files_dir: write real stream files there (.part while downloading, then
     renamed, then "merged" into v<N>.mp4), as yt-dlp does.
     on_progress(video, stream, done): called on the download thread before
     each progress event, and with stream=-1 before each video starts.
+    delay: seconds between progress events (a real download takes time).
     """
     probes = list(probe)
     on_progress = on_progress or (lambda *a: None)
@@ -45,7 +46,11 @@ def make_fake_ydl(streams=2, videos=1, overshoot=0, error=None, fail=(),
 
         def extract_info(self, url, download=True, process=True, ie_key=None):
             FakeYDL.calls.append("probe")
-            return {"_type": probes.pop(0), "title": "Fake list",
+            kind = probes.pop(0)
+            if kind is None:   # what yt-dlp returns once it has logged the error
+                self.opts["logger"].error(f"ERROR: [youtube] {url}: Video unavailable")
+                return None
+            return {"_type": kind, "title": "Fake list",
                     "url": "https://example.com/next", "ie_key": "Fake"}
 
         def process_ie_result(self, info, download=True):
@@ -89,7 +94,8 @@ def make_fake_ydl(streams=2, videos=1, overshoot=0, error=None, fail=(),
                                   "total_bytes_estimate": 100,
                                   "downloaded_bytes": done, "speed": 1e6,
                                   "eta": 1, "info_dict": info, **files})
-                        time.sleep(0.002)
+                        if delay:
+                            time.sleep(delay)
                     if files_dir:
                         os.replace(name + ".part", name)
                     for hook in hooks:

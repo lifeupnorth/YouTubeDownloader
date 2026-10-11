@@ -10,6 +10,7 @@ import tempfile
 import threading
 import time
 import tkinter
+import tkinter.messagebox
 import types
 import unittest
 from unittest import mock
@@ -28,6 +29,66 @@ GUARDED = [
     (tkinter.Text, "insert"), (tkinter.Text, "see"),
 ]
 
+DIALOGS = ("showinfo", "showerror", "showwarning", "askyesno")
+
+
+def _in_finalizer():
+    # Garbage collection can run a Tk object's __del__ on any thread; that's
+    # Python's doing, not the app's.
+    frame = sys._getframe(2)
+    for _ in range(4):
+        if frame is None:
+            return False
+        if frame.f_code.co_name == "__del__":
+            return True
+        frame = frame.f_back
+    return False
+
+
+class GuardedTcl:
+    """Wraps the Tcl interpreter (what every widget, variable and image calls
+    through), so any Tk call from a worker thread is caught, not only the
+    methods in GUARDED. Tk's own thread handling would otherwise hide it."""
+
+    def __init__(self, tkapp, on_call):
+        self._tkapp, self._on_call = tkapp, on_call
+
+    def __getattr__(self, name):
+        attr = getattr(self._tkapp, name)
+        if not callable(attr):
+            return attr
+        on_call = self._on_call
+
+        def guarded(*a, **k):
+            on_call(f"tcl.{name}")
+            return attr(*a, **k)
+        return guarded
+
+
+class _GuardedDialog:
+    def __init__(self, name, dialog, on_call):
+        self.name, self.dialog, self.on_call = name, dialog, on_call
+
+    def __call__(self, *a, **k):
+        self.on_call(f"messagebox.{self.name}")
+        return self.dialog(*a, **k)
+
+
+class GuardedDialogs:
+    """Stands in for the app's messagebox module. Whatever a test puts in
+    its place (a mock with an answer, say) still gets the thread check."""
+
+    def __init__(self, on_call):
+        object.__setattr__(self, "_on_call", on_call)
+        for name in DIALOGS:
+            setattr(self, name, getattr(tkinter.messagebox, name))
+
+    def __setattr__(self, name, value):
+        # (A check by type: a MagicMock answers any attribute.)
+        if not isinstance(value, _GuardedDialog):   # not mock.patch putting one back
+            value = _GuardedDialog(name, value, self._on_call)
+        object.__setattr__(self, name, value)
+
 
 class ThreadSafetyTest(unittest.TestCase):
     def setUp(self):
@@ -36,17 +97,38 @@ class ThreadSafetyTest(unittest.TestCase):
         gc.collect()
         self.violations = []
         main = threading.main_thread()
+
+        def check_thread(name):
+            if threading.current_thread() is not main and not _in_finalizer():
+                self.violations.append(name)
+
         for cls, name in GUARDED:
             orig = getattr(cls, name)
 
             def wrapper(*a, _orig=orig, _name=f"{cls.__name__}.{name}", **k):
-                if threading.current_thread() is not main:
-                    self.violations.append(_name)
+                check_thread(_name)
                 return _orig(*a, **k)
 
             patcher = mock.patch.object(cls, name, wrapper)
             patcher.start()
             self.addCleanup(patcher.stop)
+
+        create = tkinter._tkinter.create
+        for patcher in (
+                mock.patch.object(tkinter._tkinter, "create",
+                                  lambda *a: GuardedTcl(create(*a), check_thread)),
+                mock.patch.object(ytd, "messagebox", GuardedDialogs(check_thread))):
+            patcher.start()
+            self.addCleanup(patcher.stop)
+
+        # An exception on any thread fails the test, even one the window
+        # handled (it logs worker crashes; see _run_worker).
+        self.thread_errors = []
+        self.expect_crash = False
+        hook = threading.excepthook
+        threading.excepthook = lambda args: self.thread_errors.append(args.exc_value)
+        self.addCleanup(setattr, threading, "excepthook", hook)
+        self.addCleanup(self._check_no_errors)
 
         self.dialogs = []
         for name in ("showinfo", "showerror", "showwarning"):
@@ -83,6 +165,15 @@ class ThreadSafetyTest(unittest.TestCase):
         self.callback_errors = []
         self.app.report_callback_exception = (
             lambda *exc: self.callback_errors.append(exc))
+        self.crashes = []
+        orig_crashed = self.app._worker_crashed
+
+        def crashed(details):
+            self.crashes.append(details)
+            with mock.patch.object(sys, "stderr", None):   # no traceback in the output
+                orig_crashed(details)
+
+        self.app._worker_crashed = crashed
         self.progress = []
         orig_set_progress = self.app._set_progress
 
@@ -119,15 +210,30 @@ class ThreadSafetyTest(unittest.TestCase):
         except tkinter.TclError:
             pass
 
+    # After every test, whether or not it checked these itself.
+    def _check_no_errors(self):
+        self.assertEqual(self.violations, [], "Tk used from a worker thread")
+        self.assertEqual(self.thread_errors, [], "an exception on a worker thread")
+        if not self.expect_crash:
+            self.assertEqual(self.crashes, [], "a worker crashed")
+
     def run_download(self, fake):
+        timed_out = []
+
+        def give_up():
+            timed_out.append(True)
+            self.app.quit()
+
         with mock.patch.object(engine, "yt_dlp", fake_yt_dlp(fake)):
             self.app.after(10, self.app._start_download)
-            timeout = self.app.after(10000, self.app.quit)
+            timeout = self.app.after(10000, give_up)
             self.app.mainloop()
             try:
                 self.app.after_cancel(timeout)
             except tkinter.TclError:
                 pass
+        if timed_out:
+            self.fail("the download didn't finish within 10 s")
 
     def test_js_runtime_is_looked_up_on_a_worker(self):
         threads = []
@@ -473,6 +579,36 @@ class ThreadSafetyTest(unittest.TestCase):
         text = self.look_up("https://e.com/old", "https://e.com/new", extract=extract)
         self.assertEqual(text, "new\n1:00")
 
+    def test_late_answer_for_an_older_link_is_dropped(self):
+        # A lookup that doesn't stop when canceled (e.g. stuck in a request)
+        # answers after the newer one; the token keeps it from showing.
+        new_shown = threading.Event()
+        done = self.app._preview_done
+
+        def preview_done(text, *rest):
+            done(text, *rest)
+            if text == "new":
+                new_shown.set()
+
+        def preview_link(url, whole_playlist, cancel_event, js_runtime=None):
+            if url.endswith("old"):
+                new_shown.wait(5)   # ignores cancel_event on purpose
+                return "old", None, True
+            return "new", None, True
+
+        self.app._preview_done = preview_done
+        with mock.patch.object(engine, "preview_link", preview_link),                 mock.patch.object(engine, "YT_DLP_AVAILABLE", True):
+            for url in ("https://e.com/old", "https://e.com/new"):
+                self.app._replace_url_text(url)
+                self.app._start_preview()
+            deadline = time.time() + 5
+            while self.app._active_workers and time.time() < deadline:
+                self.app.update()
+                time.sleep(0.01)
+        self.assertTrue(new_shown.is_set())
+        self.assertEqual(self.app.preview_text.get(), "new")
+        self.assertEqual(self.violations, [])
+
     def test_newer_link_cancels_the_older_lookup(self):
         events = {}
 
@@ -608,6 +744,7 @@ class ThreadSafetyTest(unittest.TestCase):
         self.app._queue.cancel.assert_not_called()
 
     def test_crashed_download_ends_the_download(self):
+        self.expect_crash = True
         def crash(queue):
             raise RuntimeError("boom")
 
@@ -622,6 +759,7 @@ class ThreadSafetyTest(unittest.TestCase):
         self.assertEqual(self.violations, [])
 
     def test_worker_that_crashes_still_finishes(self):
+        self.expect_crash = True
         with mock.patch.object(sys, "stderr", None):
             self.app._start_worker(lambda: 1 / 0)
             deadline = time.monotonic() + 5

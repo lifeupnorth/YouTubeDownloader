@@ -178,10 +178,20 @@ class UpdateCheckTest(unittest.TestCase):
         get.assert_not_called()
 
     def test_no_network_no_notice(self):
-        with (mock.patch.object(engine, "yt_dlp_version", return_value="2026.08.19"),
+        # As a release .exe (from source it never asks, see above).
+        with (mock.patch.object(engine, "app_version", return_value="1.0.3"),
               mock.patch.object(engine.urllib.request, "urlopen",
-                                side_effect=OSError("offline"))):
+                                side_effect=OSError("offline")) as urlopen):
             self.assertIsNone(engine.check_for_update())
+        urlopen.assert_called_once()
+
+    def test_unexpected_answer_no_notice(self):
+        for body in (b"<html>rate limited</html>", b"[]", b'{"tag_name": null}'):
+            with (self.subTest(body=body),
+                  mock.patch.object(engine, "app_version", return_value="1.0.3"),
+                  mock.patch.object(engine.urllib.request, "urlopen",
+                                    return_value=io.BytesIO(body))):
+                self.assertIsNone(engine.check_for_update())
 
 
 class FindFfmpegTest(unittest.TestCase):
@@ -409,6 +419,17 @@ class ErrorColorTest(unittest.TestCase):
         self.assertEqual(errors, [])
 
 
+def cancel_when(job, ready, timeout=10):
+    """Cancels job (or a DownloadQueue) from another thread as soon as
+    ready() is true."""
+    def wait():
+        deadline = time.monotonic() + timeout
+        while not ready() and time.monotonic() < deadline:
+            time.sleep(0.01)
+        job.cancel()
+    threading.Thread(target=wait, daemon=True).start()
+
+
 def make_job(url="https://www.youtube.com/watch?v=x", *, whole_playlist=False,
              ask=None, folder="dl", fmt="mp4_best"):
     """A DownloadJob whose callbacks record into job.progress and job.log."""
@@ -541,6 +562,16 @@ class DownloadJobTest(unittest.TestCase):
             self.assertEqual(os.listdir(tmp), ["v0.mp4"])
         self.assertEqual(job.summary(), "Download canceled (1 saved).")
 
+    def test_a_video_that_cant_be_found(self):
+        # yt-dlp logs why and returns nothing (e.g. a private or removed video).
+        fake = make_fake_ydl(streams=1, probe=(None,))
+        job = self.run_job(fake)
+        self.assertEqual(fake.calls, ["probe"])
+        self.assertEqual(job.outcome, "failed")
+        self.assertIn("Video unavailable", job.error)
+        self.assertTrue(job.error_logged)
+        self.assertEqual(job.log, [f"✘ [youtube] {job.url}: Video unavailable"])
+
     def test_url_results_are_followed_at_most_three_times(self):
         # A link that keeps redirecting must not be looked up forever.
         fake = make_fake_ydl(streams=1, probe=("url",) * 10)
@@ -589,8 +620,10 @@ class DownloadJobTest(unittest.TestCase):
             class Fake(make_fake_ydl(streams=1)):
                 def _run(self):
                     # Like a conversion: yt-dlp's Popen.run, output file
-                    # last. Here a process that would take 60 s.
-                    threading.Timer(0.5, job.cancel).start()
+                    # last. Here a process that would take 60 s; canceled
+                    # once it has created its output (not after a fixed
+                    # time, which a slow runner may not meet).
+                    cancel_when(job, lambda: os.path.exists(out))
                     ffmpeg_pp.Popen.run([sys.executable, "-c",
                                          "import sys, time; open(sys.argv[1][5:], 'wb');"
                                          " time.sleep(60)", "file:" + out])
@@ -618,7 +651,7 @@ class DownloadJobTest(unittest.TestCase):
 
             class Fake(make_fake_ydl(streams=1)):
                 def _run(self):
-                    threading.Timer(0.5, job.cancel).start()
+                    cancel_when(job, lambda: job._processes)   # once it runs
                     ffmpeg_pp.Popen.run([sys.executable, "-c",
                                          "import time; time.sleep(60)", "file:" + old])
                     self.opts["logger"].error("ERROR: Postprocessing: ffmpeg failed")
@@ -808,6 +841,30 @@ class DownloadQueueTest(unittest.TestCase):
             self.assertEqual(os.listdir(tmp), [], "the partial file is removed")
         self.assertEqual(len(queue.jobs), 1, "links 2 and 3 never started")
         self.assertEqual(queue.outcome, "canceled")
+        self.assertEqual(queue.summary(), "Download canceled (1 partial file removed).")
+
+    @unittest.skipUnless(engine.YT_DLP_AVAILABLE, "needs yt-dlp")
+    def test_cancel_stops_the_running_links_ffmpeg(self):
+        # What the window's Cancel calls: the queue, not the job.
+        import yt_dlp.postprocessor.ffmpeg as ffmpeg_pp
+
+        with tempfile.TemporaryDirectory() as tmp:
+            out = os.path.join(tmp, "v0.mp3")
+            holder = {}
+
+            class Fake(make_fake_ydl(streams=1)):
+                def _run(self):
+                    cancel_when(holder["queue"], lambda: os.path.exists(out))
+                    ffmpeg_pp.Popen.run([sys.executable, "-c",
+                                         "import sys, time; open(sys.argv[1][5:], 'wb');"
+                                         " time.sleep(60)", "file:" + out])
+
+            start = time.monotonic()
+            queue = self.run_queue(Fake, ["https://a", "https://b"],
+                                   on_queue=lambda q: holder.update(queue=q))
+            self.assertLess(time.monotonic() - start, 10)
+            self.assertEqual(os.listdir(tmp), [])
+        self.assertEqual(len(queue.jobs), 1, "the second link never started")
         self.assertEqual(queue.summary(), "Download canceled (1 partial file removed).")
 
     def test_cancel_after_the_last_link_finished(self):
