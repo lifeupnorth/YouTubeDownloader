@@ -52,6 +52,8 @@ Sources: [README.md:36-59](https://github.com/lifeupnorth/YouTubeDownloader/blob
 
 From source, `engine.find_js_runtime()` looks for deno, node or bun on `PATH` (and in the registry's `Path` on Windows) and asks yt-dlp whether the version is new enough. If none is found, the window logs an install hint once at startup instead of yt-dlp's warning on every download, and looks again before each download until one is found.
 
+Signing is optional: `packaging/sign_exe.py` signs and verifies the .exe with `signtool` (SHA-256, RFC 3161 timestamp) when `WINDOWS_SIGNING_CERT` (a base64-encoded `.pfx`) and `WINDOWS_SIGNING_PASSWORD` are set, and does nothing without them. The secrets live in the `code-signing` GitHub environment, which pull-request runs never use; the workflow passes them only to that step, skips it for pull requests, and signs before `--check`, so the check runs the signed file. If the certificate is set but the password is missing, the certificate isn't base64, `signtool` is missing, or signing fails, the build fails (leaving out any line that contains the password) instead of quietly releasing an unsigned .exe.
+
 ## Settings
 
 There are no environment variables or command-line options. The last **Save To** folder and **Format** are remembered in a small JSON file:
