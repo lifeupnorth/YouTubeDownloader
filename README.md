@@ -73,9 +73,10 @@ A link to a video opened from a playlist downloads just that video. Tick
 channel link, the app asks before downloading all its videos, and saves them
 to a folder named after the playlist.
 
-While a download runs, the button turns into **Cancel**. Canceling removes the
-partial file of the video in progress, keeps the ones that finished, and skips
-any links still waiting.
+While a download runs, the button turns into **Cancel**. Canceling stops at
+once, also while ffmpeg converts or merges a video or while a big playlist is
+being read. It removes the partial file of the video in progress, keeps the
+ones that finished, and skips any links still waiting.
 
 ## Run the tests
 

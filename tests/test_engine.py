@@ -6,6 +6,8 @@ import io
 import os
 import sys
 import tempfile
+import threading
+import time
 import unittest
 from unittest import mock
 
@@ -437,6 +439,53 @@ class DownloadJobTest(unittest.TestCase):
             job = self.cancel_at((1, -1, 0), tmp, videos=3)
             self.assertEqual(os.listdir(tmp), ["v0.mp4"])
         self.assertEqual(job.summary(), "Download canceled (1 saved).")
+
+    def test_cancel_while_reading_a_playlist(self):
+        # yt-dlp reads a big channel's pages before the first progress
+        # update; each page is a status message, where cancel is checked.
+        pages = []
+
+        class Fake(make_fake_ydl(streams=1)):
+            def _run(self):
+                for page in range(100):
+                    pages.append(page)
+                    if page == 2:
+                        job.cancel()
+                    self.opts["logger"].debug(f"[youtube:tab] Downloading page {page}")
+                super()._run()
+
+        job = make_job(whole_playlist=True)
+        self.run_job(Fake, job=job)
+        self.assertEqual(pages, [0, 1, 2])
+        self.assertEqual(job.outcome, "canceled")
+        self.assertEqual(job.summary(), "Download canceled.")
+
+    @unittest.skipUnless(engine.YT_DLP_AVAILABLE, "needs yt-dlp")
+    def test_cancel_stops_ffmpeg(self):
+        import yt_dlp.postprocessor.ffmpeg as ffmpeg_pp
+
+        with tempfile.TemporaryDirectory() as tmp:
+            out = os.path.join(tmp, "v0.mp3")
+
+            class Fake(make_fake_ydl(streams=1)):
+                def _run(self):
+                    # Like a conversion: yt-dlp's Popen.run, output file
+                    # last. Here a process that would take 60 s.
+                    open(out, "wb").close()
+                    threading.Timer(0.5, job.cancel).start()
+                    ffmpeg_pp.Popen.run([sys.executable, "-c",
+                                         "import time; time.sleep(60)", "file:" + out])
+                    # yt-dlp logs the failed conversion; not a skipped video.
+                    self.opts["logger"].error("ERROR: Postprocessing: ffmpeg failed")
+
+            job = make_job()
+            start = time.monotonic()
+            self.run_job(Fake, job=job)
+            self.assertLess(time.monotonic() - start, 10)
+            self.assertEqual(os.listdir(tmp), [])
+        self.assertEqual(job.outcome, "canceled")
+        self.assertEqual(job.skipped, [])
+        self.assertEqual(job.summary(), "Download canceled (1 partial file removed).")
 
     def test_yt_dlp_warnings_are_logged(self):
         job = self.run_job(make_fake_ydl(streams=1, warn="[youtube] No JS runtime"))

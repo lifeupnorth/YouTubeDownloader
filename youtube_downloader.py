@@ -492,7 +492,7 @@ class YouTubeDownloader(tk.Tk):
     def _on_close(self):
         # During a download, ask first, then cancel it and close once it has
         # stopped, so its partial files are removed. Closing again while that
-        # runs (e.g. ffmpeg can't be interrupted) closes right away.
+        # runs (e.g. stuck on a slow network request) closes right away.
         if self.is_running and not self._close_when_stopped:
             if not messagebox.askyesno(
                     "Download in progress",
@@ -587,8 +587,8 @@ class YouTubeDownloader(tk.Tk):
         return answer[0]
 
     # The Download button turns into Cancel while a download runs. yt-dlp
-    # stops at its next progress update, or before the next playlist video;
-    # it can't stop ffmpeg mid-merge, so that video still finishes.
+    # stops at its next progress update or status message (also while it
+    # reads a playlist), and a running ffmpeg conversion or merge is stopped.
     def _cancel_download(self):
         self._queue.cancel()
         # A progress update set just before must not overwrite "Canceling…".

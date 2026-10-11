@@ -99,7 +99,7 @@ Sources: [youtube_downloader.py:567-568](https://github.com/lifeupnorth/YouTubeD
 - If ffmpeg isn't found, it shows a warning in the status line and the log; a `<FocusIn>` binding (`_recheck_ffmpeg`) checks again when the window regains focus.
 - If the installed yt-dlp isn't the pinned version, it says so in the log (`_note_yt_dlp_version`).
 
-If a download is running, `_on_close` first asks "Cancel it and close the app?". On Yes it sets `_close_when_stopped` and cancels the queue; `_download_finished` then calls `_on_close` again once the partial files are removed. Clicking close a second time while that runs (ffmpeg can't be interrupted) closes right away. Otherwise `_on_close` saves the settings, sets `_closing`, cancels pending timers and destroys the window. `_closing` stops the poll loop and makes `_ask_on_main` return. Worker threads are daemons, so anything still running when the window is destroyed (a pip install, or a download after a forced second close) ends with the process.
+If a download is running, `_on_close` first asks "Cancel it and close the app?". On Yes it sets `_close_when_stopped` and cancels the queue; `_download_finished` then calls `_on_close` again once the partial files are removed. Clicking close a second time while that runs (e.g. stuck on a slow network request) closes right away. Otherwise `_on_close` saves the settings, sets `_closing`, cancels pending timers and destroys the window. `_closing` stops the poll loop and makes `_ask_on_main` return. Worker threads are daemons, so anything still running when the window is destroyed (a pip install, or a download after a forced second close) ends with the process.
 
 ```mermaid
 stateDiagram-v2
