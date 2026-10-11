@@ -792,9 +792,27 @@ def self_check(path):
 
 
 # ── Entry point ─────────────────────────────────────────────────────────────
+def smoke_download(url, fmt, folder, report_path):
+    """--smoke-download: one real download without the window, for the nightly
+    smoke test (packaging/smoke_test.py); writes the outcome to report_path."""
+    log = []
+    job = engine.DownloadJob(url, fmt=fmt, folder=folder, ffmpeg=engine.find_ffmpeg(),
+                             whole_playlist=False, on_progress=lambda pct, msg: None,
+                             on_log=log.append, ask=lambda question: False)
+    try:
+        job.run()
+    except Exception as exc:   # still write the report, with the reason
+        job.outcome, job.error = "failed", f"{type(exc).__name__}: {exc}"
+    with open(report_path, "w", encoding="utf-8") as f:
+        json.dump({"outcome": job.outcome, "error": job.error,
+                   "file": job.last_file, "log": log}, f, indent=2)
+
+
 if __name__ == "__main__":
     if len(sys.argv) == 3 and sys.argv[1] == "--self-check":
         self_check(sys.argv[2])
+    elif len(sys.argv) == 6 and sys.argv[1] == "--smoke-download":
+        smoke_download(*sys.argv[2:])
     else:
         app = YouTubeDownloader()
         app.mainloop()
