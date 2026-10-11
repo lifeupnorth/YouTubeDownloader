@@ -32,7 +32,8 @@ Sources: [youtube_downloader.py:169-176](https://github.com/lifeupnorth/YouTubeD
 
 | Widget | Bound to | Behavior |
 |---|---|---|
-| URL `Entry` (`url_entry`) | `<FocusIn>`, `<FocusOut>`, `<Return>` | Shows a dimmed placeholder URL (tracked by `_placeholder_shown`) that's cleared on focus and restored when the box is left empty; `_url()` never returns it. Enter starts a download. |
+| URL `Entry` (`url_entry`) | `<FocusIn>`, `<FocusOut>`, `<KeyRelease>`, `<Return>` | Shows a dimmed placeholder URL (tracked by `_placeholder_shown`) that's cleared on focus and restored when the box is left empty; `_url()` never returns it. Typing (after a pause) or leaving the box updates the preview. Enter starts a download. |
+| Preview (`preview_img`, `preview_lbl`) | `preview_text` | Thumbnail, title, and length or playlist size with the channel. `_start_preview` looks the link up on a worker (`_preview_thread`, `process=False` so playlists aren't paged through) and drops answers for an older link (`_preview_token`). Thumbnails need Pillow. |
 | Paste `Button` | `_paste_url` | Replaces the URL (or placeholder) with the trimmed clipboard text; an empty clipboard is ignored |
 | Format `Radiobutton` ×6 | `format_var` | Laid out with `divmod(i, 3)`, which fills columns 0–1 |
 | Whole playlist `Checkbutton` | `playlist_var` | In the free column 2 of the format grid, off by default |
@@ -41,6 +42,7 @@ Sources: [youtube_downloader.py:169-176](https://github.com/lifeupnorth/YouTubeD
 | Download `Button` (`dl_btn`) | `_start_download` | Becomes **✖ Cancel** (`_cancel_download`) while a download runs, then "Canceling…" (disabled) until it stops |
 | `ttk.Progressbar` | `progress_var` | Custom `Red.Horizontal.TProgressbar` style on the `clam` theme |
 | Status `Label` (`status_lbl`) | `status_var` | Text and color set by `_set_status` |
+| Open folder `Button` (`open_btn`) | `_open_folder` | Hidden until a download saves a file; shows that file in the file manager |
 | Log `Text` (`log_box`) | `_log` | Read-only; temporarily enabled to append a line and scroll to it |
 
 Sources: [youtube_downloader.py:231-341](https://github.com/lifeupnorth/YouTubeDownloader/blob/bd3fd4242f83ee2cf111812e71b6d2db5aa71bdf/youtube_downloader.py#L231-L341), [youtube_downloader.py:364-389](https://github.com/lifeupnorth/YouTubeDownloader/blob/bd3fd4242f83ee2cf111812e71b6d2db5aa71bdf/youtube_downloader.py#L364-L389)
@@ -71,7 +73,8 @@ Sources: [youtube_downloader.py:25-35](https://github.com/lifeupnorth/YouTubeDow
 | "ffmpeg not found" (error) | Download clicked without ffmpeg |
 | "No URL" (warning) / "Busy" (info) | Empty URL / a download already running |
 | "Playlist" (yes/no) | Box unticked and the link turns out to be a playlist or channel |
-| "Done" (info) / "Download Failed" (error) | End of a download |
+| "Download Failed" (error) | A download failed (success has no pop-up; see the Open folder button) |
+| "Download in progress" (yes/no) | Closing the window during a download |
 | "Installed" (info) | After a successful pip install |
 
 Sources: [youtube_downloader.py:535-552](https://github.com/lifeupnorth/YouTubeDownloader/blob/bd3fd4242f83ee2cf111812e71b6d2db5aa71bdf/youtube_downloader.py#L535-L552), [youtube_downloader.py:598-603](https://github.com/lifeupnorth/YouTubeDownloader/blob/bd3fd4242f83ee2cf111812e71b6d2db5aa71bdf/youtube_downloader.py#L598-L603), [youtube_downloader.py:659-692](https://github.com/lifeupnorth/YouTubeDownloader/blob/bd3fd4242f83ee2cf111812e71b6d2db5aa71bdf/youtube_downloader.py#L659-L692)

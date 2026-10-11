@@ -3,14 +3,19 @@
 Run with:  python -m unittest discover -s tests -v
 """
 import gc
+import io
+import json
 import os
 import sys
+import tempfile
 import tkinter
 import unittest
 from unittest import mock
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 import youtube_downloader as ytd  # noqa: E402
+
+REAL_SETTINGS_PATH = ytd.settings_path   # before any test patches it
 
 try:
     import yt_dlp
@@ -144,12 +149,104 @@ class FindFfmpegTest(unittest.TestCase):
         self.assertNotIn("%systemroot%", path)
 
 
+class SettingsFileTest(unittest.TestCase):
+    def setUp(self):
+        folder = tempfile.TemporaryDirectory()
+        self.addCleanup(folder.cleanup)
+        self.path = os.path.join(folder.name, "sub", "settings.json")
+        patcher = mock.patch.object(ytd, "settings_path", return_value=self.path)
+        patcher.start()
+        self.addCleanup(patcher.stop)
+
+    def test_round_trip(self):
+        self.assertEqual(ytd.load_settings(), {})   # no file yet
+        ytd.save_settings({"folder": "x", "format": "mp3"})
+        self.assertEqual(ytd.load_settings(), {"folder": "x", "format": "mp3"})
+        self.assertFalse(os.path.exists(self.path + ".tmp"))
+
+    def test_bad_files_are_ignored(self):
+        os.makedirs(os.path.dirname(self.path))
+        for content in ("not json", "[1, 2]", ""):
+            with open(self.path, "w", encoding="utf-8") as f:
+                f.write(content)
+            self.assertEqual(ytd.load_settings(), {}, content)
+
+    def test_default_locations(self):
+        with mock.patch.object(ytd.sys, "platform", "win32"), \
+                mock.patch.dict(os.environ, {"APPDATA": "appdata"}):
+            self.assertEqual(REAL_SETTINGS_PATH(), os.path.join(
+                "appdata", "YT Downloader", "settings.json"))
+        with mock.patch.object(ytd.sys, "platform", "linux"), \
+                mock.patch.dict(os.environ, {"XDG_CONFIG_HOME": "cfg"}):
+            self.assertEqual(REAL_SETTINGS_PATH(), os.path.join(
+                "cfg", "YT Downloader", "settings.json"))
+
+
 class SmallHelpersTest(unittest.TestCase):
     def test_eta_as_minutes_and_seconds(self):
         self.assertEqual(ytd.format_eta(5), "0:05")
         self.assertEqual(ytd.format_eta(138), "2:18")
         self.assertEqual(ytd.format_eta(138.7), "2:18")
         self.assertEqual(ytd.format_eta(3725), "1:02:05")
+
+    def test_describe_info(self):
+        self.assertEqual(ytd.describe_info(
+            {"title": "Me at the zoo", "duration": 19, "channel": "jawed"}),
+            "Me at the zoo\n0:19 · jawed")
+        self.assertEqual(ytd.describe_info(
+            {"_type": "playlist", "title": "L", "playlist_count": 3, "uploader": "u"}),
+            "L\nPlaylist · 3 videos · u")
+        self.assertEqual(ytd.describe_info({"_type": "playlist", "title": "C"}),
+                         "C\nPlaylist or channel")
+        self.assertEqual(ytd.describe_info({"title": "Live"}), "Live")
+        title = ytd.describe_info({"title": "x" * 300}).split("\n")[0]
+        self.assertEqual(len(title), 100)
+        self.assertTrue(title.endswith("…"))
+
+    def test_thumbnail_url_picks_a_small_one(self):
+        info = {"thumbnail": "https://t/max.jpg", "thumbnails": [
+            {"url": "https://t/120.jpg", "width": 120},
+            {"url": "https://t/480.jpg", "width": 480},
+            {"url": "https://t/320.jpg", "width": 320},
+            {"url": "https://t/nowidth.jpg"}]}
+        self.assertEqual(ytd.thumbnail_url(info), "https://t/320.jpg")
+        self.assertEqual(ytd.thumbnail_url({"thumbnail": "https://t/max.jpg"}),
+                         "https://t/max.jpg")
+        self.assertIsNone(ytd.thumbnail_url({}))
+
+    def test_fetch_thumbnail_only_from_the_web(self):
+        with mock.patch.object(ytd.urllib.request, "urlopen") as urlopen:
+            self.assertIsNone(ytd.fetch_thumbnail("file:///etc/passwd"))
+            self.assertIsNone(ytd.fetch_thumbnail(None))
+        urlopen.assert_not_called()
+
+    @unittest.skipIf(ytd.Image is None, "Pillow not installed")
+    def test_fetch_thumbnail_shrinks_it(self):
+        png = io.BytesIO()
+        ytd.Image.new("RGB", (1280, 720), "blue").save(png, "PNG")
+        with mock.patch.object(ytd.urllib.request, "urlopen",
+                               return_value=io.BytesIO(png.getvalue())):
+            image = ytd.fetch_thumbnail("https://t/x.png")
+        self.assertEqual(image.size, ytd.THUMB_SIZE)
+        with mock.patch.object(ytd.urllib.request, "urlopen",
+                               return_value=io.BytesIO(b"not an image")):
+            self.assertIsNone(ytd.fetch_thumbnail("https://t/x.png"))
+
+    def test_reveal_selects_the_file_on_windows(self):
+        path = os.path.join("C:" + os.sep, "dl", "a b.mp4")
+        with mock.patch.object(ytd.sys, "platform", "win32"), \
+                mock.patch.object(ytd.os.path, "isfile", return_value=True), \
+                mock.patch.object(ytd.subprocess, "Popen") as popen:
+            ytd.reveal_in_file_manager(path)
+        command = popen.call_args.args[0]
+        self.assertTrue(command.startswith('explorer /select,"'), command)
+        self.assertTrue(command.endswith('a b.mp4"'), command)
+
+    def test_reveal_opens_the_folder_on_linux(self):
+        with mock.patch.object(ytd.sys, "platform", "linux"), \
+                mock.patch.object(ytd.subprocess, "Popen") as popen:
+            ytd.reveal_in_file_manager("/home/me/dl/a.mp4")
+        popen.assert_called_once_with(["xdg-open", "/home/me/dl"])
 
     def test_logger_sends_warnings_and_errors_apart(self):
         errors, warnings = [], []
@@ -182,9 +279,13 @@ class FfmpegCheckTest(unittest.TestCase):
     def make_app(self, ffmpeg):
         gc.collect()
         self.find = mock.Mock(return_value=ffmpeg)
+        settings_dir = tempfile.TemporaryDirectory()
+        self.addCleanup(settings_dir.cleanup)
         for patcher in (
                 mock.patch.object(ytd, "YT_DLP_AVAILABLE", True),
                 mock.patch.object(ytd, "find_ffmpeg", self.find),
+                mock.patch.object(ytd, "settings_path", return_value=os.path.join(
+                    settings_dir.name, "settings.json")),
                 mock.patch.object(ytd.messagebox, "showerror"),
                 mock.patch.object(ytd, "yt_dlp", None, create=True)):
             patcher.start()

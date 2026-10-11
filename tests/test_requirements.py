@@ -20,7 +20,11 @@ def requirements():
 
 class RequirementsTest(unittest.TestCase):
     def test_requirements_txt_matches_the_app(self):
-        self.assertEqual(requirements(), [ytd.YT_DLP_REQUIREMENT])
+        self.assertIn(ytd.YT_DLP_REQUIREMENT, requirements())
+
+    def test_every_requirement_is_pinned(self):
+        for line in requirements():
+            self.assertRegex(line, r"^[A-Za-z0-9_.-]+==[0-9][0-9A-Za-z.]*$")
 
     def test_unpinned_without_requirements_txt(self):
         with mock.patch("builtins.open", side_effect=FileNotFoundError):

@@ -3,6 +3,7 @@
 Run: python -m unittest discover -s tests -v
 """
 import gc
+import json
 import os
 import sys
 import tempfile
@@ -158,9 +159,15 @@ class ThreadSafetyTest(unittest.TestCase):
 
         # The fake yt_dlp module makes the real one unnecessary; without this
         # __init__ would schedule a real (blocking) install prompt.
+        # Remembered settings go to a temporary file, never the real one.
+        settings_dir = tempfile.TemporaryDirectory()
+        self.addCleanup(settings_dir.cleanup)
+        self.settings_file = os.path.join(settings_dir.name, "settings.json")
         for patcher in (
                 mock.patch.object(ytd, "YT_DLP_AVAILABLE", True),
                 mock.patch.object(ytd, "find_ffmpeg", return_value="ffmpeg"),
+                mock.patch.object(ytd, "settings_path",
+                                  return_value=self.settings_file),
                 mock.patch.object(ytd.messagebox, "askyesno",
                                   side_effect=lambda *a, **k:
                                   self._on_dialog("askyesno"))):
@@ -205,6 +212,13 @@ class ThreadSafetyTest(unittest.TestCase):
             self.app.quit()
 
         self.app._download_canceled = canceled
+        orig_done = self.app._download_done
+
+        def done(success, error):   # a finished download has no pop-up
+            orig_done(success, error)
+            self.app.quit()
+
+        self.app._download_done = done
         self.app.url_entry.delete(0, "end")
         self.app.url_entry.insert(0, "https://www.youtube.com/watch?v=test")
         self.on_dialog = lambda name: self.app.quit()
@@ -235,7 +249,7 @@ class ThreadSafetyTest(unittest.TestCase):
 
     def test_successful_download(self):
         self.run_download(make_fake_ydl(streams=2))
-        self.assertEqual(self.dialogs, ["showinfo"])
+        self.assertEqual(self.dialogs, [])
         self.assertEqual(self.violations, [])
         self.assertEqual(self.callback_errors, [])
         self.assertEqual(self.app.progress_var.get(), 100)
@@ -280,10 +294,11 @@ class ThreadSafetyTest(unittest.TestCase):
         self.assertIn("boom", self.app.status_var.get())
         self.assertIsNone(self.app._after_id)
 
-    def test_close_while_done_dialog_open(self):
+    def test_close_while_error_dialog_open(self):
         self.on_dialog = lambda name: self.app._on_close()
-        self.run_download(make_fake_ydl(streams=1))
-        self.assertEqual(self.dialogs, ["showinfo"])
+        self.run_download(make_fake_ydl(streams=1, error=RuntimeError("boom")))
+        self.assertEqual(self.dialogs, ["showerror"])
+        self.assertTrue(self.app._closing)
         self.assertEqual(self.violations, [])
         self.assertEqual(self.callback_errors, [])
 
@@ -300,7 +315,7 @@ class ThreadSafetyTest(unittest.TestCase):
         fake = make_fake_ydl(streams=2, videos=3)
         self.run_download(fake)
         self.assertEqual(fake.calls, ["download"], "ticked box shouldn't probe")
-        self.assertEqual(self.dialogs, ["showinfo"])
+        self.assertEqual(self.dialogs, [])
         self.assertEqual(self.violations, [])
         for video in range(3):
             self.assertEqual(self.log().count(f"Saved: v{video}.mp4"), 1)
@@ -321,7 +336,7 @@ class ThreadSafetyTest(unittest.TestCase):
     def test_playlist_skips_unavailable_entry(self):
         self.start_playlist()
         self.run_download(make_fake_ydl(streams=1, videos=3, fail={1}))
-        self.assertEqual(self.dialogs, ["showinfo"])
+        self.assertEqual(self.dialogs, [])
         self.assertIn("Saved: v2.mp4", self.log())
         self.assertIn("✘ [youtube] v1: Private video", self.log())
         self.assertEqual(self.statuses[-1], "✔ Done: 2 saved, 1 skipped")
@@ -386,7 +401,7 @@ class ThreadSafetyTest(unittest.TestCase):
         self.assertEqual(self.statuses[-1], "Download canceled.")
         # The button is Download again, and a new run isn't canceled.
         self.run_download(make_fake_ydl(streams=1))
-        self.assertEqual(self.dialogs, ["showinfo"])
+        self.assertEqual(self.dialogs, [])
         self.assertEqual(self.statuses[-1], "✔ Download complete!")
         self.assertEqual(self.violations, [])
 
@@ -422,7 +437,7 @@ class ThreadSafetyTest(unittest.TestCase):
             self.run_download(make_fake_ydl(streams=1, on_progress=on_progress))
         self.assertTrue(asked.is_set())
         self.assertFalse(self.app._closing)
-        self.assertEqual(self.dialogs, ["showinfo"])
+        self.assertEqual(self.dialogs, [])
         self.assertEqual(self.statuses[-1], "✔ Download complete!")
 
     def test_yt_dlp_warnings_reach_the_log(self):
@@ -465,6 +480,125 @@ class ThreadSafetyTest(unittest.TestCase):
         self.assertGreater(widths[0], widths[1])
         self.assertLess(widths[1], 620)
 
+    def look_up(self, *urls, extract, thumbnail=None, playlist=False):
+        """Starts a preview for each url in turn (without waiting in between),
+        with a fake YoutubeDL whose extract_info(url) returns extract(url),
+        then waits for the lookups and returns the preview text."""
+        class FakeYDL:
+            def __init__(self, opts):
+                self.opts = opts
+
+            def __enter__(self):
+                return self
+
+            def __exit__(self, *exc):
+                return False
+
+            def extract_info(self, url, download=True, process=True, ie_key=None):
+                return extract(url)
+
+        with mock.patch.object(ytd, "yt_dlp", types.SimpleNamespace(YoutubeDL=FakeYDL),
+                               create=True), \
+                mock.patch.object(ytd, "fetch_thumbnail", return_value=thumbnail):
+            self.app.playlist_var.set(playlist)
+            for url in urls:
+                self.app.url_entry.delete(0, "end")
+                self.app.url_entry.insert(0, url)
+                self.app._start_preview()
+            deadline = time.time() + 5
+            while self.app._active_workers and time.time() < deadline:
+                self.app.update()
+                time.sleep(0.01)
+            self.app.update()
+        return self.app.preview_text.get()
+
+    def test_preview_of_a_video(self):
+        text = self.look_up("https://www.youtube.com/watch?v=x", extract=lambda url: {
+            "title": "Me at the zoo", "duration": 19, "channel": "jawed"})
+        self.assertEqual(text, "Me at the zoo\n0:19 · jawed")
+        self.assertEqual(str(self.app.preview_lbl.cget("fg")), ytd.TEXT)
+        self.assertEqual(self.violations, [])
+
+    def test_preview_follows_url_results_to_a_playlist(self):
+        def extract(url):
+            if url == "https://www.youtube.com/watch?v=x&list=y":
+                return {"_type": "url", "url": "https://list", "ie_key": "Tab"}
+            return {"_type": "playlist", "title": "List", "playlist_count": 12,
+                    "uploader": "me"}
+        text = self.look_up("https://www.youtube.com/watch?v=x&list=y",
+                            extract=extract, playlist=True)
+        self.assertEqual(text, "List\nPlaylist · 12 videos · me")
+
+    def test_preview_of_a_bad_link(self):
+        def extract(url):
+            raise RuntimeError("Unsupported URL")
+        text = self.look_up("https://example.com/nothing", extract=extract)
+        self.assertEqual(text, "Couldn't load a preview for this link.")
+        self.assertEqual(str(self.app.preview_lbl.cget("fg")), ytd.TEXT_DIM)
+        self.assertEqual(self.look_up("not a link", extract=extract),
+                         "No preview for this link.")
+
+    def test_preview_drops_answers_for_an_older_link(self):
+        def extract(url):
+            if url.endswith("old"):
+                time.sleep(0.3)   # answers after the newer link
+            return {"title": url.rsplit("/", 1)[1], "duration": 60}
+        text = self.look_up("https://e.com/old", "https://e.com/new", extract=extract)
+        self.assertEqual(text, "new\n1:00")
+
+    @unittest.skipIf(ytd.Image is None, "Pillow not installed")
+    def test_preview_shows_the_thumbnail(self):
+        image = ytd.Image.new("RGB", ytd.THUMB_SIZE, "red")
+        self.look_up("https://www.youtube.com/watch?v=x", thumbnail=image,
+                     extract=lambda url: {"title": "T", "duration": 5})
+        self.assertIsNotNone(self.app._preview_image)
+        self.assertTrue(str(self.app.preview_img.cget("image")))
+        self.assertEqual(self.violations, [])
+
+    def test_folder_and_format_are_remembered(self):
+        with tempfile.TemporaryDirectory() as folder:
+            self.app.download_path.set(folder)
+            self.app.format_var.set("mp3")
+            self.run_download(make_fake_ydl(streams=1))
+            again = ytd.YouTubeDownloader()   # the next time the app starts
+            try:
+                self.assertEqual(again.download_path.get(), folder)
+                self.assertEqual(again.format_var.get(), "mp3")
+                self.assertFalse(again.playlist_var.get())
+            finally:
+                again.destroy()
+
+    def test_settings_are_saved_on_close(self):
+        self.app.format_var.set("m4a")
+        self.app._on_close()
+        with open(self.settings_file, encoding="utf-8") as f:
+            self.assertEqual(json.load(f)["format"], "m4a")
+
+    def test_bad_saved_settings_fall_back_to_defaults(self):
+        with open(self.settings_file, "w", encoding="utf-8") as f:
+            json.dump({"folder": "/no/such/folder", "format": "bogus"}, f)
+        again = ytd.YouTubeDownloader()
+        try:
+            self.assertEqual(again.download_path.get(),
+                             os.path.expanduser("~/Downloads"))
+            self.assertEqual(again.format_var.get(), "mp4_best")
+        finally:
+            again.destroy()
+
+    def test_open_folder_after_download(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            self.run_download(make_fake_ydl(streams=2, files_dir=tmp))
+            self.app.update()
+            self.assertTrue(self.app.open_btn.winfo_ismapped())
+            with mock.patch.object(ytd, "reveal_in_file_manager") as reveal:
+                self.app.open_btn.invoke()
+            reveal.assert_called_once_with(os.path.join(tmp, "v0.mp4"))
+        # The next download hides it again, and a failed one doesn't show it.
+        self.run_download(make_fake_ydl(streams=1, error=RuntimeError("boom")))
+        self.app.update()
+        self.assertFalse(self.app.open_btn.winfo_ismapped())
+        self.assertEqual(self.violations, [])
+
     def test_single_video_error_is_reported_once(self):
         self.run_download(make_fake_ydl(streams=1, fail={0}))
         self.assertEqual(self.dialogs, ["showerror"])
@@ -475,7 +609,7 @@ class ThreadSafetyTest(unittest.TestCase):
         fake = make_fake_ydl(streams=1)
         self.run_download(fake)
         self.assertEqual(fake.calls, ["probe", "download"])
-        self.assertEqual(self.dialogs, ["showinfo"])
+        self.assertEqual(self.dialogs, [])
 
     def test_asks_before_downloading_a_playlist(self):
         fake = make_fake_ydl(streams=1, videos=2, probe=("playlist",))

@@ -10,11 +10,14 @@ import threading
 import queue
 import functools
 import glob
+import io
+import json
 import os
 import re
 import shutil
 import sys
 import subprocess
+import urllib.request
 
 # ── Try importing yt-dlp; offer to install if missing ──────────────────────
 try:
@@ -22,6 +25,13 @@ try:
     YT_DLP_AVAILABLE = True
 except ImportError:
     YT_DLP_AVAILABLE = False
+
+# Optional: without Pillow, link previews show text but no thumbnail
+# (YouTube thumbnails are JPEG/WebP, which Tk can't show by itself).
+try:
+    from PIL import Image, ImageTk
+except ImportError:
+    Image = ImageTk = None
 
 
 def _yt_dlp_requirement():
@@ -68,12 +78,116 @@ VIDEO_MAX_RES = {"mp4_best": None, "1080p": 1080, "720p": 720, "480p": 480}
 
 FFMPEG_MISSING_STATUS = "ffmpeg not found, see the log below"
 
+# The Format radio buttons: (label, value for format_opts).
+FORMATS = [
+    ("Best MP4 (Video+Audio)", "mp4_best"),
+    ("1080p MP4",              "1080p"),
+    ("720p MP4",               "720p"),
+    ("480p MP4",               "480p"),
+    ("Audio Only (MP3)",       "mp3"),
+    ("Audio Only (M4A)",       "m4a"),
+]
+
+
+def settings_path():
+    """Where the last folder and format are remembered between runs."""
+    if sys.platform == "win32":
+        base = os.environ.get("APPDATA") or os.path.expanduser("~")
+    elif sys.platform == "darwin":
+        base = os.path.expanduser("~/Library/Application Support")
+    else:
+        base = os.environ.get("XDG_CONFIG_HOME") or os.path.expanduser("~/.config")
+    return os.path.join(base, "YT Downloader", "settings.json")
+
+
+def load_settings():
+    try:
+        with open(settings_path(), encoding="utf-8") as f:
+            data = json.load(f)
+    except (OSError, ValueError):   # missing, unreadable or not JSON
+        return {}
+    return data if isinstance(data, dict) else {}
+
+
+def save_settings(data):
+    path = settings_path()
+    try:
+        os.makedirs(os.path.dirname(path), exist_ok=True)
+        # Write a temporary file first so a crash can't leave half a file.
+        with open(path + ".tmp", "w", encoding="utf-8") as f:
+            json.dump(data, f, indent=2)
+        os.replace(path + ".tmp", path)
+    except OSError:
+        pass   # not being able to remember settings isn't worth an error
+
 
 def format_eta(seconds):
     """138 -> "2:18", 3725 -> "1:02:05"."""
     minutes, secs = divmod(int(seconds), 60)
     hours, minutes = divmod(minutes, 60)
     return f"{hours}:{minutes:02d}:{secs:02d}" if hours else f"{minutes}:{secs:02d}"
+
+
+PREVIEW_HINT = "Paste a link to see its title and length here."
+THUMB_SIZE = (96, 54)
+
+
+def describe_info(info):
+    """The preview's two lines: the title, then the length (or size of a
+    playlist) and the channel."""
+    title = info.get("title") or "Untitled"
+    if len(title) > 100:
+        title = title[:99] + "…"
+    if info.get("_type") == "playlist":
+        count = info.get("playlist_count")
+        what = f"Playlist · {count} videos" if count else "Playlist or channel"
+    else:
+        duration = info.get("duration")
+        what = format_eta(duration) if duration else ""
+    channel = info.get("channel") or info.get("uploader") or ""
+    details = " · ".join(filter(None, [what, channel]))
+    return f"{title}\n{details}" if details else title
+
+
+def thumbnail_url(info):
+    """The smallest thumbnail at least 160 px wide, else the default one."""
+    thumbs = [t for t in info.get("thumbnails") or ()
+              if t.get("url") and (t.get("width") or 0) >= 160]
+    if thumbs:
+        return min(thumbs, key=lambda t: t["width"])["url"]
+    return info.get("thumbnail")
+
+
+def fetch_thumbnail(url):
+    """Downloads and shrinks a thumbnail; None without Pillow or on errors."""
+    if Image is None or not url or not url.startswith(("https://", "http://")):
+        return None
+    try:
+        with urllib.request.urlopen(url, timeout=10) as response:
+            data = response.read(2_000_001)
+        if len(data) > 2_000_000:
+            return None
+        image = Image.open(io.BytesIO(data)).convert("RGB")
+        image.thumbnail(THUMB_SIZE)
+        return image
+    except Exception:   # a preview isn't worth an error message
+        return None
+
+
+def reveal_in_file_manager(path):
+    """Open the folder holding path, with the file selected where possible."""
+    folder = os.path.dirname(path)
+    if sys.platform == "win32":
+        if os.path.isfile(path):
+            # Windows paths can't contain quotes, so this quoting is safe.
+            subprocess.Popen(f'explorer /select,"{os.path.normpath(path)}"')
+        else:
+            os.startfile(folder)
+    elif sys.platform == "darwin":
+        subprocess.Popen(["open", "-R", path] if os.path.isfile(path)
+                         else ["open", folder])
+    else:
+        subprocess.Popen(["xdg-open", folder])
 
 
 def _ffmpeg_install_hint():
@@ -242,6 +356,13 @@ class YouTubeDownloader(tk.Tk):
         self._entry_files = set()
         self._close_when_stopped = False
         self._placeholder_shown = False
+        self._last_file = None
+        self.preview_text  = tk.StringVar(value=PREVIEW_HINT)
+        self._preview_after = None     # pending lookup (waits for typing to pause)
+        self._preview_key   = None     # (url, whole playlist) last looked up
+        self._preview_token = 0        # newest lookup; older answers are dropped
+        self._preview_image = None     # keeps the PhotoImage alive
+        self._apply_saved_settings()
 
         self._build_ui()
         self._fit_window()
@@ -286,7 +407,7 @@ class YouTubeDownloader(tk.Tk):
 
         url_frame = tk.Frame(card, bg=SURFACE2, highlightbackground=ACCENT,
                              highlightthickness=1)
-        url_frame.grid(row=row, column=0, columnspan=2, sticky="ew", pady=(0, 16))
+        url_frame.grid(row=row, column=0, columnspan=2, sticky="ew", pady=(0, 8))
         url_frame.columnconfigure(0, weight=1)
 
         self.url_entry = tk.Entry(url_frame, font=(UI_FONT, 12),
@@ -296,6 +417,8 @@ class YouTubeDownloader(tk.Tk):
         self._restore_placeholder()
         self.url_entry.bind("<FocusIn>",  self._clear_placeholder)
         self.url_entry.bind("<FocusOut>", self._restore_placeholder)
+        self.url_entry.bind("<FocusOut>", self._schedule_preview, add="+")
+        self.url_entry.bind("<KeyRelease>", self._schedule_preview)
         self.url_entry.bind("<Return>",   lambda e: self._start_download())
 
         btn_paste = tk.Button(url_frame, text="Paste", font=(UI_FONT, 9),
@@ -303,6 +426,23 @@ class YouTubeDownloader(tk.Tk):
                               padx=10, cursor="hand2",
                               command=self._paste_url)
         btn_paste.grid(row=0, column=1, padx=(0, 2), pady=2)
+        row += 1
+
+        # Preview of the link: thumbnail, title, length and channel
+        preview = tk.Frame(card, bg=SURFACE)
+        preview.grid(row=row, column=0, columnspan=2, sticky="ew", pady=(0, 14))
+        preview.columnconfigure(1, weight=1)
+        thumb_box = tk.Frame(preview, bg=SURFACE2, width=THUMB_SIZE[0],
+                             height=THUMB_SIZE[1])
+        thumb_box.grid(row=0, column=0, sticky="nw")   # fixed size, image or not
+        self.preview_img = tk.Label(thumb_box, bg=SURFACE2, bd=0)
+        self.preview_img.place(relx=0.5, rely=0.5, anchor="center")
+        self.preview_lbl = tk.Label(preview, textvariable=self.preview_text,
+                                    font=(UI_FONT, 10), bg=SURFACE, fg=TEXT_DIM,
+                                    justify="left", anchor="nw", wraplength=400)
+        self.preview_lbl.grid(row=0, column=1, sticky="new", padx=(12, 0))
+        self.preview_lbl.bind("<Configure>", lambda e: self.preview_lbl.config(
+            wraplength=max(e.width - 4, 100)))
         row += 1
 
         # Format
@@ -314,15 +454,7 @@ class YouTubeDownloader(tk.Tk):
         fmt_frame = tk.Frame(card, bg=SURFACE)
         fmt_frame.grid(row=row, column=0, columnspan=2, sticky="ew", pady=(0, 16))
 
-        formats = [
-            ("Best MP4 (Video+Audio)", "mp4_best"),
-            ("1080p MP4",              "1080p"),
-            ("720p MP4",               "720p"),
-            ("480p MP4",               "480p"),
-            ("Audio Only (MP3)",       "mp3"),
-            ("Audio Only (M4A)",       "m4a"),
-        ]
-        for i, (label, val) in enumerate(formats):
+        for i, (label, val) in enumerate(FORMATS):
             col, rrow = divmod(i, 3)
             rb = tk.Radiobutton(fmt_frame, text=label, variable=self.format_var,
                                 value=val, font=(UI_FONT, 10),
@@ -335,7 +467,8 @@ class YouTubeDownloader(tk.Tk):
                        variable=self.playlist_var, font=(UI_FONT, 10),
                        bg=SURFACE, fg=TEXT_DIM, selectcolor=SURFACE2,
                        activebackground=SURFACE, activeforeground=TEXT,
-                       cursor="hand2").grid(row=0, column=2, sticky="w", pady=2)
+                       cursor="hand2", command=self._schedule_preview,
+                       ).grid(row=0, column=2, sticky="w", pady=2)
         row += 1
 
         # Output folder
@@ -382,11 +515,21 @@ class YouTubeDownloader(tk.Tk):
         self.progress.grid(row=row, column=0, columnspan=2, sticky="ew", pady=(0, 6))
         row += 1
 
-        # Status label
-        self.status_lbl = tk.Label(card, textvariable=self.status_var,
+        # Status label, with an "Open folder" button after a download
+        status_row = tk.Frame(card, bg=SURFACE)
+        status_row.grid(row=row, column=0, columnspan=2, sticky="ew")
+        status_row.columnconfigure(0, weight=1)
+        self.status_lbl = tk.Label(status_row, textvariable=self.status_var,
                                    font=(UI_FONT, 10), bg=SURFACE, fg=TEXT_DIM,
                                    wraplength=580, justify="left", anchor="w")
-        self.status_lbl.grid(row=row, column=0, columnspan=2, sticky="ew")
+        self.status_lbl.grid(row=0, column=0, sticky="ew")
+        self.open_btn = tk.Button(status_row, text="📂  Open folder",
+                                  font=(UI_FONT, 9), bg=SURFACE2, fg=TEXT,
+                                  relief="flat", bd=0, padx=10, cursor="hand2",
+                                  activebackground=BORDER, activeforeground=TEXT,
+                                  command=self._open_folder)
+        self.open_btn.grid(row=0, column=1, sticky="ne", padx=(8, 0))
+        self.open_btn.grid_remove()   # shown once a download has saved a file
         # Wrap long messages at the label's current width, not a fixed one.
         self.status_lbl.bind("<Configure>", lambda e: self.status_lbl.config(
             wraplength=max(e.width - 4, 100)))
@@ -410,6 +553,20 @@ class YouTubeDownloader(tk.Tk):
         sb = tk.Scrollbar(log_frame, command=self.log_box.yview, bg=SURFACE)
         sb.grid(row=1, column=1, sticky="ns")
         self.log_box.configure(yscrollcommand=sb.set)
+
+    # The last folder and format are remembered (when a download starts and
+    # when the app closes). The "Whole playlist" box always starts unticked.
+    def _apply_saved_settings(self):
+        saved = load_settings()
+        if saved.get("format") in {value for _, value in FORMATS}:
+            self.format_var.set(saved["format"])
+        folder = saved.get("folder")
+        if isinstance(folder, str) and os.path.isdir(folder):
+            self.download_path.set(folder)
+
+    def _save_settings(self):
+        save_settings({"folder": self.download_path.get(),
+                       "format": self.format_var.get()})
 
     def _fit_window(self):
         # Open tall enough to show everything (but no taller than the screen).
@@ -456,6 +613,7 @@ class YouTubeDownloader(tk.Tk):
         self.url_entry.delete(0, "end")
         self.url_entry.insert(0, clip.strip())
         self.url_entry.config(fg=TEXT)
+        self._schedule_preview(delay=100)
 
     def _browse_folder(self):
         path = filedialog.askdirectory(initialdir=self.download_path.get())
@@ -523,10 +681,12 @@ class YouTubeDownloader(tk.Tk):
             self._set_status("Canceling… the app closes when it has stopped.",
                              WARNING)
             return
+        self._save_settings()
         self._closing = True
-        if self._after_id is not None:
-            self.after_cancel(self._after_id)
-            self._after_id = None
+        for pending in (self._after_id, self._preview_after):
+            if pending is not None:
+                self.after_cancel(pending)
+        self._after_id = self._preview_after = None
         self.destroy()
 
     def _set_progress(self, pct, msg, color):
@@ -607,6 +767,7 @@ class YouTubeDownloader(tk.Tk):
     def _file_done(self, info):
         self._entry_files.clear()   # finished: nothing for Cancel to remove
         path = info.get("filepath", "")
+        self._last_file = path      # for "Open folder"
         if info.get("__real_download"):
             self._saved += 1
             self._post(self._log, f"✔ Saved: {path}")
@@ -658,6 +819,7 @@ class YouTubeDownloader(tk.Tk):
             return
 
         opts = self._get_ydl_opts(ffmpeg)
+        self._save_settings()
         self.is_running = True
         self.dl_btn.config(text="✖  Cancel", command=self._cancel_download)
         self.progress_var.set(0)
@@ -671,6 +833,8 @@ class YouTubeDownloader(tk.Tk):
         self._cancel = threading.Event()
         self._entry_files = set()
         self._latest_progress = self._shown_progress = None
+        self._last_file = None
+        self.open_btn.grid_remove()
         self._start_worker(self._download_thread, url, opts,
                            not self.playlist_var.get())
 
@@ -756,6 +920,7 @@ class YouTubeDownloader(tk.Tk):
         detail = f" ({', '.join(parts)})" if parts else ""
         self._set_status(f"Download canceled{detail}.")
         self._log(f"✘ Download canceled{detail}.\n")
+        self._offer_open_folder()
 
     def _download_declined(self):
         self._end_download()
@@ -782,18 +947,93 @@ class YouTubeDownloader(tk.Tk):
             self.progress_var.set(100)
             self._set_status(f"✔ {summary}", WARNING if self._skipped else SUCCESS)
             self._log(f"✔ {summary}" + chr(10))
-            messagebox.showinfo("Done", summary)
+            self._offer_open_folder()
         elif success:
             self.progress_var.set(100)
             self._set_status("✔ Download complete!", SUCCESS)
             self._log("✔ Done!\n")
-            messagebox.showinfo("Done", "Download complete!")
+            self._offer_open_folder()
         else:
             self.progress_var.set(0)
             self._set_status(f"✘ Error: {error}", ACCENT)
             if not logged:
                 self._log(f"✘ Error: {error}\n")
             messagebox.showerror("Download Failed", str(error))
+
+    # Instead of a "Done" pop-up after every download, the status line says
+    # how it went and offers a button to open the folder.
+    def _offer_open_folder(self):
+        if self._last_file:
+            self.open_btn.grid()
+
+    def _open_folder(self):
+        path = self._last_file
+        if not path or not os.path.isdir(os.path.dirname(path)):
+            messagebox.showerror("Folder not found",
+                                 "The download folder doesn't exist anymore.")
+            return
+        try:
+            reveal_in_file_manager(path)
+        except OSError as exc:
+            messagebox.showerror("Couldn't open the folder", str(exc))
+
+    # ── Link preview ─────────────────────────────────────────────────────────
+
+    # Waits until typing pauses, so not every keystroke starts a lookup.
+    def _schedule_preview(self, _e=None, delay=600):
+        if self._preview_after is not None:
+            self.after_cancel(self._preview_after)
+        self._preview_after = self.after(delay, self._start_preview)
+
+    def _start_preview(self):
+        self._preview_after = None
+        url = self._url()
+        key = (url, self.playlist_var.get())
+        if key == self._preview_key:
+            return
+        self._preview_key = key
+        self._preview_token += 1
+        if not url:
+            return self._set_preview(PREVIEW_HINT, dim=True)
+        if not url.startswith(("https://", "http://")) or not YT_DLP_AVAILABLE:
+            return self._set_preview("No preview for this link.", dim=True)
+        self._set_preview("Loading preview…", dim=True)
+        self._start_worker(self._preview_thread, url, not self.playlist_var.get(),
+                           self._preview_token)
+
+    # Runs on a worker thread. Like a download, it follows "url" results
+    # (e.g. a video opened from a playlist) and doesn't page through a
+    # playlist's entries, so even big playlists take a second or two.
+    def _preview_thread(self, url, noplaylist, token):
+        text, image, found = "Couldn't load a preview for this link.", None, False
+        try:
+            opts = {"quiet": True, "skip_download": True, "noplaylist": noplaylist,
+                    "logger": _YdlLogger(lambda msg: None),
+                    "color": {"stdout": "never", "stderr": "never"}}
+            with yt_dlp.YoutubeDL(opts) as ydl:
+                info = ydl.extract_info(url, download=False, process=False)
+                for _ in range(3):
+                    if not info or info.get("_type") not in ("url", "url_transparent"):
+                        break
+                    info = ydl.extract_info(info["url"], download=False,
+                                            process=False, ie_key=info.get("ie_key"))
+            if info:
+                text, found = describe_info(info), True
+                image = fetch_thumbnail(thumbnail_url(info))
+        except Exception:   # e.g. not a video page; the preview just says so
+            pass
+        self._post(self._preview_done, text, image, found, token)
+
+    def _preview_done(self, text, image, found, token):
+        self._worker_finished()
+        if token == self._preview_token:   # drop answers for an older link
+            self._set_preview(text, image, dim=not found)
+
+    def _set_preview(self, text, image=None, dim=False):
+        self.preview_text.set(text)
+        self.preview_lbl.config(fg=TEXT_DIM if dim else TEXT)
+        self._preview_image = ImageTk.PhotoImage(image) if image is not None else None
+        self.preview_img.config(image=self._preview_image or "")
 
     def _recheck_ffmpeg(self, event=None):
         # The root's <FocusIn> binding also fires for each child widget.

@@ -47,7 +47,7 @@ Sources: [youtube_downloader.py:229-311](https://github.com/lifeupnorth/YouTubeD
 
 ## Configuration
 
-There are no settings files, environment variables or command-line options. Everything is chosen in the window each time, and nothing is remembered between runs. The only tunables are constants at the top of the script: the color palette, `VIDEO_MAX_RES`, and the window size in `__init__`.
+There are no environment variables or command-line options. The last **Save To** folder and **Format** are remembered in a small JSON file (`settings_path()`: `%APPDATA%\YT Downloader\settings.json` on Windows, `~/Library/Application Support/YT Downloader/` on macOS, `$XDG_CONFIG_HOME` or `~/.config/YT Downloader/` elsewhere). It's saved when a download starts and when the app closes; a missing folder, an unknown format or a broken file falls back to the defaults. **Whole playlist** is never remembered. The only tunables are constants at the top of the script: the color palette, `VIDEO_MAX_RES`, and the window size in `__init__`.
 
 Sources: [youtube_downloader.py:25-41](https://github.com/lifeupnorth/YouTubeDownloader/blob/bd3fd4242f83ee2cf111812e71b6d2db5aa71bdf/youtube_downloader.py#L25-L41), [youtube_downloader.py:172-183](https://github.com/lifeupnorth/YouTubeDownloader/blob/bd3fd4242f83ee2cf111812e71b6d2db5aa71bdf/youtube_downloader.py#L172-L183)
 
