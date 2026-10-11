@@ -1,98 +1,28 @@
 #!/usr/bin/env python3
 """
 YouTube Video Downloader — Desktop App
+
+This file is the window. The downloading itself is in download_engine.py,
+which doesn't use Tk.
 Requirements: pip install -r requirements.txt
 """
 
-import functools
-import glob
-import importlib
-import io
 import json
 import os
 import queue
-import re
-import shutil
-import site
 import subprocess
 import sys
 import threading
 import tkinter as tk
-import urllib.request
 from tkinter import filedialog, messagebox, ttk
 
-# ── Try importing yt-dlp; offer to install if missing ──────────────────────
+import download_engine as engine
+
+# Optional: thumbnails in the link preview need Pillow (see download_engine).
 try:
-    import yt_dlp
-    YT_DLP_AVAILABLE = True
+    from PIL import ImageTk
 except ImportError:
-    yt_dlp = None   # load_yt_dlp() can import it later, after an install
-    YT_DLP_AVAILABLE = False
-
-# Optional: without Pillow, link previews show text but no thumbnail
-# (YouTube thumbnails are JPEG/WebP, which Tk can't show by itself).
-try:
-    from PIL import Image, ImageTk
-except ImportError:
-    Image = ImageTk = None
-
-
-def _yt_dlp_requirement():
-    # requirements.txt next to this script is the only place the yt-dlp pin is
-    # kept (Dependabot bumps it). Unpinned if the script was copied on its own.
-    path = os.path.join(os.path.dirname(os.path.abspath(__file__)),
-                        "requirements.txt")
-    try:
-        with open(path, encoding="utf-8") as f:
-            for line in f:
-                line = line.split("#", 1)[0].strip()
-                if line.lower().startswith("yt-dlp"):
-                    return line
-    except OSError:
-        pass
-    return "yt-dlp"
-
-
-# What the in-app installer runs pip with, e.g. "yt-dlp==2026.8.19".
-YT_DLP_REQUIREMENT = _yt_dlp_requirement()
-
-
-def load_yt_dlp():
-    """Imports yt-dlp while the app is running, right after the built-in
-    installer ran, so no restart is needed. True if it's usable now."""
-    global yt_dlp, YT_DLP_AVAILABLE
-    importlib.invalidate_caches()
-    # pip may have just created the per-user site-packages folder (when it
-    # can't write to Python's own); Python only adds it at startup.
-    user_site = site.getusersitepackages()
-    if site.ENABLE_USER_SITE and os.path.isdir(user_site):
-        site.addsitedir(user_site)
-    try:
-        yt_dlp = importlib.import_module("yt_dlp")
-    except ImportError:
-        return False
-    YT_DLP_AVAILABLE = True
-    return True
-
-
-def yt_dlp_version():
-    """The installed yt-dlp's version, e.g. "2026.08.19", or None."""
-    if not YT_DLP_AVAILABLE:
-        return None
-    return getattr(getattr(yt_dlp, "version", None), "__version__", None)
-
-
-def pinned_yt_dlp_version():
-    """The version requirements.txt pins, e.g. "2026.8.19", or None."""
-    _name, sep, version = YT_DLP_REQUIREMENT.partition("==")
-    return version if sep else None
-
-
-def same_version(a, b):
-    """yt-dlp calls itself "2026.08.19" where pip writes "2026.8.19"."""
-    def parts(version):
-        return tuple(int(p) if p.isdigit() else p for p in version.split("."))
-    return parts(a) == parts(b)
+    ImageTk = None
 
 
 # ── Color palette ───────────────────────────────────────────────────────────
@@ -113,9 +43,6 @@ MONO_FONT = "Consolas" if sys.platform == "win32" else "Courier"
 
 URL_PLACEHOLDER = "https://www.youtube.com/watch?v=..."
 
-# res:N caps the shorter side (as YouTube's labels do), not the height: for a
-# vertical 1080x1920 video, "480p" gives 480x854.
-VIDEO_MAX_RES = {"mp4_best": None, "1080p": 1080, "720p": 720, "480p": 480}
 
 FFMPEG_MISSING_STATUS = "ffmpeg not found, see the log below"
 
@@ -162,57 +89,7 @@ def save_settings(data):
         pass   # not being able to remember settings isn't worth an error
 
 
-def format_eta(seconds):
-    """138 -> "2:18", 3725 -> "1:02:05"."""
-    minutes, secs = divmod(int(seconds), 60)
-    hours, minutes = divmod(minutes, 60)
-    return f"{hours}:{minutes:02d}:{secs:02d}" if hours else f"{minutes}:{secs:02d}"
-
-
 PREVIEW_HINT = "Paste a link to see its title and length here."
-THUMB_SIZE = (96, 54)
-
-
-def describe_info(info):
-    """The preview's two lines: the title, then the length (or size of a
-    playlist) and the channel."""
-    title = info.get("title") or "Untitled"
-    if len(title) > 100:
-        title = title[:99] + "…"
-    if info.get("_type") == "playlist":
-        count = info.get("playlist_count")
-        what = f"Playlist · {count} videos" if count else "Playlist or channel"
-    else:
-        duration = info.get("duration")
-        what = format_eta(duration) if duration else ""
-    channel = info.get("channel") or info.get("uploader") or ""
-    details = " · ".join(filter(None, [what, channel]))
-    return f"{title}\n{details}" if details else title
-
-
-def thumbnail_url(info):
-    """The smallest thumbnail at least 160 px wide, else the default one."""
-    thumbs = [t for t in info.get("thumbnails") or ()
-              if t.get("url") and (t.get("width") or 0) >= 160]
-    if thumbs:
-        return min(thumbs, key=lambda t: t["width"])["url"]
-    return info.get("thumbnail")
-
-
-def fetch_thumbnail(url):
-    """Downloads and shrinks a thumbnail; None without Pillow or on errors."""
-    if Image is None or not url or not url.startswith(("https://", "http://")):
-        return None
-    try:
-        with urllib.request.urlopen(url, timeout=10) as response:
-            data = response.read(2_000_001)
-        if len(data) > 2_000_000:
-            return None
-        image = Image.open(io.BytesIO(data)).convert("RGB")
-        image.thumbnail(THUMB_SIZE)
-        return image
-    except Exception:   # a preview isn't worth an error message
-        return None
 
 
 def reveal_in_file_manager(path):
@@ -247,129 +124,6 @@ def ffmpeg_help(startup=False):
             f"MP3/M4A, but it wasn't found.\n\n{_ffmpeg_install_hint()}\n\n{then}")
 
 
-def _registry_path():
-    # The saved Path, which includes installs made after this process started
-    # (winget, Chocolatey, Scoop, manual); os.environ only has the old one.
-    import winreg
-    parts = []
-    # Machine Path before user Path, the order Windows builds PATH in.
-    for root, key in ((winreg.HKEY_LOCAL_MACHINE,
-                       r"SYSTEM\CurrentControlSet\Control\Session Manager\Environment"),
-                      (winreg.HKEY_CURRENT_USER, r"Environment")):
-        try:
-            with winreg.OpenKey(root, key) as k:
-                parts.append(os.path.expandvars(winreg.QueryValueEx(k, "Path")[0]))
-        except OSError:
-            pass
-    return os.pathsep.join(parts)
-
-
-def find_ffmpeg():
-    found = shutil.which("ffmpeg")
-    if found is None and sys.platform == "win32":
-        found = shutil.which("ffmpeg", path=_registry_path())
-    return found
-
-
-def format_opts(fmt):
-    """yt-dlp options for one of the Format radio button values."""
-    if fmt in VIDEO_MAX_RES:
-        res = VIDEO_MAX_RES[fmt]
-        # Sort instead of filter: when nothing matches exactly, yt-dlp picks
-        # the closest format rather than failing with "format not available".
-        return {
-            "format": "bv*+ba/b",
-            "format_sort": ([f"res:{res}"] if res else []) + ["ext:mp4:m4a"],
-            "merge_output_format": "mp4",
-            # The single-file fallback ("b") is not always MP4.
-            "postprocessors": [{"key": "FFmpegVideoRemuxer",
-                                "preferedformat": "mp4"}],
-        }
-    if fmt == "mp3":
-        return {
-            "format": "bestaudio/best",
-            "postprocessors": [{
-                "key": "FFmpegExtractAudio",
-                "preferredcodec": "mp3",
-                "preferredquality": "192",
-            }],
-        }
-    if fmt == "m4a":
-        return {
-            "format": "bestaudio[ext=m4a]/bestaudio/best",
-            "postprocessors": [{
-                "key": "FFmpegExtractAudio",
-                "preferredcodec": "m4a",
-            }],
-        }
-    raise ValueError(f"unknown format: {fmt}")
-
-
-_ANSI_CODES = re.compile(r"\x1b\[[0-9;]*m")
-
-
-class _YdlLogger:
-    """Hands yt-dlp's errors to on_error (with ignoreerrors they don't raise)
-    and its warnings to on_warning, so both reach the app's log, also when
-    there's no console (pythonw)."""
-
-    def __init__(self, on_error, on_warning=lambda msg: None):
-        self._on_error = on_error
-        self.warning = on_warning
-
-    def error(self, msg):
-        # yt-dlp also sends its "Deprecated Feature: ..." notices (e.g. for an
-        # old Python version) here, after already passing them to warning().
-        # They aren't failed downloads.
-        if _ANSI_CODES.sub("", msg).startswith("Deprecated Feature:"):
-            return
-        self._on_error(msg)
-
-    def debug(self, msg):
-        pass
-
-    info = debug
-
-
-@functools.cache
-def _callback_pp_class(base):
-    class CallbackPP(base):
-        def __init__(self, fn):
-            super().__init__()
-            self._fn = fn
-
-        def run(self, info):
-            self._fn(info)
-            return [], info
-
-    return CallbackPP
-
-
-@functools.cache
-def _stream_counter_class(base):
-    # Defined lazily because yt_dlp may be missing at import time.
-    class StreamCounter(base):
-        """before_dl hook, run once per video (also per playlist entry).
-
-        Merged formats download video and audio as separate streams, and the
-        progress hook's info_dict no longer lists them, so count them here.
-        """
-
-        def __init__(self, app):
-            super().__init__()
-            self._app = app
-
-        def run(self, info):
-            # Also where Cancel stops a playlist between two videos.
-            self._app._check_canceled()
-            self._app._stream_index = 0
-            self._app._stream_count = len(info.get("requested_formats") or ()) or 1
-            self._app._entry_files = set()
-            return [], info
-
-    return StreamCounter
-
-
 class YouTubeDownloader(tk.Tk):
     def __init__(self):
         super().__init__()
@@ -389,18 +143,13 @@ class YouTubeDownloader(tk.Tk):
         self._closing      = False
         self._latest_progress = None
         self._shown_progress  = None
-        self._stream_index = 0
-        self._stream_count = 1
-        self._saved = self._already = 0
-        self._skipped = []
-        self._cancel = threading.Event()
-        self._entry_files = set()
+        self._queue = None             # the running engine.DownloadQueue
         self._close_when_stopped = False
         self._placeholder_shown = False
         self._last_file = None
         self.preview_text  = tk.StringVar(value=PREVIEW_HINT)
         self._preview_after = None     # pending lookup (waits for typing to pause)
-        self._preview_key   = None     # (url, whole playlist) last looked up
+        self._preview_key   = None     # (links, whole playlist) last looked up
         self._preview_token = 0        # newest lookup; older answers are dropped
         self._preview_image = None     # keeps the PhotoImage alive
         self._apply_saved_settings()
@@ -409,9 +158,9 @@ class YouTubeDownloader(tk.Tk):
         self._fit_window()
         self.protocol("WM_DELETE_WINDOW", self._on_close)
 
-        if not YT_DLP_AVAILABLE:
+        if not engine.YT_DLP_AVAILABLE:
             self.after(300, self._prompt_install)
-        self._ffmpeg_missing = not find_ffmpeg()
+        self._ffmpeg_missing = not engine.find_ffmpeg()
         if self._ffmpeg_missing:
             self._set_status(FFMPEG_MISSING_STATUS, WARNING)
             self._log(ffmpeg_help(startup=True))
@@ -443,7 +192,7 @@ class YouTubeDownloader(tk.Tk):
         row = 0
 
         # URL
-        tk.Label(card, text="YouTube URL", font=(UI_FONT, 11, "bold"),
+        tk.Label(card, text="YouTube URLs (one per line)", font=(UI_FONT, 11, "bold"),
                  bg=SURFACE, fg=TEXT).grid(row=row, column=0, columnspan=2,
                                            sticky="w", pady=(0, 6))
         row += 1
@@ -453,16 +202,21 @@ class YouTubeDownloader(tk.Tk):
         url_frame.grid(row=row, column=0, columnspan=2, sticky="ew", pady=(0, 8))
         url_frame.columnconfigure(0, weight=1)
 
-        self.url_entry = tk.Entry(url_frame, font=(UI_FONT, 12),
-                                  bg=SURFACE2, fg=TEXT, insertbackground=TEXT,
-                                  relief="flat", bd=8)
+        # Several links can go in, one per line; they download in order. The
+        # box grows to 4 lines. Enter downloads, Shift+Enter adds a line.
+        self.url_entry = tk.Text(url_frame, height=1, wrap="none",
+                                 font=(UI_FONT, 12), bg=SURFACE2, fg=TEXT,
+                                 insertbackground=TEXT, relief="flat", bd=0,
+                                 padx=8, pady=8, highlightthickness=0, undo=True)
         self.url_entry.grid(row=0, column=0, sticky="ew")
         self._restore_placeholder()
         self.url_entry.bind("<FocusIn>",  self._clear_placeholder)
         self.url_entry.bind("<FocusOut>", self._restore_placeholder)
         self.url_entry.bind("<FocusOut>", self._schedule_preview, add="+")
-        self.url_entry.bind("<KeyRelease>", self._schedule_preview)
-        self.url_entry.bind("<Return>",   lambda e: self._start_download())
+        self.url_entry.bind("<KeyRelease>", self._on_url_typed)
+        self.url_entry.bind("<Return>", self._on_url_enter)
+        self.url_entry.bind("<Shift-Return>", lambda e: None)   # a new line
+        self.url_entry.bind("<Tab>", self._focus_next)
 
         btn_paste = tk.Button(url_frame, text="Paste", font=(UI_FONT, 9),
                               bg=ACCENT, fg=TEXT, relief="flat", bd=0,
@@ -475,8 +229,8 @@ class YouTubeDownloader(tk.Tk):
         preview = tk.Frame(card, bg=SURFACE)
         preview.grid(row=row, column=0, columnspan=2, sticky="ew", pady=(0, 14))
         preview.columnconfigure(1, weight=1)
-        thumb_box = tk.Frame(preview, bg=SURFACE2, width=THUMB_SIZE[0],
-                             height=THUMB_SIZE[1])
+        thumb_box = tk.Frame(preview, bg=SURFACE2, width=engine.THUMB_SIZE[0],
+                             height=engine.THUMB_SIZE[1])
         thumb_box.grid(row=0, column=0, sticky="nw")   # fixed size, image or not
         self.preview_img = tk.Label(thumb_box, bg=SURFACE2, bd=0)
         self.preview_img.place(relx=0.5, rely=0.5, anchor="center")
@@ -630,22 +384,51 @@ class YouTubeDownloader(tk.Tk):
     def _clear_placeholder(self, _e=None):
         if self._placeholder_shown:
             self._placeholder_shown = False
-            self.url_entry.delete(0, "end")
-            self.url_entry.config(fg=TEXT)
+            self._replace_url_text("")
 
     def _restore_placeholder(self, _e=None):
-        if not self.url_entry.get().strip():
-            self.url_entry.delete(0, "end")
-            self.url_entry.insert(0, URL_PLACEHOLDER)
+        if not self._url_text().strip():
+            self._replace_url_text(URL_PLACEHOLDER)
             self.url_entry.config(fg=TEXT_DIM)
             self._placeholder_shown = True
 
-    def _url(self):
-        """The entered URL, or "" while the placeholder is showing."""
-        text = self.url_entry.get().strip()
+    def _url_text(self):
+        return self.url_entry.get("1.0", "end-1c")
+
+    def _replace_url_text(self, text):
+        self.url_entry.delete("1.0", "end")
+        self.url_entry.insert("1.0", text)
+        self.url_entry.config(fg=TEXT)
+        self._fit_url_box()
+
+    def _urls(self):
+        """The links entered (one per line, or separated by spaces) in order
+        and without repeats; none while the placeholder is showing."""
+        text = self._url_text().strip()
         if self._placeholder_shown and text == URL_PLACEHOLDER:
-            return ""
-        return text
+            return []
+        return list(dict.fromkeys(text.split()))
+
+    def _url(self):
+        """The first link, or "" if there's none."""
+        urls = self._urls()
+        return urls[0] if urls else ""
+
+    def _fit_url_box(self):
+        lines = int(self.url_entry.index("end-1c").split(".")[0])
+        self.url_entry.config(height=min(max(lines, 1), 4))
+
+    def _on_url_typed(self, _e=None):
+        self._fit_url_box()
+        self._schedule_preview()
+
+    def _on_url_enter(self, _e=None):
+        self._start_download()
+        return "break"   # no new line
+
+    def _focus_next(self, event):
+        event.widget.tk_focusNext().focus()
+        return "break"   # no tab character
 
     def _paste_url(self):
         try:
@@ -653,9 +436,7 @@ class YouTubeDownloader(tk.Tk):
         except tk.TclError:   # empty clipboard, or not text
             return
         self._placeholder_shown = False
-        self.url_entry.delete(0, "end")
-        self.url_entry.insert(0, clip.strip())
-        self.url_entry.config(fg=TEXT)
+        self._replace_url_text("\n".join(clip.split()))   # one link per line
         self._schedule_preview(delay=100)
 
     def _browse_folder(self):
@@ -719,7 +500,7 @@ class YouTubeDownloader(tk.Tk):
                     "Cancel it and close the app?"):
                 return
             self._close_when_stopped = True
-            if not self._cancel.is_set():
+            if not self._queue.canceled:
                 self._cancel_download()
             self._set_status("Canceling… the app closes when it has stopped.",
                              WARNING)
@@ -736,97 +517,60 @@ class YouTubeDownloader(tk.Tk):
         self.progress_var.set(pct)
         self._set_status(msg, color)
 
-    # ── Download logic ───────────────────────────────────────────────────────
+    # ── Downloading (the work itself is engine.DownloadQueue) ───────────────
 
-    def _get_ydl_opts(self, ffmpeg):
-        fmt = self.format_var.get()
-        out_dir = self.download_path.get()
+    def _start_download(self):
+        if not engine.YT_DLP_AVAILABLE:
+            self._prompt_install()
+            return
 
-        opts = {
-            # Playlist entries go to "<playlist>/<NNN> - <title>.<ext>" (the
-            # index keeps same-title videos apart); single videos to
-            # "<title>.<ext>", as an empty folder name collapses.
-            "outtmpl": os.path.join(out_dir, "%(playlist_title|)s",
-                                    "%(playlist_index&{:03d} - |)s%(title)s.%(ext)s"),
-            "progress_hooks": [self._progress_hook],
-            # Only affects links to a video in a playlist (watch?v=…&list=…).
-            "noplaylist": not self.playlist_var.get(),
-            "quiet": True,
-            "no_warnings": False,
-            # Like the yt-dlp CLI: skip unavailable entries instead of stopping.
-            "ignoreerrors": "only_download",
-            "logger": _YdlLogger(self._entry_failed, self._entry_warning),
-            # "auto" colors the ERROR: prefix when started from a terminal.
-            "color": {"stdout": "never", "stderr": "never"},
-        }
+        ffmpeg = engine.find_ffmpeg()
+        self._ffmpeg_missing = not ffmpeg
+        if self._ffmpeg_missing:
+            messagebox.showerror("ffmpeg not found", ffmpeg_help())
+            return
 
-        opts.update(format_opts(fmt))
-        opts["ffmpeg_location"] = ffmpeg
+        urls = self._urls()
+        if not urls:
+            messagebox.showwarning("No URL", "Please enter a YouTube URL.")
+            return
 
-        return opts
+        if self.is_running:
+            messagebox.showinfo("Busy", "A download is already in progress.")
+            return
 
-    # Runs on the download thread. Raising here is how yt-dlp lets a caller
-    # stop a download; it leaves the .part file, which Cancel then removes.
-    def _check_canceled(self):
-        if self._cancel.is_set():
-            raise yt_dlp.utils.DownloadCancelled()
+        # Tk variables are read here, on the main thread; the queue gets values.
+        self._queue = engine.DownloadQueue(
+            urls, fmt=self.format_var.get(), folder=self.download_path.get(),
+            ffmpeg=ffmpeg, whole_playlist=self.playlist_var.get(),
+            on_progress=self._job_progress, on_log=self._job_log,
+            ask=self._job_ask)
+        self._save_settings()
+        self.is_running = True
+        self.dl_btn.config(text="✖  Cancel", command=self._cancel_download)
+        self.progress_var.set(0)
+        self._set_status("Starting download…", WARNING)
+        self._log(f"▶ {urls[0]}" if len(urls) == 1 else f"▶ {len(urls)} links")
+        self._latest_progress = self._shown_progress = None
+        self._last_file = None
+        self.open_btn.grid_remove()
+        self._start_worker(self._run_queue, self._queue)
+
+    # The queue's callbacks run on the download thread: they only hand things
+    # to the main thread (see _post and _poll_ui_queue).
+    def _job_progress(self, pct, message):
+        self._latest_progress = (pct, message, WARNING)
+
+    def _job_log(self, message):
+        self._post(self._log, message)
+
+    def _job_ask(self, question):
+        return self._ask_on_main("Playlist", question)
 
     # Runs on the download thread.
-    def _progress_hook(self, d):
-        if d["status"] == "downloading":
-            # Only files this run is writing; already-downloaded files never
-            # get a "downloading" event, so Cancel can't remove them.
-            self._entry_files.update(
-                p for p in (d.get("tmpfilename"), d.get("filename")) if p)
-        self._check_canceled()
-        streams = self._stream_count
-        entry = d.get("info_dict") or {}
-        index, count = entry.get("playlist_index"), entry.get("n_entries")
-        video = f"Video {index}/{count} · " if index and count else ""
-        if d["status"] == "downloading":
-            total   = d.get("total_bytes") or d.get("total_bytes_estimate", 0)
-            downloaded = d.get("downloaded_bytes", 0)
-            speed   = d.get("speed", 0) or 0
-            eta     = d.get("eta", 0) or 0
-
-            pct = min(downloaded / total * 100, 100) if total else 0
-            # Tops out at 99; only _download_done moves the bar to 100.
-            pct = (min(self._stream_index, streams - 1) * 100 + pct) / streams * 0.99
-            speed_str = f"{speed/1024/1024:.1f} MB/s" if speed > 0 else ""
-            eta_str   = f"ETA {format_eta(eta)}" if eta > 0 else ""
-            info      = " · ".join(filter(None, [speed_str, eta_str]))
-
-            self._latest_progress = (
-                pct, f"{video}Downloading… {pct:.1f}%  {info}", WARNING)
-
-        elif d["status"] == "finished":
-            self._stream_index += 1
-            if self._stream_index >= streams:
-                self._latest_progress = (99, f"{video}Processing…", WARNING)
-
-    # Runs on the download thread as an after_move post-processor: once per
-    # video, with its final file (the progress hook only sees the temporary
-    # per-stream files).
-    def _file_done(self, info):
-        self._entry_files.clear()   # finished: nothing for Cancel to remove
-        path = info.get("filepath", "")
-        self._last_file = path      # for "Open folder"
-        if info.get("__real_download"):
-            self._saved += 1
-            self._post(self._log, f"✔ Saved: {path}")
-        else:
-            self._already += 1
-            self._post(self._log, f"• Already downloaded: {path}")
-
-    # Runs on the download thread (yt-dlp's logger).
-    def _entry_failed(self, msg):
-        msg = msg.removeprefix("ERROR: ")
-        self._skipped.append(msg)
-        self._post(self._log, f"✘ {msg}")
-
-    # Runs on the download thread (yt-dlp's logger).
-    def _entry_warning(self, msg):
-        self._post(self._log, f"⚠ {msg.removeprefix('WARNING: ')}")
+    def _run_queue(self, queue):
+        queue.run()
+        self._post(self._download_finished, queue)
 
     # Runs on the download thread; blocks it until the user answers.
     def _ask_on_main(self, title, question):
@@ -842,110 +586,15 @@ class YouTubeDownloader(tk.Tk):
                 return False
         return answer[0]
 
-    def _start_download(self):
-        if not YT_DLP_AVAILABLE:
-            self._prompt_install()
-            return
-
-        ffmpeg = find_ffmpeg()
-        self._ffmpeg_missing = not ffmpeg
-        if self._ffmpeg_missing:
-            messagebox.showerror("ffmpeg not found", ffmpeg_help())
-            return
-
-        url = self._url()
-        if not url:
-            messagebox.showwarning("No URL", "Please enter a YouTube URL.")
-            return
-
-        if self.is_running:
-            messagebox.showinfo("Busy", "A download is already in progress.")
-            return
-
-        opts = self._get_ydl_opts(ffmpeg)
-        self._save_settings()
-        self.is_running = True
-        self.dl_btn.config(text="✖  Cancel", command=self._cancel_download)
-        self.progress_var.set(0)
-        self._set_status("Starting download…", WARNING)
-        self._log(f"▶ {url}")
-
-        self._stream_index = 0
-        self._stream_count = 1
-        self._saved = self._already = 0
-        self._skipped = []
-        self._cancel = threading.Event()
-        self._entry_files = set()
-        self._latest_progress = self._shown_progress = None
-        self._last_file = None
-        self.open_btn.grid_remove()
-        self._start_worker(self._download_thread, url, opts,
-                           not self.playlist_var.get())
-
     # The Download button turns into Cancel while a download runs. yt-dlp
     # stops at its next progress update, or before the next playlist video;
     # it can't stop ffmpeg mid-merge, so that video still finishes.
     def _cancel_download(self):
-        self._cancel.set()
+        self._queue.cancel()
         # A progress update set just before must not overwrite "Canceling…".
         self._shown_progress = self._latest_progress
         self.dl_btn.config(state="disabled", text="Canceling…")
         self._set_status("Canceling…", WARNING)
-
-    def _download_thread(self, url, opts, ask_playlist):
-        try:
-            with yt_dlp.YoutubeDL(opts) as ydl:
-                base = yt_dlp.postprocessor.PostProcessor
-                ydl.add_post_processor(_stream_counter_class(base)(self),
-                                       when="before_dl")
-                ydl.add_post_processor(_callback_pp_class(base)(self._file_done),
-                                       when="after_move")
-                if not ask_playlist:
-                    ydl.download([url])
-                elif not self._download_unless_declined(ydl, url):
-                    self._post(self._download_declined)
-                    return
-            self._post(self._download_done, True, None)
-        except Exception as exc:
-            if self._cancel.is_set():
-                self._post(self._download_canceled, self._remove_partial_files())
-            else:
-                self._post(self._download_done, False, str(exc))
-
-    # Runs on the download thread after a cancel. Removes what this run wrote
-    # for the unfinished video: its .part file, fragments, and any stream that
-    # finished but wasn't merged yet. Videos that finished are kept.
-    def _remove_partial_files(self):
-        removed = 0
-        for path in self._entry_files:
-            for p in [path, path + ".ytdl", *glob.glob(glob.escape(path) + "-Frag*")]:
-                try:
-                    os.remove(p)
-                    removed += 1
-                except OSError:
-                    pass
-        return removed
-
-    # With the box unticked, ask before downloading a playlist, channel or tab
-    # (decided from what yt-dlp extracts, not from the URL).
-    def _download_unless_declined(self, ydl, url):
-        info = ydl.extract_info(url, download=False, process=False)
-        target = info
-        while target and target.get("_type") in ("url", "url_transparent"):
-            target = ydl.extract_info(target["url"], download=False, process=False,
-                                      ie_key=target.get("ie_key"))
-        if target is None or info.get("_type") == "url":
-            info = target   # what process_ie_result would extract again
-        if info is None:
-            return True     # the extraction error is already logged
-        if target.get("_type") == "playlist":
-            title = target.get("title") or "This link"
-            if not self._ask_on_main(
-                    "Playlist", f"\"{title}\" is a playlist or channel.\n\n"
-                                "Download all its videos?"):
-                return False
-        ydl.process_ie_result(info, download=True)
-        return True
 
     def _end_download(self):
         self._worker_finished()
@@ -953,56 +602,29 @@ class YouTubeDownloader(tk.Tk):
         self.dl_btn.config(state="normal", text="⬇  Download",
                            command=self._start_download)
 
-    def _download_canceled(self, removed):
+    def _download_finished(self, job):   # job: the DownloadQueue
         self._end_download()
         if self._close_when_stopped:   # the user is closing the app
             return self._on_close()
-        self.progress_var.set(0)
-        parts = [f"{self._saved} saved"] if self._saved else []
-        if removed:
-            parts.append(f"{removed} partial file{'s' * (removed != 1)} removed")
-        detail = f" ({', '.join(parts)})" if parts else ""
-        self._set_status(f"Download canceled{detail}.")
-        self._log(f"✘ Download canceled{detail}.\n")
-        self._offer_open_folder()
-
-    def _download_declined(self):
-        self._end_download()
-        if self._close_when_stopped:   # the user is closing the app
-            return self._on_close()
-        self.progress_var.set(0)
-        self._set_status("Playlist not downloaded.")
-        self._log("✘ Playlist not downloaded.\n")
-
-    def _download_done(self, success, error):
-        self._end_download()
-        if self._close_when_stopped:   # the user is closing the app
-            return self._on_close()
-        logged = False
-        if success and self._skipped and not (self._saved or self._already):
-            success, error, logged = False, self._skipped[0], True
-        if success and (self._skipped or self._saved + self._already > 1):
-            parts = [f"{self._saved} saved"]
-            if self._already:
-                parts.append(f"{self._already} already downloaded")
-            if self._skipped:
-                parts.append(f"{len(self._skipped)} skipped")
-            summary = "Done: " + ", ".join(parts)
-            self.progress_var.set(100)
-            self._set_status(f"✔ {summary}", WARNING if self._skipped else SUCCESS)
-            self._log(f"✔ {summary}" + chr(10))
-            self._offer_open_folder()
-        elif success:
-            self.progress_var.set(100)
-            self._set_status("✔ Download complete!", SUCCESS)
-            self._log("✔ Done!\n")
+        self._last_file = job.last_file
+        summary = job.summary()
+        if job.outcome == "failed":
+            self.progress_var.set(0)
+            self._set_status(f"✘ {summary}", ACCENT)
+            if not job.error_logged:
+                self._log(f"✘ {summary}\n")
+            messagebox.showerror("Download Failed", str(job.error))
+        elif job.outcome in ("canceled", "declined"):
+            self.progress_var.set(0)
+            self._set_status(summary)
+            self._log(f"✘ {summary}\n")
             self._offer_open_folder()
         else:
-            self.progress_var.set(0)
-            self._set_status(f"✘ Error: {error}", ACCENT)
-            if not logged:
-                self._log(f"✘ Error: {error}\n")
-            messagebox.showerror("Download Failed", str(error))
+            self.progress_var.set(100)
+            self._set_status(f"✔ {summary}", WARNING if job.had_problems else SUCCESS)
+            self._log("✔ Done!\n" if summary == "Download complete!"
+                      else f"✔ {summary}\n")
+            self._offer_open_folder()
 
     # Instead of a "Done" pop-up after every download, the status line says
     # how it went and offers a button to open the folder.
@@ -1031,41 +653,26 @@ class YouTubeDownloader(tk.Tk):
 
     def _start_preview(self):
         self._preview_after = None
-        url = self._url()
-        key = (url, self.playlist_var.get())
+        urls = self._urls()
+        url = urls[0] if urls else ""
+        key = (tuple(urls), self.playlist_var.get())
         if key == self._preview_key:
             return
         self._preview_key = key
         self._preview_token += 1
         if not url:
             return self._set_preview(PREVIEW_HINT, dim=True)
-        if not url.startswith(("https://", "http://")) or not YT_DLP_AVAILABLE:
+        if not url.startswith(("https://", "http://")) or not engine.YT_DLP_AVAILABLE:
             return self._set_preview("No preview for this link.", dim=True)
         self._set_preview("Loading preview…", dim=True)
-        self._start_worker(self._preview_thread, url, not self.playlist_var.get(),
-                           self._preview_token)
+        self._start_worker(self._preview_thread, url, self.playlist_var.get(),
+                           self._preview_token, len(urls) - 1)
 
-    # Runs on a worker thread. Like a download, it follows "url" results
-    # (e.g. a video opened from a playlist) and doesn't page through a
-    # playlist's entries, so even big playlists take a second or two.
-    def _preview_thread(self, url, noplaylist, token):
-        text, image, found = "Couldn't load a preview for this link.", None, False
-        try:
-            opts = {"quiet": True, "skip_download": True, "noplaylist": noplaylist,
-                    "logger": _YdlLogger(lambda msg: None),
-                    "color": {"stdout": "never", "stderr": "never"}}
-            with yt_dlp.YoutubeDL(opts) as ydl:
-                info = ydl.extract_info(url, download=False, process=False)
-                for _ in range(3):
-                    if not info or info.get("_type") not in ("url", "url_transparent"):
-                        break
-                    info = ydl.extract_info(info["url"], download=False,
-                                            process=False, ie_key=info.get("ie_key"))
-            if info:
-                text, found = describe_info(info), True
-                image = fetch_thumbnail(thumbnail_url(info))
-        except Exception:   # e.g. not a video page; the preview just says so
-            pass
+    # Runs on a worker thread.
+    def _preview_thread(self, url, whole_playlist, token, more):
+        text, image, found = engine.preview_link(url, whole_playlist)
+        if more:   # several links: the preview shows the first one
+            text += f"\n+ {more} more link{'s' * (more != 1)}"
         self._post(self._preview_done, text, image, found, token)
 
     def _preview_done(self, text, image, found, token):
@@ -1083,7 +690,7 @@ class YouTubeDownloader(tk.Tk):
         # The root's <FocusIn> binding also fires for each child widget.
         if not self._ffmpeg_missing or (event is not None and event.widget is not self):
             return
-        ffmpeg = find_ffmpeg()
+        ffmpeg = engine.find_ffmpeg()
         if ffmpeg:
             self._ffmpeg_missing = False
             self._log(f"✔ ffmpeg found: {ffmpeg}")
@@ -1093,24 +700,24 @@ class YouTubeDownloader(tk.Tk):
     # ── yt-dlp version and install ───────────────────────────────────────────
 
     def _powered_by_text(self):
-        version = yt_dlp_version()
+        version = engine.yt_dlp_version()
         return f"Powered by yt-dlp {version}" if version else \
             "Powered by yt-dlp (not installed)"
 
     # The app is tested with the version pinned in requirements.txt; say so
     # if another one is installed (yt-dlp often needs updates for YouTube).
     def _note_yt_dlp_version(self):
-        installed, pinned = yt_dlp_version(), pinned_yt_dlp_version()
-        if installed and pinned and not same_version(installed, pinned):
+        installed, pinned = engine.yt_dlp_version(), engine.pinned_yt_dlp_version()
+        if installed and pinned and not engine.same_version(installed, pinned):
             self._log(f"• yt-dlp {installed} is installed; this app is tested "
-                      f"with {pinned}. To match: pip install {YT_DLP_REQUIREMENT}")
+                      f"with {pinned}. To match: pip install {engine.YT_DLP_REQUIREMENT}")
 
     def _prompt_install(self):
         ans = messagebox.askyesno(
             "yt-dlp not found",
             "yt-dlp is required but not installed.\n\n"
             "Install it now with pip?\n\n"
-            f"(You can also run:  pip install {YT_DLP_REQUIREMENT})"
+            f"(You can also run:  pip install {engine.YT_DLP_REQUIREMENT})"
         )
         if ans:
             self._install_ytdlp()
@@ -1122,14 +729,14 @@ class YouTubeDownloader(tk.Tk):
         def run():
             try:
                 subprocess.check_call(
-                    [sys.executable, "-m", "pip", "install", YT_DLP_REQUIREMENT],
+                    [sys.executable, "-m", "pip", "install", engine.YT_DLP_REQUIREMENT],
                     stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL
                 )
             except Exception as e:
                 self._post(self._install_done, False, str(e))
                 return
             # Importing here, on the worker, keeps the window responsive.
-            self._post(self._install_done, True, None, load_yt_dlp())
+            self._post(self._install_done, True, None, engine.load_yt_dlp())
 
         self._start_worker(run)
 
@@ -1137,7 +744,7 @@ class YouTubeDownloader(tk.Tk):
         self._worker_finished()
         if ok and loaded:
             self.powered_lbl.config(text=self._powered_by_text())
-            self._log(f"✔ yt-dlp {yt_dlp_version()} installed and ready.")
+            self._log(f"✔ yt-dlp {engine.yt_dlp_version()} installed and ready.")
             self._set_status("✔ yt-dlp installed. You can download now.", SUCCESS)
         elif ok:   # installed, but this Python can't import it until a restart
             self._log("✔ yt-dlp installed! Please restart the app.")
@@ -1147,7 +754,7 @@ class YouTubeDownloader(tk.Tk):
                                 "Please restart the application.")
         else:
             self._log(f"✘ Install failed: {err}")
-            self._set_status(f"Install failed. Try: pip install {YT_DLP_REQUIREMENT}",
+            self._set_status(f"Install failed. Try: pip install {engine.YT_DLP_REQUIREMENT}",
                              ACCENT)
 
 

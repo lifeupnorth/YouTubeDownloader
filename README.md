@@ -35,7 +35,7 @@ start downloading right after. The header shows which yt-dlp version is in use.
 
 ## Use
 
-1. Paste a link into **YouTube URL**, or click **Paste**. A preview with the
+1. Paste a link into **YouTube URLs**, or click **Paste**. A preview with the
    thumbnail, title and length appears under it.
 2. Pick a **Format**: Best MP4, 1080p, 720p, 480p, MP3 or M4A.
 3. Choose where to save under **Save To** (default: your Downloads folder).
@@ -44,13 +44,18 @@ start downloading right after. The header shows which yt-dlp version is in use.
 
 The app remembers the folder and format you used last time.
 
+To download several videos in a row, put one link per line (Shift+Enter adds
+a line, and pasting several links puts each on its own line). If one link
+fails, the others still download, and the summary says how many worked.
+
 A link to a video opened from a playlist downloads just that video. Tick
 **Whole playlist** to download the whole list instead. For a playlist or
 channel link, the app asks before downloading all its videos, and saves them
 to a folder named after the playlist.
 
 While a download runs, the button turns into **Cancel**. Canceling removes the
-partial file of the video in progress and keeps the ones that finished.
+partial file of the video in progress, keeps the ones that finished, and skips
+any links still waiting.
 
 ## Run the tests
 

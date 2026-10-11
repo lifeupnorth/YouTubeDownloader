@@ -9,6 +9,7 @@ from unittest import mock
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 sys.path.insert(0, ROOT)
+import download_engine as engine  # noqa: E402
 import youtube_downloader as ytd  # noqa: E402
 
 
@@ -20,7 +21,7 @@ def requirements():
 
 class RequirementsTest(unittest.TestCase):
     def test_requirements_txt_matches_the_app(self):
-        self.assertIn(ytd.YT_DLP_REQUIREMENT, requirements())
+        self.assertIn(engine.YT_DLP_REQUIREMENT, requirements())
 
     def test_every_requirement_is_pinned(self):
         for line in requirements():
@@ -28,7 +29,7 @@ class RequirementsTest(unittest.TestCase):
 
     def test_unpinned_without_requirements_txt(self):
         with mock.patch("builtins.open", side_effect=FileNotFoundError):
-            self.assertEqual(ytd._yt_dlp_requirement(), "yt-dlp")
+            self.assertEqual(engine._yt_dlp_requirement(), "yt-dlp")
 
     def test_dependabot_watches_requirements_txt(self):
         with open(os.path.join(ROOT, ".github", "dependabot.yml"),
@@ -38,7 +39,7 @@ class RequirementsTest(unittest.TestCase):
         self.assertIn('directory: "/"', config)
 
     def test_pin_is_exact(self):
-        name, sep, version = ytd.YT_DLP_REQUIREMENT.partition("==")
+        name, sep, version = engine.YT_DLP_REQUIREMENT.partition("==")
         self.assertEqual((name, sep), ("yt-dlp", "=="))
         self.assertRegex(version, r"^\d{4}\.\d{1,2}\.\d{1,2}(\.\d+)?$")
 
@@ -47,10 +48,10 @@ class RequirementsTest(unittest.TestCase):
         ytd.YouTubeDownloader._install_ytdlp(app)
         (run,), _ = app._start_worker.call_args
         with mock.patch.object(ytd.subprocess, "check_call") as check_call, \
-                mock.patch.object(ytd, "load_yt_dlp", return_value=True):
+                mock.patch.object(engine, "load_yt_dlp", return_value=True):
             run()
         args = check_call.call_args.args[0]
-        self.assertEqual(args[1:], ["-m", "pip", "install", ytd.YT_DLP_REQUIREMENT])
+        self.assertEqual(args[1:], ["-m", "pip", "install", engine.YT_DLP_REQUIREMENT])
         # Loaded right away: no restart needed.
         app._post.assert_called_once_with(app._install_done, True, None, True)
 
