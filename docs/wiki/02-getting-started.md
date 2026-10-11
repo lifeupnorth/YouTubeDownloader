@@ -15,7 +15,7 @@ How to install, run and test the app. There is no `pyproject.toml` or installer:
 | Requirement | Why | How it's handled |
 |---|---|---|
 | Python 3 with Tkinter | The UI is `tkinter`/`ttk` | Bundled with python.org installers on Windows and macOS; some Linux distros need a separate `python3-tk` package |
-| `yt-dlp` | Does the actual extraction and downloading | Pinned to an exact version in `requirements.txt`. Optional at import time: if it's missing, the app offers to install that same version with pip and then asks for a restart. |
+| `yt-dlp` | Does the actual extraction and downloading | Pinned to an exact version in `requirements.txt`. Optional at import time: if it's missing, the app offers to install that same version with pip and loads it right away, without a restart. The header shows the version in use, and the log notes when it differs from the pinned one. |
 | `ffmpeg` | Merging video and audio, remuxing to MP4, converting to MP3/M4A | Checked at startup and before every download; on Windows it's also found after an install made while the app is open |
 
 The pinned yt-dlp requires Python 3.10 or newer, so that's the minimum for the app. The CI tests run on 3.10 and 3.14.

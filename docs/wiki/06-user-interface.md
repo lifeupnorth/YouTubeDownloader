@@ -15,7 +15,7 @@ The root window has three grid rows: a header, the main card and the log. Only t
 
 ```mermaid
 flowchart TD
-    root["YouTubeDownloader (tk.Tk)"] --> hdr["Header: title and 'Powered by yt-dlp'"]
+    root["YouTubeDownloader (tk.Tk)"] --> hdr["Header: title and yt-dlp version"]
     root --> card["Main card"]
     root --> log["Log: tk.Text and Scrollbar"]
     card --> url["YouTube URL: Entry and Paste button"]

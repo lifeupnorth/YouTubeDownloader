@@ -30,8 +30,8 @@ python youtube_downloader.py
 ```
 On Windows, `pythonw youtube_downloader.py` starts it without a console window.
 
-If yt-dlp isn't installed, the app offers to install it for you, then asks you
-to restart it.
+If yt-dlp isn't installed, the app offers to install it for you, and you can
+start downloading right after. The header shows which yt-dlp version is in use.
 
 ## Use
 
@@ -58,8 +58,14 @@ partial file of the video in progress and keeps the ones that finished.
 python -m unittest discover -s tests -v
 ```
 
-The tests also run on GitHub Actions for every push to `main` and every pull
-request. The [wiki](docs/wiki/README.md) explains how the app works.
+Check the code style (the rules are in `ruff.toml`):
+```
+pip install -r requirements-dev.txt
+ruff check .
+```
+
+The tests and the style check also run on GitHub Actions for every push to
+`main` and every pull request. The [wiki](docs/wiki/README.md) explains how the app works.
 
 ## Disclaimer
 
