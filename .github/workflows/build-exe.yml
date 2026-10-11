@@ -40,6 +40,23 @@ jobs:
       - name: Build the .exe
         run: python packaging/build_exe.py
 
+      # Optional code signing, so Windows doesn't show the .exe's publisher as
+      # unknown. Runs only if the repository has the secrets
+      # WINDOWS_SIGNING_CERT (the .pfx, base64-encoded) and
+      # WINDOWS_SIGNING_PASSWORD; see packaging/sign_exe.py.
+      - name: Check for a signing certificate
+        id: signing
+        shell: bash
+        run: echo "enabled=${{ secrets.WINDOWS_SIGNING_CERT != '' }}" >> "$GITHUB_OUTPUT"
+
+      - name: Sign the .exe
+        if: steps.signing.outputs.enabled == 'true'
+        env:
+          WINDOWS_SIGNING_CERT: ${{ secrets.WINDOWS_SIGNING_CERT }}
+          WINDOWS_SIGNING_PASSWORD: ${{ secrets.WINDOWS_SIGNING_PASSWORD }}
+          SIGNING_TIMESTAMP_URL: ${{ vars.SIGNING_TIMESTAMP_URL }}
+        run: python packaging/sign_exe.py dist/YT-Downloader.exe
+
       # Runs the .exe: yt-dlp, the bundled ffmpeg, Pillow and the window must work.
       - name: Check the .exe
         run: python packaging/build_exe.py --check

@@ -53,6 +53,14 @@ GPL "essentials" build) and checks it against a pinned checksum; its license and
 the other third-party notices are in `packaging/THIRD-PARTY-NOTICES.txt` and go
 next to the .exe.
 
+The .exe is unsigned unless you add a code-signing certificate, so Windows
+SmartScreen warns about an unknown publisher. To sign it in the workflow, add two
+repository secrets: `WINDOWS_SIGNING_CERT` (the certificate's `.pfx` file,
+base64-encoded) and `WINDOWS_SIGNING_PASSWORD`. A timestamp server other than
+DigiCert's can be set in the `SIGNING_TIMESTAMP_URL` variable. Locally, set the
+same environment variables and run `python packaging/sign_exe.py dist/YT-Downloader.exe`
+(it needs `signtool.exe` from the Windows SDK).
+
 ## Use
 
 1. Paste a link into **YouTube URLs**, or click **Paste**. A preview with the
