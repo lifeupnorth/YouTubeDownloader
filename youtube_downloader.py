@@ -601,7 +601,6 @@ class YouTubeDownloader(tk.Tk):
                     "Playlist", f"\"{title}\" is a playlist or channel.\n\n"
                                 "Download all its videos?"):
                 return False
-            self._post(self.playlist_var.set, True)
         ydl.process_ie_result(info, download=True)
         return True
 

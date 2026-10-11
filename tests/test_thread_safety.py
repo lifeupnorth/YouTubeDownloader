@@ -32,7 +32,7 @@ def make_fake_ydl(streams=2, videos=1, overshoot=0, error=None, fail=(),
         calls = []
 
         def __init__(self, opts):
-            self.opts = opts
+            self.opts = FakeYDL.last_opts = opts
             self.pps = []
 
         def add_post_processor(self, pp, when="post_process"):
@@ -326,8 +326,16 @@ class ThreadSafetyTest(unittest.TestCase):
         with mock.patch.object(ytd.messagebox, "askyesno", return_value=True):
             self.run_download(fake)
         self.assertEqual(fake.calls, ["probe", "download"])
-        self.assertTrue(self.app.playlist_var.get())
         self.assertEqual(self.statuses[-1], "✔ Done: 2 saved")
+        # Yes is for this download only: a later video-in-a-Mix link must
+        # still get just that video, and be probed again.
+        self.assertFalse(self.app.playlist_var.get())
+        self.app.url_entry.delete(0, "end")
+        self.app.url_entry.insert(0, "https://www.youtube.com/watch?v=t&list=RDx")
+        fake = make_fake_ydl(streams=1)
+        self.run_download(fake)
+        self.assertEqual(fake.calls, ["probe", "download"])
+        self.assertIs(fake.last_opts["noplaylist"], True)
         self.assertEqual(self.violations, [])
         self.assertEqual(self.callback_errors, [])
 
