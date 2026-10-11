@@ -165,6 +165,7 @@ class YouTubeDownloader(tk.Tk):
             self._set_status(FFMPEG_MISSING_STATUS, WARNING)
             self._log(ffmpeg_help(startup=True))
         self._note_yt_dlp_version()
+        self._start_worker(self._update_thread)
         self.bind("<FocusIn>", self._recheck_ffmpeg, add="+")
 
     # ── UI Construction ─────────────────────────────────────────────────────
@@ -701,8 +702,19 @@ class YouTubeDownloader(tk.Tk):
 
     def _powered_by_text(self):
         version = engine.yt_dlp_version()
-        return f"Powered by yt-dlp {version}" if version else \
+        text = f"Powered by yt-dlp {version}" if version else \
             "Powered by yt-dlp (not installed)"
+        app = engine.app_version()
+        return f"v{app} · {text}" if app else text
+
+    # Says once, in the log, when a newer release (or yt-dlp) is out.
+    def _update_thread(self):
+        self._post(self._update_checked, engine.check_for_update())
+
+    def _update_checked(self, notice):
+        self._worker_finished()
+        if notice:
+            self._log(notice)
 
     # The app is tested with the version pinned in requirements.txt; say so
     # if another one is installed (yt-dlp often needs updates for YouTube).
@@ -775,6 +787,7 @@ def self_check(path):
                              creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0))
         ffmpeg_version = run.stdout.splitlines()[0] if run.stdout else None
     result = {"frozen": bool(getattr(sys, "frozen", False)),
+              "app_version": engine.app_version(),
               "yt_dlp": engine.yt_dlp_version(),
               "yt_dlp_pin": engine.pinned_yt_dlp_version(),
               "ffmpeg": ffmpeg, "ffmpeg_bundled": engine.bundled_ffmpeg() is not None,

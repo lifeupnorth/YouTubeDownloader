@@ -120,6 +120,7 @@ class ExeBuildTest(unittest.TestCase):
         with open(report, encoding="utf-8") as f:
             result = json.load(f)
         self.assertFalse(result["frozen"])
+        self.assertIsNone(result["app_version"])
         self.assertEqual(result["yt_dlp"], "2026.08.19")
         self.assertFalse(result["ffmpeg_bundled"])
         self.assertIsNone(result["ffmpeg_version"])
@@ -136,6 +137,7 @@ class FfmpegCheckTest(unittest.TestCase):
         for patcher in (
                 mock.patch.object(engine, "YT_DLP_AVAILABLE", True),
                 mock.patch.object(engine, "find_ffmpeg", self.find),
+                mock.patch.object(engine, "check_for_update", return_value=None),
                 mock.patch.object(ytd, "settings_path", return_value=os.path.join(
                     settings_dir.name, "settings.json")),
                 mock.patch.object(ytd.messagebox, "showerror"),

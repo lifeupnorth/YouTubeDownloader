@@ -38,7 +38,10 @@ start downloading right after. The header shows which yt-dlp version is in use.
 `YT-Downloader.exe` is the whole app in one file: Python, yt-dlp, Pillow and
 ffmpeg are built in, so there's nothing else to install. Each
 [release](https://github.com/lifeupnorth/YouTubeDownloader/releases) will have
-it attached, and the "Windows app" GitHub Actions workflow builds it on demand. It starts a little
+it attached, and the "Windows app" GitHub Actions workflow builds it on demand.
+A new yt-dlp version (merged into `requirements.txt`, usually by Dependabot) is
+released automatically as the next patch version, and the app logs a line at
+startup when a newer release is out. It starts a little
 slower than the script, because it unpacks itself first, and some antivirus
 programs are wary of this kind of .exe.
 
