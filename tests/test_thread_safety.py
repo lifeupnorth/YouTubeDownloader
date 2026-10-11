@@ -155,7 +155,7 @@ class ThreadSafetyTest(unittest.TestCase):
     def test_progress_restarts_per_playlist_video(self):
         seen = {}
         url = "https://www.youtube.com/playlist?list=x"
-        opts = self.app._get_ydl_opts(url)
+        opts = self.app._get_ydl_opts(url, "ffmpeg")
         opts["progress_hooks"].append(
             lambda d: seen.setdefault(d["video"], []).append(
                 self.app._latest_progress[0]))

@@ -7,8 +7,8 @@ Install ffmpeg before running:
 - Wait 10 seconds.
 - Done.
 
-The app checks for ffmpeg at startup and before each download (it also finds a
-winget install made while the app is open).
+The app checks for ffmpeg at startup and before each download. On Windows it
+also finds an install made while the app is open.
 
 Run the tests:
 ```

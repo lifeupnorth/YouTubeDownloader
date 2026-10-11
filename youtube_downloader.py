@@ -34,37 +34,61 @@ SUCCESS   = "#22c55e"
 WARNING   = "#f59e0b"
 BORDER    = "#333333"
 
-FFMPEG_HELP = (
-    "ffmpeg is required to merge video and audio and to convert to MP3/M4A, "
-    "but it wasn't found.\n\n"
-    "Install it from a terminal:\n"
-    "    winget install ffmpeg\n\n"
-    "Then click Download again (restart the app if it still isn't found)."
-)
+# res:N caps the shorter side (as YouTube's labels do), not the height: for a
+# vertical 1080x1920 video, "480p" gives 480x854.
+VIDEO_MAX_RES = {"mp4_best": None, "1080p": 1080, "720p": 720, "480p": 480}
 
-VIDEO_MAX_HEIGHT = {"mp4_best": None, "1080p": 1080, "720p": 720, "480p": 480}
+FFMPEG_MISSING_STATUS = "ffmpeg not found, see the log below"
+
+
+def _ffmpeg_install_hint():
+    if sys.platform == "win32":
+        return "Install it from a terminal:\n    winget install ffmpeg"
+    if sys.platform == "darwin":
+        return "Install it from a terminal:\n    brew install ffmpeg"
+    return "Install it with your package manager, e.g.:\n    sudo apt install ffmpeg"
+
+
+def ffmpeg_help(startup=False):
+    then = ("Once it's installed, the app detects it (restart it if it doesn't)."
+            if startup else
+            "Then click Download again (restart the app if it still isn't found).")
+    return ("ffmpeg is required to merge video and audio and to convert to "
+            f"MP3/M4A, but it wasn't found.\n\n{_ffmpeg_install_hint()}\n\n{then}")
+
+
+def _registry_path():
+    # The saved Path, which includes installs made after this process started
+    # (winget, Chocolatey, Scoop, manual); os.environ only has the old one.
+    import winreg
+    parts = []
+    for root, key in ((winreg.HKEY_CURRENT_USER, r"Environment"),
+                      (winreg.HKEY_LOCAL_MACHINE,
+                       r"SYSTEM\CurrentControlSet\Control\Session Manager\Environment")):
+        try:
+            with winreg.OpenKey(root, key) as k:
+                parts.append(os.path.expandvars(winreg.QueryValueEx(k, "Path")[0]))
+        except OSError:
+            pass
+    return os.pathsep.join(parts)
 
 
 def find_ffmpeg():
     found = shutil.which("ffmpeg")
-    if found:
-        return found
-    # winget's PATH change only reaches processes started after the install.
-    links = [os.path.join(os.environ[var], *sub) for var, sub in (
-        ("LOCALAPPDATA", ("Microsoft", "WinGet", "Links")),
-        ("ProgramFiles", ("WinGet", "Links"))) if os.environ.get(var)]
-    return shutil.which("ffmpeg", path=os.pathsep.join(links)) if links else None
+    if found is None and sys.platform == "win32":
+        found = shutil.which("ffmpeg", path=_registry_path())
+    return found
 
 
 def format_opts(fmt):
     """yt-dlp options for one of the Format radio button values."""
-    if fmt in VIDEO_MAX_HEIGHT:
-        height = VIDEO_MAX_HEIGHT[fmt]
+    if fmt in VIDEO_MAX_RES:
+        res = VIDEO_MAX_RES[fmt]
         # Sort instead of filter: when nothing matches exactly, yt-dlp picks
         # the closest format rather than failing with "format not available".
         return {
             "format": "bv*+ba/b",
-            "format_sort": ([f"res:{height}"] if height else []) + ["ext:mp4:m4a"],
+            "format_sort": ([f"res:{res}"] if res else []) + ["ext:mp4:m4a"],
             "merge_output_format": "mp4",
             # The single-file fallback ("b") is not always MP4.
             "postprocessors": [{"key": "FFmpegVideoRemuxer",
@@ -141,9 +165,11 @@ class YouTubeDownloader(tk.Tk):
 
         if not YT_DLP_AVAILABLE:
             self.after(300, self._prompt_install)
-        if not find_ffmpeg():
-            self._set_status("ffmpeg not found, see the log below", WARNING)
-            self._log(FFMPEG_HELP)
+        self._ffmpeg_missing = not find_ffmpeg()
+        if self._ffmpeg_missing:
+            self._set_status(FFMPEG_MISSING_STATUS, WARNING)
+            self._log(ffmpeg_help(startup=True))
+        self.bind("<FocusIn>", self._recheck_ffmpeg, add="+")
 
     # ── UI Construction ─────────────────────────────────────────────────────
 
@@ -381,7 +407,7 @@ class YouTubeDownloader(tk.Tk):
 
     # ── Download logic ───────────────────────────────────────────────────────
 
-    def _get_ydl_opts(self, url):
+    def _get_ydl_opts(self, url, ffmpeg):
         fmt = self.format_var.get()
         out_dir = self.download_path.get()
         outtmpl = os.path.join(out_dir, "%(title)s.%(ext)s")
@@ -394,9 +420,7 @@ class YouTubeDownloader(tk.Tk):
         }
 
         opts.update(format_opts(fmt))
-        ffmpeg = find_ffmpeg()
-        if ffmpeg:
-            opts["ffmpeg_location"] = ffmpeg
+        opts["ffmpeg_location"] = ffmpeg
 
         return opts
 
@@ -429,8 +453,10 @@ class YouTubeDownloader(tk.Tk):
         if not YT_DLP_AVAILABLE:
             self._prompt_install(); return
 
-        if not find_ffmpeg():
-            messagebox.showerror("ffmpeg not found", FFMPEG_HELP)
+        ffmpeg = find_ffmpeg()
+        self._ffmpeg_missing = not ffmpeg
+        if self._ffmpeg_missing:
+            messagebox.showerror("ffmpeg not found", ffmpeg_help())
             return
 
         url = self.url_entry.get().strip()
@@ -442,7 +468,7 @@ class YouTubeDownloader(tk.Tk):
             messagebox.showinfo("Busy", "A download is already in progress.")
             return
 
-        opts = self._get_ydl_opts(url)
+        opts = self._get_ydl_opts(url, ffmpeg)
         self.is_running = True
         self.dl_btn.config(state="disabled", text="Downloading…")
         self.progress_var.set(0)
@@ -479,6 +505,16 @@ class YouTubeDownloader(tk.Tk):
             self._set_status(f"✘ Error: {error}", ACCENT)
             self._log(f"✘ Error: {error}\n")
             messagebox.showerror("Download Failed", str(error))
+
+    def _recheck_ffmpeg(self, _event=None):
+        if not self._ffmpeg_missing:
+            return
+        ffmpeg = find_ffmpeg()
+        if ffmpeg:
+            self._ffmpeg_missing = False
+            self._log(f"✔ ffmpeg found: {ffmpeg}")
+            if self.status_var.get() == FFMPEG_MISSING_STATUS:
+                self._set_status("Ready")
 
     # ── Install prompt ───────────────────────────────────────────────────────
 
