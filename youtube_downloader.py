@@ -21,9 +21,25 @@ try:
 except ImportError:
     YT_DLP_AVAILABLE = False
 
-# The yt-dlp version this app is tested with; must match requirements.txt
-# (tests/test_requirements.py checks). Bump both when YouTube changes break it.
-YT_DLP_REQUIREMENT = "yt-dlp==2026.8.19"
+
+def _yt_dlp_requirement():
+    # requirements.txt next to this script is the only place the yt-dlp pin is
+    # kept (Dependabot bumps it). Unpinned if the script was copied on its own.
+    path = os.path.join(os.path.dirname(os.path.abspath(__file__)),
+                        "requirements.txt")
+    try:
+        with open(path, encoding="utf-8") as f:
+            for line in f:
+                line = line.split("#", 1)[0].strip()
+                if line.lower().startswith("yt-dlp"):
+                    return line
+    except OSError:
+        pass
+    return "yt-dlp"
+
+
+# What the in-app installer runs pip with, e.g. "yt-dlp==2026.8.19".
+YT_DLP_REQUIREMENT = _yt_dlp_requirement()
 
 
 # ── Color palette ───────────────────────────────────────────────────────────

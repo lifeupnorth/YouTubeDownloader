@@ -76,7 +76,7 @@ Sources: [youtube_downloader.py:209-290](https://github.com/lifeupnorth/YouTubeD
 | ffmpeg | External tool for merging, remuxing and audio conversion |
 | unittest | Tests, standard library |
 
-yt-dlp is pinned to an exact version in `requirements.txt` (and `YT_DLP_REQUIREMENT` in the script). There are no other Python dependencies and no packaging metadata. The project is licensed under MIT.
+yt-dlp is pinned to an exact version in `requirements.txt`, which the app's built-in installer also reads, and Dependabot (`.github/dependabot.yml`) opens a PR each week a new version is out. There are no other Python dependencies and no packaging metadata. The project is licensed under MIT.
 
 Sources: [youtube_downloader.py:7-22](https://github.com/lifeupnorth/YouTubeDownloader/blob/bd3fd4242f83ee2cf111812e71b6d2db5aa71bdf/youtube_downloader.py#L7-L22), [LICENSE](https://github.com/lifeupnorth/YouTubeDownloader/blob/bd3fd4242f83ee2cf111812e71b6d2db5aa71bdf/LICENSE)
 
@@ -87,8 +87,9 @@ Sources: [youtube_downloader.py:7-22](https://github.com/lifeupnorth/YouTubeDown
 | `youtube_downloader.py` | 701 | The entire app: helpers, the `YouTubeDownloader` window class, entry point |
 | `tests/test_thread_safety.py` | 352 | Simulated downloads through a real Tk window, using a fake `YoutubeDL` |
 | `tests/test_formats.py` | 249 | Format selection with real yt-dlp, ffmpeg detection, help text, error formatting |
-| `tests/test_requirements.py` | 42 | Checks the yt-dlp pin matches everywhere it's used |
-| `requirements.txt` | 4 | The pinned yt-dlp version |
+| `tests/test_requirements.py` | 53 | Checks the app installs the yt-dlp pin from `requirements.txt` |
+| `requirements.txt` | 5 | The pinned yt-dlp version |
+| `.github/dependabot.yml` | 11 | Weekly Dependabot checks for a newer yt-dlp |
 | `README.md` | 30 | Install commands, test command, disclaimer, license |
 | `LICENSE` | 21 | MIT |
 | `.gitignore` | 1 | `__pycache__/` |
