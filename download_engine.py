@@ -184,11 +184,17 @@ _ANSI_CODES = re.compile(r"\x1b\[[0-9;]*m")
 class _YdlLogger:
     """Hands yt-dlp's errors to on_error (with ignoreerrors they don't raise)
     and its warnings to on_warning, so both reach the app's log, also when
-    there's no console (pythonw)."""
+    there's no console (pythonw).
 
-    def __init__(self, on_error, on_warning=lambda msg: None):
+    check(), if given, runs for each of yt-dlp's status messages and may
+    raise to stop it. yt-dlp sends them all through the way, also while it
+    reads a playlist's pages, where no progress hook runs.
+    """
+
+    def __init__(self, on_error, on_warning=lambda msg: None, check=None):
         self._on_error = on_error
         self.warning = on_warning
+        self._check = check
 
     def error(self, msg):
         # yt-dlp also sends its "Deprecated Feature: ..." notices (e.g. for an
@@ -199,7 +205,8 @@ class _YdlLogger:
         self._on_error(msg)
 
     def debug(self, msg):
-        pass
+        if self._check:
+            self._check()
 
     info = debug
 
@@ -218,6 +225,55 @@ def _callback_pp_class(base):
             return [], info
 
     return CallbackPP
+
+
+# The job running on this thread, for _tracked_popen_class.
+_current = threading.local()
+
+
+@functools.cache
+def _tracked_popen_class(base):
+    # yt-dlp's Popen, telling the job on this thread about each process it
+    # starts (ffmpeg converting or merging), so cancel() can stop it.
+    class TrackedPopen(base):
+        def __init__(self, args, *a, **k):
+            # Checked before it starts: only a file this run creates counts.
+            output = _new_ffmpeg_output(args)
+            super().__init__(args, *a, **k)
+            job = getattr(_current, "job", None)
+            if job is not None:
+                job._process_started(self, output)
+
+    return TrackedPopen
+
+
+def _new_ffmpeg_output(args):
+    """The file an ffmpeg run is about to create, or None. yt-dlp passes the
+    output last, as "file:<path>". None for ffprobe, for ffmpeg only reading a
+    file (["ffmpeg", "-i", "file:<path>"]), for anything not written to a file
+    (a URL, "-" for stdout), and for a file that's already there: files on
+    disk before this run are never removed."""
+    if not isinstance(args, (list, tuple)) or len(args) < 2:
+        return None
+    exe = os.path.basename(str(args[0])).lower()
+    last = args[-1]
+    if exe.startswith("ffprobe") or args[-2] == "-i":
+        return None
+    if not isinstance(last, str) or not last.startswith("file:"):
+        return None
+    path = last.removeprefix("file:")
+    return None if os.path.exists(path) else path
+
+
+def _track_processes():
+    """Makes yt-dlp's ffmpeg runs go through _tracked_popen_class."""
+    base = getattr(sys.modules.get("yt_dlp.utils"), "Popen", None)
+    if base is None:
+        return
+    for name in ("yt_dlp.postprocessor.ffmpeg", "yt_dlp.downloader.external"):
+        module = sys.modules.get(name)
+        if module is not None and getattr(module, "Popen", None) is base:
+            module.Popen = _tracked_popen_class(base)
 
 
 def _follow_url_results(ydl, info):
@@ -332,9 +388,34 @@ class DownloadJob:
         self._stream_index = 0      # which stream of the current video
         self._stream_count = 1      # how many it has (video + audio = 2)
         self._entry_files = set()   # files written for the unfinished video
+        self._processes = []        # (process, file it creates or None)
+        self._killed_outputs = []   # files the stopped ones were creating
+        self._lock = threading.Lock()
 
     def cancel(self):
         self._cancel.set()
+        self.stop_processes()
+
+    def stop_processes(self):
+        """Stops the ffmpeg this job is running, if any (after a cancel)."""
+        # The outputs are noted before the kill, so the worker waking up from
+        # it always finds them in _remove_partial_files.
+        with self._lock:
+            running = [(p, out) for p, out in self._processes if p.poll() is None]
+            self._killed_outputs.extend(out for _p, out in running if out)
+        for proc, _out in running:
+            # An ffmpeg that is a .bat/.cmd wrapper runs under "cmd.exe /C";
+            # kill() then stops only cmd.exe. Rare enough to leave.
+            try:
+                proc.kill()
+            except OSError:
+                pass
+
+    def _process_started(self, proc, output):
+        with self._lock:
+            self._processes.append((proc, output))
+        if self.canceled:   # canceled just before it started
+            self.stop_processes()
 
     @property
     def canceled(self):
@@ -355,7 +436,8 @@ class DownloadJob:
             "no_warnings": False,
             # Like the yt-dlp CLI: skip unavailable entries instead of stopping.
             "ignoreerrors": "only_download",
-            "logger": _YdlLogger(self._entry_failed, self._entry_warning),
+            "logger": _YdlLogger(self._entry_failed, self._entry_warning,
+                                 self._check_canceled),
             # "auto" colors the ERROR: prefix when started from a terminal.
             "color": {"stdout": "never", "stderr": "never"},
         }
@@ -365,6 +447,8 @@ class DownloadJob:
 
     def run(self):
         """Downloads, and returns the outcome (also kept in .outcome)."""
+        _track_processes()
+        _current.job = self
         try:
             with yt_dlp.YoutubeDL(self.options()) as ydl:
                 base = yt_dlp.postprocessor.PostProcessor
@@ -378,11 +462,16 @@ class DownloadJob:
                     self.outcome = "declined"
                     return self.outcome
         except Exception as exc:
-            if self.canceled:
-                self.removed = self._remove_partial_files()
-                self.outcome = "canceled"
-            else:
+            if not self.canceled:
                 self.outcome, self.error = "failed", str(exc)
+                return self.outcome
+        finally:
+            _current.job = None
+        # Also after a normal return: a stopped ffmpeg is a failed
+        # post-processing step for yt-dlp, which it only logs.
+        if self.canceled:
+            self.removed = self._remove_partial_files()
+            self.outcome = "canceled"
             return self.outcome
         if self.skipped and not (self.saved or self.already):
             # Nothing worked, e.g. a single private video: that's a failure,
@@ -393,7 +482,9 @@ class DownloadJob:
         return self.outcome
 
     # Raising this is how yt-dlp lets a caller stop a download. It leaves the
-    # .part file behind, which _remove_partial_files() then deletes.
+    # .part file behind, which _remove_partial_files() then deletes. Runs in
+    # the progress hook, before each video, and for each of yt-dlp's status
+    # messages (see _YdlLogger).
     def _check_canceled(self):
         if self.canceled:
             raise yt_dlp.utils.DownloadCancelled()
@@ -470,6 +561,8 @@ class DownloadJob:
             self.on_log(f"• Already downloaded: {path}")
 
     def _entry_failed(self, msg):
+        if self.canceled:   # e.g. the ffmpeg that cancel() stopped
+            return
         msg = msg.removeprefix("ERROR: ")
         self.skipped.append(msg)
         self.on_log(f"✘ {msg}")
@@ -478,11 +571,14 @@ class DownloadJob:
         self.on_log(f"⚠ {msg.removeprefix('WARNING: ')}")
 
     # After a cancel: removes what this run wrote for the unfinished video
-    # (its .part file, fragments, and any stream that finished but wasn't
-    # merged yet). Videos that finished are kept.
+    # (its .part file, fragments, any stream that finished but wasn't merged
+    # yet, and the file a stopped ffmpeg was writing). Videos that finished
+    # are kept.
     def _remove_partial_files(self):
         removed = 0
-        for path in self._entry_files:
+        with self._lock:
+            killed = list(self._killed_outputs)
+        for path in {*self._entry_files, *killed}:
             for p in [path, path + ".ytdl", *glob.glob(glob.escape(path) + "-Frag*")]:
                 try:
                     os.remove(p)
@@ -532,6 +628,8 @@ class DownloadQueue:
 
     def cancel(self):
         self._cancel.set()
+        for job in self.jobs[-1:]:   # the running one
+            job.stop_processes()
 
     @property
     def canceled(self):
