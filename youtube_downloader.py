@@ -576,11 +576,15 @@ class YouTubeDownloader(tk.Tk):
     def _ask_on_main(self, title, question):
         answer, done = [], threading.Event()
 
-        # If the dialog fails, the error is reported and the answer is No;
-        # either way the download thread stops waiting.
+        # If the dialog fails, the error goes to the log (the windowed .exe has
+        # no stderr for Tk's report) and the answer is No; either way the
+        # download thread stops waiting.
         def ask():
             try:
                 answer.append(messagebox.askyesno(title, question))
+            except Exception as exc:
+                self._log(f"✘ Couldn't ask about the playlist: {exc}")
+                raise
             finally:
                 done.set()
 

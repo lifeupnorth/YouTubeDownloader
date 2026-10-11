@@ -578,6 +578,7 @@ class ThreadSafetyTest(unittest.TestCase):
         self.assertEqual(fake.calls, ["probe"])
         self.assertFalse(self.app.is_running)
         self.assertEqual(self.statuses[-1], "Playlist not downloaded.")
+        self.assertIn("✘ Couldn't ask about the playlist: dialog failed", self.log())
         self.assertEqual([exc[0] for exc in self.callback_errors], [tkinter.TclError])
         self.assertEqual(self.violations, [])
 
