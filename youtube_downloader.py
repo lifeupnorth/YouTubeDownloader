@@ -576,15 +576,23 @@ class YouTubeDownloader(tk.Tk):
     def _ask_on_main(self, title, question):
         answer, done = [], threading.Event()
 
+        # If the dialog fails, the error goes to the log (the windowed .exe has
+        # no stderr for Tk's report) and the answer is No; either way the
+        # download thread stops waiting.
         def ask():
-            answer.append(messagebox.askyesno(title, question))
-            done.set()
+            try:
+                answer.append(messagebox.askyesno(title, question))
+            except Exception as exc:
+                self._log(f"✘ Couldn't ask about the playlist: {exc}")
+                raise
+            finally:
+                done.set()
 
         self._post(ask)
         while not done.wait(0.1):
             if self._closing:
                 return False
-        return answer[0]
+        return bool(answer and answer[0])
 
     # The Download button turns into Cancel while a download runs. yt-dlp
     # stops at its next progress update, or before the next playlist video;

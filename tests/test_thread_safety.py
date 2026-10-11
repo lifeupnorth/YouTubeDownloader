@@ -570,6 +570,18 @@ class ThreadSafetyTest(unittest.TestCase):
         self.assertEqual(self.violations, [])
         self.assertEqual(self.callback_errors, [])
 
+    def test_failed_playlist_dialog_does_not_hang(self):
+        fake = make_fake_ydl(streams=1, videos=2, probe=("playlist",))
+        with mock.patch.object(ytd.messagebox, "askyesno",
+                               side_effect=tkinter.TclError("dialog failed")):
+            self.run_download(fake)
+        self.assertEqual(fake.calls, ["probe"])
+        self.assertFalse(self.app.is_running)
+        self.assertEqual(self.statuses[-1], "Playlist not downloaded.")
+        self.assertIn("✘ Couldn't ask about the playlist: dialog failed", self.log())
+        self.assertEqual([exc[0] for exc in self.callback_errors], [tkinter.TclError])
+        self.assertEqual(self.violations, [])
+
     def test_follows_url_results_before_asking(self):
         # e.g. a channel's home page redirecting to its Videos tab.
         fake = make_fake_ydl(streams=1, videos=2, probe=("url", "playlist"))
