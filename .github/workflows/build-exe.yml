@@ -32,7 +32,7 @@ jobs:
   # The version to release, if any: the pushed tag, or the next patch version
   # when main pins another yt-dlp than the latest release. Empty otherwise.
   version:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-26.04
     outputs:
       tag: ${{ steps.pick.outputs.tag }}
     steps:
