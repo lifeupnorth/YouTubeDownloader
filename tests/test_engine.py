@@ -579,8 +579,10 @@ class DownloadJobTest(unittest.TestCase):
         with yt_dlp.YoutubeDL({"outtmpl": opts["outtmpl"], "quiet": True}) as ydl:
             video = {"id": "abc", "title": "T", "ext": "mp3"}
             entry = {**video, "playlist_title": "List", "playlist_index": 7}
-            self.assertEqual(ydl.prepare_filename(video), os.path.join(folder, "T.mp3"))
-            self.assertEqual(ydl.prepare_filename(entry),
+            # (On Linux the empty playlist folder stays as "//"; same file.)
+            self.assertEqual(os.path.normpath(ydl.prepare_filename(video)),
+                             os.path.join(folder, "T.mp3"))
+            self.assertEqual(os.path.normpath(ydl.prepare_filename(entry)),
                              os.path.join(folder, "List", "007 - T.mp3"))
 
     def test_an_empty_playlist_isnt_complete(self):

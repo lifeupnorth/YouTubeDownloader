@@ -218,8 +218,6 @@ class ThirdPartyLicensesTest(unittest.TestCase):
                 self.skipTest(f"{name} isn't installed (PyInstaller only is for builds)")
         if sys.version_info[:2] != build_exe.PYTHON_LICENSES_VERSION:
             self.skipTest("PYTHON-LICENSES.rst is for another Python version")
-        if not os.path.isdir(os.path.join(sys.base_prefix, "tcl")):
-            self.skipTest("this Python has no tcl folder (not a Windows build)")
         with tempfile.TemporaryDirectory() as tmp:
             path = os.path.join(tmp, "licenses.txt")
             build_exe.third_party_licenses(path)

@@ -62,6 +62,7 @@ BUNDLED_PACKAGES = (
 # expat, zlib, ...), for the Python version the .exe is built with.
 PYTHON_LICENSES = os.path.join(HERE, "PYTHON-LICENSES.rst")
 PYTHON_LICENSES_VERSION = (3, 14)
+TCLTK_LICENSE = os.path.join(HERE, "TCLTK-LICENSE.txt")
 
 
 def sha256(path):
@@ -186,13 +187,9 @@ def third_party_licenses(path):
     with open(PYTHON_LICENSES, encoding="utf-8") as f:
         add("Software incorporated in Python: OpenSSL, libffi, expat, zlib, libmpdec, "
             "mimalloc, ... (CPython's Doc/license.rst)", f.read())
-    tcl = [os.path.join(sys.base_prefix, "tcl", folder, "license.terms")
-           for folder in ("tcl8.6", "tk8.6")]
-    tcl = [path for path in tcl if os.path.isfile(path)]
-    if not tcl:
-        sys.exit("Tcl/Tk's license.terms wasn't found in this Python's tcl folder.")
-    with open(tcl[0], encoding="utf-8") as f:
-        add("Tcl/Tk (Tcl and Tk have the same license)", f.read())
+    # Vendored: Python builds don't all ship Tcl's license.terms.
+    with open(TCLTK_LICENSE, encoding="utf-8") as f:
+        add("Tcl/Tk", f.read())
     add("SQLite", "SQLite is in the public domain: https://sqlite.org/copyright.html")
     for name in BUNDLED_PACKAGES:
         dist = importlib.metadata.distribution(name)

@@ -124,6 +124,7 @@ Sources: [requirements.txt:6-14](https://github.com/lifeupnorth/YouTubeDownloade
 | `packaging/check_pins.py` | 115 | Reports newer ffmpeg and deno releases; `--open-issues` opens an issue for each |
 | `packaging/THIRD-PARTY-NOTICES.txt` / `DENO-LICENSE.txt` | 54 / 20 | Licenses of the bundled programs, shipped next to the .exe |
 | `packaging/PYTHON-LICENSES.rst` | 1226 | CPython's licenses for the software built into Python, copied into `THIRD-PARTY-LICENSES.txt` |
+| `packaging/TCLTK-LICENSE.txt` | 90 | Tcl's and Tk's licenses, copied into `THIRD-PARTY-LICENSES.txt` |
 | `.github/workflows/tests.yml` | 79 | Tests (Windows and Ubuntu, Python 3.10 and 3.14, with and without yt-dlp) and lint on every push to `main` and every PR |
 | `.github/workflows/build-exe.yml` | 188 | Builds and checks the .exe on every PR, every push to `main` and by hand; releases it for a `vX.Y.Z` tag, or as the next patch version when `main` pins another yt-dlp than the latest release, with SHA-256 checksums and a build provenance attestation |
 | `.github/workflows/smoke.yml` | 82 | Runs the smoke test nightly, by hand, and on PRs that change it |
