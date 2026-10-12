@@ -46,6 +46,7 @@ from PySide6.QtGui import (
     QIcon,
     QImage,
     QImageReader,
+    QLinearGradient,
     QPainter,
     QPainterPath,
     QPen,
@@ -93,7 +94,7 @@ THEMES = {
         "button_hover": "#3f3f3f",
         "chip_on":      "#f1f1f1",   # the selected chip
         "chip_on_text": "#0f0f0f",
-        "accent":       "#ff0033",   # Download, the progress bars, the logo
+        "accent":       "#ff0033",   # Download, the progress bars
         "accent_hover": "#d9002b",
         "accent_text":  "#ffffff",
         "divider":      "#303030",
@@ -889,18 +890,72 @@ def _pixmap(width, height, ratio):
     return pixmap
 
 
-def logo_pixmap(height, ratio):
-    """The header's logo: a white play triangle on a red rounded rectangle."""
-    width = round(height * 1.4)
-    pixmap = _pixmap(width, height, ratio)
-    painter = QPainter(pixmap)
+ICON_SIZES = (16, 24, 32, 48, 64, 256)   # the window's icon and the .exe's
+
+
+def app_icon_image(size):
+    """The app's icon: a white arrow down onto a video's progress bar, on a
+    red rounded square. A QImage, so building the .exe can draw it too (see
+    packaging/build_exe.py)."""
+    s = size
+    image = QImage(s, s, QImage.Format_ARGB32_Premultiplied)
+    image.fill(Qt.transparent)
+    painter = QPainter(image)
     painter.setRenderHint(QPainter.Antialiasing)
+    box = QRectF(s * 0.03, s * 0.03, s * 0.94, s * 0.94)
+    red = QLinearGradient(0, box.top(), 0, box.bottom())   # the accent's red, lighter at the top
+    red.setColorAt(0, QColor("#ff3d5e"))
+    red.setColorAt(1, QColor("#e0002b"))
     painter.setPen(Qt.NoPen)
-    painter.setBrush(QColor(THEMES["dark"]["accent"]))
-    painter.drawRoundedRect(QRectF(0, 0, width, height), height * 0.28, height * 0.28)
-    play_icon(painter, QPointF(width / 2 + height * 0.03, height / 2), height * 0.42,
-              QColor("white"))
+    painter.setBrush(red)
+    painter.drawRoundedRect(box, s * 0.22, s * 0.22)
+
+    white = QColor("white")
+    pen = QPen(white, s * 0.17)
+    pen.setCapStyle(Qt.RoundCap)
+    painter.setPen(pen)
+    painter.drawLine(QPointF(s / 2, s * 0.255), QPointF(s / 2, s * 0.42))
+    # The arrowhead, its corners rounded by an outline in the same color.
+    r = s * 0.035
+    head = QPainterPath()
+    head.moveTo(s * 0.22 + r, s * 0.40 + r)
+    head.lineTo(s * 0.78 - r, s * 0.40 + r)
+    head.lineTo(s / 2, s * 0.70 - r)
+    head.closeSubpath()
+    pen = QPen(white, 2 * r)
+    pen.setJoinStyle(Qt.RoundJoin)
+    painter.setPen(pen)
+    painter.setBrush(white)
+    painter.drawPath(head)
+    # The progress bar: done on the left, a knob where it's got to.
+    y, done = s * 0.82, s * 0.58
+    pen = QPen(QColor(255, 255, 255, 110), s * 0.075)
+    pen.setCapStyle(Qt.RoundCap)
+    painter.setPen(pen)
+    painter.drawLine(QPointF(s * 0.24, y), QPointF(s * 0.76, y))
+    pen.setColor(white)
+    painter.setPen(pen)
+    painter.drawLine(QPointF(s * 0.24, y), QPointF(done, y))
+    painter.setPen(Qt.NoPen)
+    painter.drawEllipse(QPointF(done, y), s * 0.07, s * 0.07)
     painter.end()
+    return image
+
+
+def app_icon():
+    """The app's icon, drawn at each size rather than scaled down, so the
+    small ones stay sharp."""
+    icon = QIcon()
+    for size in ICON_SIZES:
+        icon.addPixmap(QPixmap.fromImage(app_icon_image(size)))
+    return icon
+
+
+def logo_pixmap(height, ratio):
+    """The header's logo: the app's icon, drawn for the screen's pixels so
+    it's sharp at any scaling."""
+    pixmap = QPixmap.fromImage(app_icon_image(round(height * ratio)))
+    pixmap.setDevicePixelRatio(ratio)
     return pixmap
 
 
@@ -1111,7 +1166,7 @@ class YouTubeDownloader(QMainWindow):
         ratio = self.devicePixelRatioF()
         logo = QLabel()
         logo.setPixmap(logo_pixmap(30, ratio))
-        self.setWindowIcon(QIcon(logo_pixmap(32, 2)))
+        self.setWindowIcon(app_icon())
         header.addWidget(logo)
         header.addSpacing(8)
         names = QVBoxLayout()

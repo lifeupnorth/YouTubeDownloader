@@ -35,7 +35,7 @@ Sources: [youtube_downloader.py:142-144](https://github.com/lifeupnorth/YouTubeD
 
 | Widget | Connected to | Behavior |
 |---|---|---|
-| Logo | `logo_pixmap` | A white play triangle on a red rounded rectangle, drawn with `QPainter`; also the window's icon |
+| Logo | `logo_pixmap` | The app's icon (`app_icon_image`): a white arrow down onto a video's progress bar, on a red rounded square, drawn with `QPainter` for the screen's pixels. The window's icon, which the .exe has too, is the same one (`app_icon`), drawn at each size in `ICON_SIZES` so the small ones stay sharp |
 | Header label (`powered_lbl`) | `_powered_by_text` | "Powered by yt-dlp 2026.08.19", or "(not installed)"; a release .exe puts its own version first ("v1.0.3 · …"); updated after an in-app install |
 | Theme chips (`theme_chips`) | `_choose_theme` | Checkable buttons in a `QButtonGroup`, so one is checked at a time: System, Light or Dark (`THEME_MODES`). `_choose_theme` repaints the window and saves the choice as `theme`. See [Themes](#themes) |
 | Check for updates at startup (`update_switch`) | `_update_switch_toggled` | A `QCheckBox` drawn as a switch, only in a release .exe (`engine.app_version()`); on by default, saved as `check_updates` when clicked. While on, startup checks GitHub for a newer release at most once a day and says so in the log |

@@ -109,19 +109,19 @@ Sources: [requirements.txt:6-18](https://github.com/lifeupnorth/YouTubeDownloade
 
 | Path | Lines | Contents |
 |---|---|---|
-| `youtube_downloader.py` | 2149 | The window (Qt): UI, the Downloads list (kept between runs), themes, settings, dialogs, worker plumbing, update check, entry point with `--self-check` |
+| `youtube_downloader.py` | 2204 | The window (Qt): UI, the Downloads list (kept between runs), themes, settings, dialogs, worker plumbing, update check, entry point with `--self-check` |
 | `download_engine.py` | 897 | Downloading without Qt: yt-dlp, ffmpeg and the JavaScript runtime, formats, link lookups, the release check, `DownloadJob` |
 | `tests/test_engine.py` | 1038 | The engine with a fake yt-dlp; needs no display |
-| `tests/test_window.py` | 1509 | The real window driven with a fake yt-dlp, on Qt's offscreen platform; fails on any main-thread-only call or dialog from a worker thread |
+| `tests/test_window.py` | 1519 | The real window driven with a fake yt-dlp, on Qt's offscreen platform; fails on any main-thread-only call or dialog from a worker thread |
 | `tests/test_app.py` | 232 | Settings and saved-list files, Show in folder, ffmpeg help, the update check, `split_links`, the .exe's self-check report |
 | `tests/test_real_yt_dlp.py` | 142 | The engine with the real yt-dlp, offline, against a local web server (the MP3 test needs ffmpeg) |
 | `tests/test_requirements.py` | 93 | The yt-dlp pin is exact, brings yt-dlp-ejs, and is what the installer uses |
-| `tests/test_build_exe.py` | 241 | Checksum-checked downloads, the `--check` verdict and the third-party licenses of `packaging/build_exe.py` |
+| `tests/test_build_exe.py` | 287 | Checksum-checked downloads, the icon, the `--check` verdict and the third-party licenses of `packaging/build_exe.py` |
 | `tests/test_check_pins.py` | 77 | `packaging/check_pins.py` with GitHub's API faked |
 | `tests/fakes.py` | 150 | The fake yt-dlp shared by the tests |
 | `requirements.txt` / `requirements-dev.txt` | 18 / 3 | Pinned `yt-dlp[default]` (which brings yt-dlp-ejs), PySide6-Essentials and Pillow / ruff |
 | `ruff.toml` | 8 | Lint rules |
-| `packaging/build_exe.py` | 322 | Builds the one-file Windows app with PyInstaller, with ffmpeg and deno downloaded and checked against pinned checksums (`FFMPEG_VERSION`, `DENO_VERSION`); `--check` runs the .exe's `--self-check` |
+| `packaging/build_exe.py` | 376 | Builds the one-file Windows app with PyInstaller, with the app's icon, and ffmpeg and deno downloaded and checked against pinned checksums (`FFMPEG_VERSION`, `DENO_VERSION`); `--check` runs the .exe's `--self-check` |
 | `packaging/requirements-build.txt` | 38 | PyInstaller and its dependencies, pinned with hashes |
 | `packaging/check_pins.py` | 115 | Reports newer ffmpeg and deno releases; `--open-issues` opens an issue for each |
 | `packaging/THIRD-PARTY-NOTICES.txt` / `DENO-LICENSE.txt` | 79 / 20 | Licenses of the bundled programs, shipped next to the .exe |
