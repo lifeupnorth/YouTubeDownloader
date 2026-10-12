@@ -48,6 +48,7 @@ Sources: [README.md:1-56](https://github.com/lifeupnorth/YouTubeDownloader/blob/
 | Each link looked up as soon as it's added (three at a time): thumbnail, title, and length or playlist size | `engine.preview_link`, `_look_up` |
 | Cancel for each row: a waiting link is skipped; a running one stops its ffmpeg and removes only the files this run wrote for the unfinished video | `_cancel_row`, `DownloadJob.stop_processes`, `DownloadJob._remove_partial_files` |
 | Show in folder and Remove from the list for each finished row, Clear finished; no pop-ups for results. Last folder, format and theme remembered | `_open_folder`, `_clear_finished`, `load_settings` |
+| The Downloads list kept between runs: the last 200 rows, with cached thumbnails, come back at the next start; rows that hadn't finished come back Canceled | `row_entry`, `restored_row`, `_save_history` |
 | YouTube's look in a light or dark theme, or the system's | `THEMES`, `apply_theme` |
 | ffmpeg detection at startup and before each download (the .exe's bundled copy first), including a Windows install made while the app is open | `engine.find_ffmpeg`, `_recheck_ffmpeg` |
 | JavaScript runtime lookup on a worker: the .exe's bundled deno, else deno, node or bun on PATH; a note in the log when there's none | `engine.find_js_runtime`, `_find_js_runtime_thread` |
@@ -107,11 +108,11 @@ Sources: [requirements.txt:6-14](https://github.com/lifeupnorth/YouTubeDownloade
 
 | Path | Lines | Contents |
 |---|---|---|
-| `youtube_downloader.py` | 1870 | The window (Qt): UI, the Downloads list, themes, settings, dialogs, worker plumbing, update check, entry point with `--self-check` |
-| `download_engine.py` | 810 | Downloading without Qt: yt-dlp, ffmpeg and the JavaScript runtime, formats, link lookups, the release check, `DownloadJob` |
-| `tests/test_engine.py` | 836 | The engine with a fake yt-dlp; needs no display |
-| `tests/test_window.py` | 1075 | The real window driven with a fake yt-dlp, on Qt's offscreen platform; fails on any main-thread-only call or dialog from a worker thread |
-| `tests/test_app.py` | 217 | Settings file, Show in folder, ffmpeg help, the update check, `split_links`, the .exe's self-check report |
+| `youtube_downloader.py` | 1983 | The window (Qt): UI, the Downloads list (kept between runs), themes, settings, dialogs, worker plumbing, update check, entry point with `--self-check` |
+| `download_engine.py` | 836 | Downloading without Qt: yt-dlp, ffmpeg and the JavaScript runtime, formats, link lookups, the release check, `DownloadJob` |
+| `tests/test_engine.py` | 854 | The engine with a fake yt-dlp; needs no display |
+| `tests/test_window.py` | 1170 | The real window driven with a fake yt-dlp, on Qt's offscreen platform; fails on any main-thread-only call or dialog from a worker thread |
+| `tests/test_app.py` | 231 | Settings and saved-list files, Show in folder, ffmpeg help, the update check, `split_links`, the .exe's self-check report |
 | `tests/test_real_yt_dlp.py` | 142 | The engine with the real yt-dlp, offline, against a local web server (the MP3 test needs ffmpeg) |
 | `tests/test_requirements.py` | 93 | The yt-dlp pin is exact, brings yt-dlp-ejs, and is what the installer uses |
 | `tests/test_build_exe.py` | 241 | Checksum-checked downloads, the `--check` verdict and the third-party licenses of `packaging/build_exe.py` |
@@ -129,7 +130,7 @@ Sources: [requirements.txt:6-14](https://github.com/lifeupnorth/YouTubeDownloade
 | `.github/workflows/build-exe.yml` | 226 | Builds and checks the .exe on every PR, every push to `main` and by hand; releases it for a `vX.Y.Z` tag, or as the next patch version when `main` pins another yt-dlp than the latest release, with SHA-256 checksums and a build provenance attestation |
 | `.github/workflows/pins.yml` | 36 | "Bundled programs": runs `check_pins.py --open-issues` every Monday |
 | `.github/dependabot.yml` | 30 | Dependabot: daily for `requirements.txt`, weekly for `packaging/requirements-build.txt` and GitHub Actions |
-| `README.md` | 202 | Requirements, install, run, the Windows app (releases, building, signing), usage, tests, disclaimer, license |
+| `README.md` | 207 | Requirements, install, run, the Windows app (releases, building, signing), usage, tests, disclaimer, license |
 | `LICENSE` | 21 | MIT |
 
 Sources: [.github/workflows/tests.yml](https://github.com/lifeupnorth/YouTubeDownloader/blob/b369bd269cac691e2563e27391dbd3702c986e50/.github/workflows/tests.yml), [.github/workflows/build-exe.yml:1-75](https://github.com/lifeupnorth/YouTubeDownloader/blob/b369bd269cac691e2563e27391dbd3702c986e50/.github/workflows/build-exe.yml#L1-L75), [.github/workflows/build-exe.yml:143-188](https://github.com/lifeupnorth/YouTubeDownloader/blob/b369bd269cac691e2563e27391dbd3702c986e50/.github/workflows/build-exe.yml#L143-L188), [.github/workflows/pins.yml](https://github.com/lifeupnorth/YouTubeDownloader/blob/b369bd269cac691e2563e27391dbd3702c986e50/.github/workflows/pins.yml), [packaging/build_exe.py:148-189](https://github.com/lifeupnorth/YouTubeDownloader/blob/b369bd269cac691e2563e27391dbd3702c986e50/packaging/build_exe.py#L148-L189), [packaging/check_pins.py:1-9](https://github.com/lifeupnorth/YouTubeDownloader/blob/b369bd269cac691e2563e27391dbd3702c986e50/packaging/check_pins.py#L1-L9), [ruff.toml](https://github.com/lifeupnorth/YouTubeDownloader/blob/b369bd269cac691e2563e27391dbd3702c986e50/ruff.toml), [README.md](https://github.com/lifeupnorth/YouTubeDownloader/blob/b369bd269cac691e2563e27391dbd3702c986e50/README.md)

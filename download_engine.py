@@ -483,6 +483,32 @@ def fetch_thumbnail(url, canceled=lambda: False, size=THUMB_SIZE):
         return None
 
 
+def encode_thumbnail(image):
+    """A thumbnail as JPEG bytes, small enough to keep with the saved
+    Downloads list (a few KB); None without Pillow or on errors."""
+    if Image is None or image is None:
+        return None
+    try:
+        data = io.BytesIO()
+        image.convert("RGB").save(data, "JPEG", quality=85)
+        return data.getvalue()
+    except Exception:
+        return None
+
+
+def decode_thumbnail(data):
+    """The image in encode_thumbnail's bytes, or None (without Pillow, or if
+    the saved bytes are damaged)."""
+    if Image is None or not data:
+        return None
+    try:
+        image = Image.open(io.BytesIO(data))
+        image.load()   # reads it now, so a damaged file fails here
+        return image.convert("RGB")
+    except Exception:
+        return None
+
+
 def preview_link(url, whole_playlist, cancel_event=None, js_runtime=None,
                  thumb_size=THUMB_SIZE):
     """Looks a link up without downloading: (text, PIL image or None, found).

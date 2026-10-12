@@ -392,6 +392,24 @@ class HelpersTest(unittest.TestCase):
             self.assertIsNone(engine.fetch_thumbnail("https://t/x.png", lambda: True))
         self.assertEqual(len(reads), 1)
 
+    @unittest.skipIf(engine.Image is None, "Pillow not installed")
+    def test_thumbnails_kept_as_small_jpegs(self):
+        image = engine.Image.new("RGB", (256, 144), "red")
+        data = engine.encode_thumbnail(image)
+        self.assertTrue(data.startswith(b"\xff\xd8"), "not a JPEG")
+        self.assertLess(len(data), 20_000)
+        back = engine.decode_thumbnail(data)
+        self.assertEqual(back.size, (256, 144))
+        self.assertGreater(back.getpixel((128, 72))[0], 240, "not red anymore")
+        for damaged in (b"", None, b"not a jpeg", data[:40]):
+            self.assertIsNone(engine.decode_thumbnail(damaged), damaged)
+        self.assertIsNone(engine.encode_thumbnail(None))
+
+    def test_thumbnails_need_pillow(self):
+        with mock.patch.object(engine, "Image", None):
+            self.assertIsNone(engine.encode_thumbnail(object()))
+            self.assertIsNone(engine.decode_thumbnail(b"\xff\xd8"))
+
     def test_logger_sends_warnings_and_errors_apart(self):
         errors, warnings = [], []
         logger = engine._YdlLogger(errors.append, warnings.append)

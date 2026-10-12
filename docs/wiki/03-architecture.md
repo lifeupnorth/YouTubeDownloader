@@ -39,14 +39,14 @@ flowchart LR
 | | Formats, ffmpeg | 171–276 | `VIDEO_MAX_RES`, `format_opts`, `format_eta`, `bundled_ffmpeg`, `find_ffmpeg` (see [Formats and ffmpeg](05-formats-ffmpeg.md)) |
 | | JavaScript runtime | 279–313 | `JS_RUNTIMES`, `js_solver_version`, `find_js_runtime` |
 | | yt-dlp plumbing | 316–432 | `_YdlLogger`, `_callback_pp_class`, `_current` and `_tracked_popen_class` (tracking ffmpeg runs), `_follow_url_results` |
-| | Link preview | 435–526 | `THUMB_SIZE`, `describe_info`, `thumbnail_url`, `fetch_thumbnail`, `preview_link` |
-| | Downloading | 529–810 | `DownloadJob`, which downloads one link |
-| `youtube_downloader.py` | Themes, settings, helpers | 80–299 | `THEMES`, `FORMATS` and `QUALITIES`, `settings_path`/`load_settings`/`save_settings`, `split_links`, `dropped`, `reveal_in_file_manager`, the help texts for ffmpeg and the JavaScript runtime, `application()` |
-| | The Downloads list | 302–705 | `STATES`, `ROW_ACTIONS` and `row_actions`, `bar_percent`, `queue_summary`, `Row`, `DownloadsModel`, `RowDelegate`, `DownloadsView` |
-| | Drawing | 708–905 | The icons, the logo, `to_qimage`, `write_svgs`, `translucent`, `style_sheet` |
-| | `YouTubeDownloader` | 908–1794 | The window, its state, the worker plumbing, and the lookup, download, drag-and-drop, cancel, update and install handlers |
-| | Command-line check | 1797–1838 | `self_check` (`--self-check`), see [Getting Started](02-getting-started.md) |
-| | Entry point | 1841–1870 | `main()`: runs the check, or creates the window and runs Qt's event loop (`app.exec()`) |
+| | Link preview | 435–552 | `THUMB_SIZE`, `describe_info`, `thumbnail_url`, `fetch_thumbnail`, `encode_thumbnail` and `decode_thumbnail` (for the saved list), `preview_link` |
+| | Downloading | 555–836 | `DownloadJob`, which downloads one link |
+| `youtube_downloader.py` | Themes, settings, helpers | 81–328 | `THEMES`, `FORMATS` and `QUALITIES`, `settings_path`/`load_settings`/`save_settings`, `history_path`/`load_history`/`save_history`, `split_links`, `dropped`, `reveal_in_file_manager`, the help texts for ffmpeg and the JavaScript runtime, `application()` |
+| | The Downloads list | 331–787 | `STATES`, `ROW_ACTIONS` and `row_actions`, `bar_percent`, `Row`, `row_entry` and `restored_row` (the saved list), `queue_summary`, `DownloadsModel`, `RowDelegate`, `DownloadsView` |
+| | Drawing | 790–987 | The icons, the logo, `to_qimage`, `write_svgs`, `translucent`, `style_sheet` |
+| | `YouTubeDownloader` | 990–1907 | The window, its state, the worker plumbing, and the lookup, download, drag-and-drop, cancel, saved list, update and install handlers |
+| | Command-line check | 1910–1951 | `self_check` (`--self-check`), see [Getting Started](02-getting-started.md) |
+| | Entry point | 1954–1983 | `main()`: runs the check, or creates the window and runs Qt's event loop (`app.exec()`) |
 
 The engine reports through plain callbacks and keeps its own results (outcome, counts, error, last file, summary), so the window only has to turn callbacks into main-thread calls and show the result in the row. The window reads its widgets (format, quality, folder, the playlist switch) on the main thread when a link is added, keeps the values in the link's `Row`, and passes them to the engine.
 
@@ -92,7 +92,7 @@ Sources: [youtube_downloader.py:541-614](https://github.com/lifeupnorth/YouTubeD
 
 ## No polling
 
-Nothing polls. The main thread waits in Qt's event loop until there's something to do: a click, a call posted by a worker, or a timer. The only repeating timer is `_progress_timer`, which runs only while a download does. `_active_workers` still counts the running workers: `_start_worker` increments it, and `_worker_finished`, which `_run_worker` posts for every worker, even one that crashed, decrements it; the tests wait on it to know the window is idle. Following the system's light or dark setting needs no timer either: Qt emits `colorSchemeChanged` when it switches (see [User Interface](06-user-interface.md#themes)).
+Nothing polls. The main thread waits in Qt's event loop until there's something to do: a click, a call posted by a worker, or a timer. The only repeating timer is `_progress_timer`, which runs only while a download does; the saved list's `_history_timer` fires once, a second after the list last changed. `_active_workers` still counts the running workers: `_start_worker` increments it, and `_worker_finished`, which `_run_worker` posts for every worker, even one that crashed, decrements it; the tests wait on it to know the window is idle. Following the system's light or dark setting needs no timer either: Qt emits `colorSchemeChanged` when it switches (see [User Interface](06-user-interface.md#themes)).
 
 Sources: [youtube_downloader.py:547-563](https://github.com/lifeupnorth/YouTubeDownloader/blob/b369bd269cac691e2563e27391dbd3702c986e50/youtube_downloader.py#L547-L563), [youtube_downloader.py:593-614](https://github.com/lifeupnorth/YouTubeDownloader/blob/b369bd269cac691e2563e27391dbd3702c986e50/youtube_downloader.py#L593-L614)
 
@@ -106,7 +106,7 @@ Sources: [youtube_downloader.py:700-701](https://github.com/lifeupnorth/YouTubeD
 
 `main()` first sets a Windows AppUserModelID (`lifeupnorth.YTDownloader`), so the taskbar shows the app's own icon rather than Python's, then creates the `QApplication` (`application()`) and the window, sets `sys.excepthook`, shows the window and runs `app.exec()`.
 
-`__init__` makes sure the `QApplication` exists, connects `_call_on_main`, sets up the state, applies the saved settings, creates the model, builds the UI, applies the theme (and connects `colorSchemeChanged`), creates the progress timer and sizes the window (`_fit_window`). Then it runs its startup checks:
+`__init__` makes sure the `QApplication` exists, connects `_call_on_main`, sets up the state, applies the saved settings, creates the model, builds the UI, applies the theme (and connects `colorSchemeChanged`), creates the progress timer and the saved list's timer, loads the list saved by the last run (`_load_history`) and sizes the window (`_fit_window`). Then it runs its startup checks:
 
 - If yt-dlp is missing, it schedules `_prompt_install` 300 ms later (`QTimer.singleShot`).
 - If ffmpeg isn't found, it shows a warning in the status line and opens the log with the install hint. `changeEvent` checks again whenever the window becomes the active one (`QEvent.ActivationChange` → `_recheck_ffmpeg`).
@@ -115,7 +115,7 @@ Sources: [youtube_downloader.py:700-701](https://github.com/lifeupnorth/YouTubeD
 - If the saved folder isn't available (an unplugged drive?), it says so in the log and saves to `~/Downloads` for now.
 - `_maybe_check_for_update` starts `_update_thread` only in a release .exe, while "Check for updates at startup" is on, and at most once a day (`last_update_check` in the settings, saved by `_update_checked` only when the check reached GitHub); `_update_checked` logs a notice if a newer release is out. `self_check` creates the window with `update_check=False`.
 
-Closing goes through `closeEvent`. If a download is running, it first asks "Cancel it and close the app?". On No, `event.ignore()` keeps the window open. On Yes it checks `_running` again, since the download may have finished while the question was open; if it did, the window just closes. Otherwise it sets `_close_when_stopped`, cancels every row (the running one stops, waiting ones are marked Canceled), says "Canceling… the app closes when it has stopped." and ignores the event; `_run_next` starts nothing more, and `_download_finished` calls `close()` again once the partial files are removed. Clicking close a second time while that runs (e.g. stuck on a slow network request) closes right away. When the window does close, `closeEvent` sets `_closing`, sets every row's cancel event (which stops the lookups and makes `_ask_on_main` return), stops the progress timer and saves the settings. `app.exec()` returns when the last window has closed. Worker threads are daemons, so anything still running then (a pip install, or a download after a forced second close) ends with the process.
+Closing goes through `closeEvent`. If a download is running, it first asks "Cancel it and close the app?". On No, `event.ignore()` keeps the window open. On Yes it checks `_running` again, since the download may have finished while the question was open; if it did, the window just closes. Otherwise it sets `_close_when_stopped`, cancels every row (the running one stops, waiting ones are marked Canceled), says "Canceling… the app closes when it has stopped." and ignores the event; `_run_next` starts nothing more, and `_download_finished` calls `close()` again once the partial files are removed. Clicking close a second time while that runs (e.g. stuck on a slow network request) closes right away. When the window does close, `closeEvent` sets `_closing`, sets every row's cancel event (which stops the lookups and makes `_ask_on_main` return), stops the progress timer and saves the settings and the Downloads list. `app.exec()` returns when the last window has closed. Worker threads are daemons, so anything still running then (a pip install, or a download after a forced second close) ends with the process.
 
 ```mermaid
 stateDiagram-v2
@@ -150,6 +150,7 @@ Sources: [download_engine.py:59-89](https://github.com/lifeupnorth/YouTubeDownlo
 | Other `Row` fields | main | main | Title, state, progress, message and file shown in the list |
 | `_running` | main (`_run_next`, `_download_finished`) | main | The row downloading now; only one at a time |
 | `_active_workers` | main | main, tests | How many workers are running |
+| `_history_timer` | main (`_history_changed`, `_save_history`) | main | Saves the Downloads list a second after it last changed |
 | `_lookup_slots` | lookup threads | lookup threads | A semaphore letting three lookups run at once |
 | `_closing`, `_close_when_stopped` | main (`closeEvent`) | main, workers | Shutdown |
 | `_installing` | main (`_install_ytdlp`, `_install_done`) | main | An in-app install is running; Download then asks the user to wait instead of offering the install again |
