@@ -171,8 +171,10 @@ def fetch_update_notice():
 # ── Formats ──────────────────────────────────────────────────────────────────
 
 # res:N caps the shorter side (as YouTube's labels do), not the height: for a
-# vertical 1080x1920 video, "480p" gives 480x854.
-VIDEO_MAX_RES = {"mp4_best": None, "1080p": 1080, "720p": 720, "480p": 480}
+# vertical 1080x1920 video, "480p" gives 480x854. Above 1080p YouTube mostly
+# has VP9 or AV1 video; it still goes into an MP4 file.
+VIDEO_MAX_RES = {"mp4_best": None, "2160p": 2160, "1440p": 1440, "1080p": 1080,
+                 "720p": 720, "480p": 480}
 
 
 def format_opts(fmt):
@@ -186,9 +188,11 @@ def format_opts(fmt):
         res = VIDEO_MAX_RES[fmt]
         # Sort instead of filter: when nothing matches exactly, yt-dlp picks
         # the closest format rather than failing with "format not available".
+        # Resolution comes first, so "Best quality" is the highest one (VP9 or
+        # AV1 if that's all there is up there), and MP4 streams win ties.
         return {
             "format": "bv*+ba/b",
-            "format_sort": ([f"res:{res}"] if res else []) + ["ext:mp4:m4a"],
+            "format_sort": [f"res:{res}" if res else "res", "ext:mp4:m4a"],
             "merge_output_format": "mp4",
             "final_ext": "mp4",
             # The single-file fallback ("b") is not always MP4.

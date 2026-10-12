@@ -36,17 +36,17 @@ flowchart LR
 |---|---|---|---|
 | `download_engine.py` | yt-dlp loading and version | 24–110 | Optional `yt_dlp` and Pillow imports, the pin from `requirements.txt`, `missing_yt_dlp_extras`, `load_yt_dlp`, version helpers |
 | | Update check | 113–168 | `app_version` (from the .exe's bundled `VERSION` file), `newer_version`, `check_for_update`, `fetch_update_notice` |
-| | Formats, ffmpeg | 171–272 | `VIDEO_MAX_RES`, `format_opts`, `format_eta`, `bundled_ffmpeg`, `find_ffmpeg` (see [Formats and ffmpeg](05-formats-ffmpeg.md)) |
-| | JavaScript runtime | 275–309 | `JS_RUNTIMES`, `js_solver_version`, `find_js_runtime` |
-| | yt-dlp plumbing | 312–428 | `_YdlLogger`, `_callback_pp_class`, `_current` and `_tracked_popen_class` (tracking ffmpeg runs), `_follow_url_results` |
-| | Link preview | 431–522 | `THUMB_SIZE`, `describe_info`, `thumbnail_url`, `fetch_thumbnail`, `preview_link` |
-| | Downloading | 525–806 | `DownloadJob`, which downloads one link |
-| `youtube_downloader.py` | Themes, settings, helpers | 80–283 | `THEMES`, `FORMATS` and `QUALITIES`, `settings_path`/`load_settings`/`save_settings`, `split_links`, `reveal_in_file_manager`, the help texts for ffmpeg and the JavaScript runtime, `application()` |
-| | The Downloads list | 286–689 | `STATES`, `ROW_ACTIONS` and `row_actions`, `bar_percent`, `queue_summary`, `Row`, `DownloadsModel`, `RowDelegate`, `DownloadsView` |
-| | Drawing | 692–880 | The icons, the logo, `to_qimage`, `write_svgs`, `style_sheet` |
-| | `YouTubeDownloader` | 883–1703 | The window, its state, the worker plumbing, and the lookup, download, cancel, update and install handlers |
-| | Command-line check | 1706–1747 | `self_check` (`--self-check`), see [Getting Started](02-getting-started.md) |
-| | Entry point | 1750–1779 | `main()`: runs the check, or creates the window and runs Qt's event loop (`app.exec()`) |
+| | Formats, ffmpeg | 171–276 | `VIDEO_MAX_RES`, `format_opts`, `format_eta`, `bundled_ffmpeg`, `find_ffmpeg` (see [Formats and ffmpeg](05-formats-ffmpeg.md)) |
+| | JavaScript runtime | 279–313 | `JS_RUNTIMES`, `js_solver_version`, `find_js_runtime` |
+| | yt-dlp plumbing | 316–432 | `_YdlLogger`, `_callback_pp_class`, `_current` and `_tracked_popen_class` (tracking ffmpeg runs), `_follow_url_results` |
+| | Link preview | 435–526 | `THUMB_SIZE`, `describe_info`, `thumbnail_url`, `fetch_thumbnail`, `preview_link` |
+| | Downloading | 529–810 | `DownloadJob`, which downloads one link |
+| `youtube_downloader.py` | Themes, settings, helpers | 80–299 | `THEMES`, `FORMATS` and `QUALITIES`, `settings_path`/`load_settings`/`save_settings`, `split_links`, `dropped`, `reveal_in_file_manager`, the help texts for ffmpeg and the JavaScript runtime, `application()` |
+| | The Downloads list | 302–705 | `STATES`, `ROW_ACTIONS` and `row_actions`, `bar_percent`, `queue_summary`, `Row`, `DownloadsModel`, `RowDelegate`, `DownloadsView` |
+| | Drawing | 708–905 | The icons, the logo, `to_qimage`, `write_svgs`, `translucent`, `style_sheet` |
+| | `YouTubeDownloader` | 908–1794 | The window, its state, the worker plumbing, and the lookup, download, drag-and-drop, cancel, update and install handlers |
+| | Command-line check | 1797–1838 | `self_check` (`--self-check`), see [Getting Started](02-getting-started.md) |
+| | Entry point | 1841–1870 | `main()`: runs the check, or creates the window and runs Qt's event loop (`app.exec()`) |
 
 The engine reports through plain callbacks and keeps its own results (outcome, counts, error, last file, summary), so the window only has to turn callbacks into main-thread calls and show the result in the row. The window reads its widgets (format, quality, folder, the playlist switch) on the main thread when a link is added, keeps the values in the link's `Row`, and passes them to the engine.
 

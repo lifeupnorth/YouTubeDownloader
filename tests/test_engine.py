@@ -94,6 +94,23 @@ class FormatSelectionTest(unittest.TestCase):
         self.assertEqual(self.pick("480p", formats), "mp4-480+audio-m4a")
         self.assertEqual(self.pick("mp4_best", formats), "mp4-2160+audio-m4a")
 
+    def test_4k_and_1440p(self):
+        # Above 1080p YouTube mostly has VP9 (or AV1), and sometimes 8K too.
+        formats = [mp4(1080), webm(1440), webm(2160), mp4(2160), webm(4320), M4A, OPUS]
+        self.assertEqual(self.pick("2160p", formats), "mp4-2160+audio-m4a")
+        self.assertEqual(self.pick("1440p", formats), "webm-1440+audio-m4a")
+        self.assertEqual(self.pick("mp4_best", formats), "webm-4320+audio-m4a")
+        # Best quality is never below 4K: the highest resolution comes first,
+        # and among the same resolution an MP4 stream is preferred.
+        self.assertEqual(self.pick("mp4_best", [mp4(1080), webm(2160), M4A]),
+                         "webm-2160+audio-m4a")
+        self.assertEqual(self.pick("mp4_best", [webm(2160), mp4(2160), M4A]),
+                         "mp4-2160+audio-m4a")
+        # Without a 1440p one: the closest below, not the next one up.
+        self.assertEqual(self.pick("1440p", [mp4(1080), mp4(2160), M4A]), "mp4-1080+audio-m4a")
+        # A video that only goes up to 1080p gets that.
+        self.assertEqual(self.pick("2160p", [mp4(720), mp4(1080), M4A]), "mp4-1080+audio-m4a")
+
     def test_vertical_video_caps_the_shorter_side(self):
         # The old [height<=480] filter gave 270x480 here.
         shorts = [*SHORTS, M4A]

@@ -14,12 +14,14 @@ How each **Format** and **Quality** choice turns into yt-dlp options, and how th
 
 ## Format choices: `format_opts`
 
-The window has two drop-downs: **Format** (`FORMATS`: MP4 video, MP3 audio, M4A audio) and **Quality** (`QUALITIES`: Best quality, 1080p, 720p, 480p), which only applies to video and is disabled for audio. `_chosen_format` combines them into one value: the quality's for MP4 video, the format's for audio. That value is what the settings remember (`format`) and what a link's `Row` keeps when it's added (`fmt`). `_run_row` passes it to the row's `DownloadJob`, and `format_opts(fmt)` turns it into yt-dlp options that `DownloadJob.options` merges in.
+The window has two drop-downs: **Format** (`FORMATS`: MP4 video, MP3 audio, M4A audio) and **Quality** (`QUALITIES`: Best quality, 2160p (4K), 1440p, 1080p, 720p, 480p), which only applies to video and is disabled for audio. `_chosen_format` combines them into one value: the quality's for MP4 video, the format's for audio. That value is what the settings remember (`format`) and what a link's `Row` keeps when it's added (`fmt`). `_run_row` passes it to the row's `DownloadJob`, and `format_opts(fmt)` turns it into yt-dlp options that `DownloadJob.options` merges in.
 
 | Format · Quality | Value | `format` | `final_ext` | Other options |
 |---|---|---|---|---|
-| MP4 video · Best quality | `mp4_best` | `bv*+ba/b` | `mp4` | `format_sort: ["ext:mp4:m4a"]`, `merge_output_format: mp4`, `FFmpegVideoRemuxer → mp4` |
-| MP4 video · 1080p | `1080p` | `bv*+ba/b` | `mp4` | `format_sort: ["res:1080", "ext:mp4:m4a"]`, merge to and remux as mp4 |
+| MP4 video · Best quality | `mp4_best` | `bv*+ba/b` | `mp4` | `format_sort: ["res", "ext:mp4:m4a"]`, `merge_output_format: mp4`, `FFmpegVideoRemuxer → mp4` |
+| MP4 video · 2160p (4K) | `2160p` | `bv*+ba/b` | `mp4` | `format_sort: ["res:2160", "ext:mp4:m4a"]`, merge to and remux as mp4 |
+| MP4 video · 1440p | `1440p` | `bv*+ba/b` | `mp4` | `res:1440`, as above |
+| MP4 video · 1080p | `1080p` | `bv*+ba/b` | `mp4` | `res:1080`, as above |
 | MP4 video · 720p | `720p` | `bv*+ba/b` | `mp4` | `res:720`, as above |
 | MP4 video · 480p | `480p` | `bv*+ba/b` | `mp4` | `res:480`, as above |
 | MP3 audio | `mp3` | `bestaudio/best` | `mp3` | `FFmpegExtractAudio`, codec `mp3`, quality `192` |
@@ -33,7 +35,9 @@ Sources: [download_engine.py:164-210](https://github.com/lifeupnorth/YouTubeDown
 
 ### Why sort instead of filter
 
-The video choices use yt-dlp's *format sorting* rather than hard filters such as `[height<=1080]`. With `res:N`, yt-dlp prefers the best format at or below N and, if there's none, the closest one above; a hard filter would fail with "Requested format is not available". `ext:mp4:m4a` breaks ties in favor of MP4 video and M4A audio. For **Best quality**, which has no `res` limit, that preference comes first, which keeps the original "MP4 first" behavior.
+The video choices use yt-dlp's *format sorting* rather than hard filters such as `[height<=1080]`. With `res:N`, yt-dlp prefers the best format at or below N and, if there's none, the closest one above; a hard filter would fail with "Requested format is not available". `ext:mp4:m4a` breaks ties in favor of MP4 video and M4A audio. **Best quality** sorts by plain `res` first, so it's the highest resolution there is, never below what 2160p (4K) gives; MP4 still wins between streams of the same resolution. (It used to put `ext:mp4:m4a` first, which for a video whose higher resolutions are only in VP9 meant 1080p.)
+
+Above 1080p YouTube mostly has AV1 video in an MP4 stream, or VP9 in WebM; either way it's merged into an MP4 file. AV1 and VP9 need a fairly recent player or system (Windows 10 and 11 play both with Microsoft's free AV1 and VP9 video extensions), which is worth knowing for 4K and Best quality.
 
 `res:N` compares the **shorter side** of the video, the way YouTube's quality labels do, not its height. So for a vertical 1080×1920 Short, "480p" picks 480×854. That's why the constant is named `VIDEO_MAX_RES`.
 

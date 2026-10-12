@@ -150,8 +150,8 @@ FFMPEG_MISSING_STATUS = "ffmpeg not found: see the log"
 # value given to the engine (engine.format_opts) is the quality's for video,
 # the format's for audio.
 FORMATS = [("MP4 video", "video"), ("MP3 audio", "mp3"), ("M4A audio", "m4a")]
-QUALITIES = [("Best quality", "mp4_best"), ("1080p", "1080p"),
-             ("720p", "720p"), ("480p", "480p")]
+QUALITIES = [("Best quality", "mp4_best"), ("2160p (4K)", "2160p"), ("1440p", "1440p"),
+             ("1080p", "1080p"), ("720p", "720p"), ("480p", "480p")]
 FORMAT_VALUES = [value for _, value in QUALITIES] + ["mp3", "m4a"]
 
 # Heights at 96 DPI (Qt scales them); a pill's corner radius in the style
@@ -270,6 +270,22 @@ def ffmpeg_help(startup=False):
             "Then click Download again (restart the app if it still isn't found).")
     return ("ffmpeg is required to merge video and audio and to convert to "
             f"MP3/M4A, but it wasn't found.\n\n{_ffmpeg_install_hint()}\n\n{then}")
+
+
+def dropped(mime):
+    """(links, folder) in what's dragged onto the window: the web links in
+    it (or in its text), and a local folder, if there's one."""
+    links, folder = [], None
+    for url in mime.urls():
+        if url.isLocalFile():
+            path = os.path.normpath(url.toLocalFile())   # Qt's has "/" on Windows too
+            if folder is None and os.path.isdir(path):
+                folder = path
+        elif url.scheme() in ("http", "https"):
+            links.append(url.toString())
+    if not links and mime.hasText():
+        links = split_links(mime.text())[0]
+    return list(dict.fromkeys(links)), folder
 
 
 def application(argv=None):
@@ -815,6 +831,12 @@ def write_svgs(folder, c):
     return paths
 
 
+def translucent(color, alpha):
+    """A "#rrggbb" color as a style sheet rgba() with the given opacity."""
+    r, g, b = (int(color[i:i + 2], 16) for i in (1, 3, 5))
+    return f"rgba({r}, {g}, {b}, {round(alpha * 255)})"
+
+
 def style_sheet(c, svg):
     return f"""
     QWidget {{ background: {c["bg"]}; color: {c["text"]}; }}
@@ -873,6 +895,9 @@ def style_sheet(c, svg):
     QScrollBar::add-page, QScrollBar::sub-page {{ background: transparent; }}
     QToolTip {{ background: {c["surface"]}; color: {c["text"]};
                 border: 1px solid {c["divider"]}; padding: 4px 6px; }}
+    QLabel#drop {{ background: {translucent(c["bg"], 0.9)}; color: {c["text"]};
+                   border: 2px dashed {c["blue"]}; border-radius: 16px;
+                   font-size: 16pt; font-weight: 600; }}
     QMenu {{ background: {c["surface"]}; border: 1px solid {c["divider"]}; padding: 4px; }}
     QMenu::item {{ padding: 6px 16px 6px 12px; border-radius: 4px; }}
     QMenu::item:selected {{ background: {c["button_hover"]}; }}
@@ -1079,6 +1104,14 @@ class YouTubeDownloader(QMainWindow):
         self.view.action.connect(self._row_action)   # keys, menu, double-click
         self.view.setItemDelegate(self.delegate)
         body.addWidget(self.view, 1)
+
+        # Shown while something is dragged over the window (see dragEnterEvent).
+        self.drop_overlay = QLabel(root, objectName="drop", alignment=Qt.AlignCenter)
+        self.drop_overlay.setAttribute(Qt.WA_TransparentForMouseEvents)
+        self.drop_overlay.hide()
+        self.setAcceptDrops(True)
+        for box in (self.url, self.path):
+            box.setAcceptDrops(False)   # the window takes drops on them too
 
         # The log: hidden until asked for, or until something needs reading.
         self.log_box = QPlainTextEdit(objectName="log", readOnly=True)
@@ -1299,32 +1332,43 @@ class YouTubeDownloader(QMainWindow):
 
     # ── Adding links ────────────────────────────────────────────────────────
 
+    # Download clicked (or Enter): the links in the box.
     def _start_download(self):
+        if self._can_download():
+            links, not_links = split_links(self.url.text())
+            if not links:
+                QMessageBox.warning(self, "No URL", "Please enter a YouTube URL.")
+                return
+            if self._add_links(links):
+                self.url.clear()
+                if not_links:
+                    self._log("• Not links, so left out: " + " ".join(not_links))
+
+    def _can_download(self):
+        """Whether yt-dlp and ffmpeg are there (saying why not if they aren't)."""
         if not engine.YT_DLP_AVAILABLE:
             if self._installing:
                 self._set_status("Installing yt-dlp, please wait…", WARNING)
             else:
                 self._prompt_install()
-            return
-
+            return False
         ffmpeg = engine.find_ffmpeg()
         self._ffmpeg_missing = not ffmpeg
         if self._ffmpeg_missing:
             QMessageBox.critical(self, "ffmpeg not found", ffmpeg_help())
-            return
+            return False
         self._ffmpeg = ffmpeg
+        return True
 
-        links, not_links = split_links(self.url.text())
-        if not links:
-            QMessageBox.warning(self, "No URL", "Please enter a YouTube URL.")
-            return
-
+    def _add_links(self, links):
+        """Adds a row per link to the list and starts downloading; False if
+        the folder isn't usable (the links weren't added)."""
         # A relative folder would save next to wherever the app was started.
         folder = os.path.expanduser(self.path.text().strip())
         if not folder or not os.path.isabs(folder):
             QMessageBox.warning(self, "Choose a folder",
                                 "Please choose the folder to save to (Browse).")
-            return
+            return False
         folder = os.path.normpath(folder)
         self.path.setText(folder)
         self._save_settings()
@@ -1340,14 +1384,61 @@ class YouTubeDownloader(QMainWindow):
             self.model.add(row)
             self._start_worker(self._look_up, row, thumb, self._js_runtime)
             added += 1
-        if not_links:
-            self._log("• Not links, so left out: " + " ".join(not_links))
-        self.url.clear()
         self.view.scrollToBottom()
         if added:
             self._run_next()
         else:
             self._set_status("Those links are already in the list.")
+        return True
+
+    # ── Drag and drop ───────────────────────────────────────────────────────
+
+    # Links dragged onto the window (from a browser's address bar, a page,
+    # or text) are downloaded with the chosen format and quality; a folder
+    # dragged onto it becomes the folder to save to. An overlay says which,
+    # while dragging.
+    def dragEnterEvent(self, event):
+        links, folder = dropped(event.mimeData())
+        if not (links or folder):
+            event.ignore()
+            return
+        event.acceptProposedAction()
+        if links:
+            what = f"{len(links)} links" if len(links) > 1 else "the link"
+            how = self.format.currentText()
+            if self.format.currentData() == "video":
+                how += f", {self.quality.currentText()}"
+            text = f"Drop to download {what}\nas {how}"
+            if folder:
+                text += f"\ninto {os.path.basename(folder) or folder}"
+        else:
+            text = f"Drop to save to\n{folder}"
+        self.drop_overlay.setText(text)
+        self.drop_overlay.setGeometry(self.centralWidget().rect().adjusted(12, 12, -12, -12))
+        self.drop_overlay.raise_()
+        self.drop_overlay.show()
+
+    def dragMoveEvent(self, event):
+        event.acceptProposedAction()
+
+    def dragLeaveEvent(self, event):
+        self.drop_overlay.hide()
+
+    def dropEvent(self, event):
+        self.drop_overlay.hide()
+        links, folder = dropped(event.mimeData())
+        if not (links or folder):
+            event.ignore()
+            return
+        event.acceptProposedAction()
+        if folder:
+            self.path.setText(os.path.normpath(folder))
+            self._unavailable_folder = None   # a deliberate choice replaces it
+            if not links:
+                self._save_settings()
+                self._set_status(f"Saving to {os.path.normpath(folder)}")
+        if links and self._can_download():
+            self._add_links(links)
 
     def _thumb_pixels(self):
         ratio = self.devicePixelRatioF()

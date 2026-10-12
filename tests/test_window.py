@@ -23,8 +23,14 @@ os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 TESTS = os.path.dirname(os.path.abspath(__file__))
 sys.path[:0] = [os.path.dirname(TESTS), TESTS]   # the app, and tests/fakes.py
 from fakes import fake_yt_dlp, make_fake_ydl  # noqa: E402
-from PySide6.QtCore import QEvent  # noqa: E402
-from PySide6.QtGui import QFocusEvent, QKeyEvent  # noqa: E402
+from PySide6.QtCore import QEvent, QMimeData, QPoint, QPointF, QUrl  # noqa: E402
+from PySide6.QtGui import (  # noqa: E402
+    QDragEnterEvent,
+    QDragLeaveEvent,
+    QDropEvent,
+    QFocusEvent,
+    QKeyEvent,
+)
 from PySide6.QtWidgets import QApplication, QMessageBox  # noqa: E402
 
 import download_engine as engine  # noqa: E402
@@ -671,6 +677,108 @@ class WindowTest(unittest.TestCase):
                              ("failed", ["remove"]), ("canceled", ["remove"])):
             row = ytd.Row(VIDEO, "mp4_best", "f", False, state=state)
             self.assertEqual([n for n, _ in self.app.delegate.icons(rect, row)], icons)
+
+    # ── Drag and drop ──
+
+    def mime(self, urls=(), text=None):
+        data = QMimeData()
+        if urls:
+            data.setUrls([QUrl(u) if "://" in u else QUrl.fromLocalFile(u) for u in urls])
+        if text is not None:
+            data.setText(text)
+        return data
+
+    def drag(self, data):
+        event = QDragEnterEvent(QPoint(10, 10), ytd.Qt.CopyAction, data,
+                                ytd.Qt.LeftButton, ytd.Qt.NoModifier)
+        self.app.dragEnterEvent(event)
+        return event
+
+    def drop(self, data):
+        event = QDropEvent(QPointF(10, 10), ytd.Qt.CopyAction, data,
+                           ytd.Qt.LeftButton, ytd.Qt.NoModifier)
+        self.app.dropEvent(event)
+        return event
+
+    def test_what_a_drop_holds(self):
+        with tempfile.TemporaryDirectory() as folder:
+            data = self.mime([VIDEO, folder, "https://e.com/b", VIDEO])
+            self.assertEqual(ytd.dropped(data), ([VIDEO, "https://e.com/b"], folder))
+        self.assertEqual(ytd.dropped(self.mime(text='Watch "youtu.be/abc" now')),
+                         (["https://youtu.be/abc"], None))
+        self.assertEqual(ytd.dropped(self.mime([os.path.abspath(__file__)])), ([], None),
+                         "a file isn't a folder")
+        self.assertEqual(ytd.dropped(self.mime(text="no links here")), ([], None))
+
+    def test_dragging_shows_what_a_drop_does(self):
+        self.app.show()
+        event = self.drag(self.mime([VIDEO]))
+        self.assertTrue(event.isAccepted())
+        self.assertTrue(self.app.drop_overlay.isVisible())
+        self.assertEqual(self.app.drop_overlay.text(),
+                         "Drop to download the link\nas MP4 video, Best quality")
+        self.app.dragLeaveEvent(QDragLeaveEvent())
+        self.assertFalse(self.app.drop_overlay.isVisible())
+        self.app.format.setCurrentIndex(self.app.format.findData("mp3"))
+        self.drag(self.mime([VIDEO, "https://e.com/b"]))
+        self.assertEqual(self.app.drop_overlay.text(), "Drop to download 2 links\nas MP3 audio")
+        self.app.dragLeaveEvent(QDragLeaveEvent())
+        with tempfile.TemporaryDirectory() as folder:
+            self.drag(self.mime([folder]))
+            self.assertEqual(self.app.drop_overlay.text(), f"Drop to save to\n{folder}")
+        self.app.dragLeaveEvent(QDragLeaveEvent())
+        self.assertFalse(self.drag(self.mime(text="nothing to download")).isAccepted())
+        self.assertFalse(self.app.drop_overlay.isVisible())
+
+    def test_dropped_links_download(self):
+        fake = make_fake_ydl(streams=1, probe=("video",) * 2)
+        with mock.patch.object(engine, "yt_dlp", fake_yt_dlp(fake)):
+            self.app.url.setText("typed, not sent yet")
+            self.app.format.setCurrentIndex(self.app.format.findData("mp3"))
+            event = self.drop(self.mime([VIDEO, "https://e.com/b"]))
+            self.assertTrue(event.isAccepted())
+            self.wait(self.idle)
+        self.assertEqual([(r.url, r.fmt, r.state) for r in self.rows()],
+                         [(VIDEO, "mp3", "done"), ("https://e.com/b", "mp3", "done")])
+        self.assertEqual(self.app.url.text(), "typed, not sent yet", "the box is left alone")
+        self.assertFalse(self.app.drop_overlay.isVisible())
+
+    def test_a_dropped_folder_is_where_files_go(self):
+        with tempfile.TemporaryDirectory() as folder:
+            self.drop(self.mime([folder]))
+            self.assertEqual(self.app.path.text(), os.path.normpath(folder))
+            self.assertEqual(ytd.load_settings()["folder"], os.path.normpath(folder))
+            self.assertEqual(self.rows(), [], "a folder alone downloads nothing")
+            # Links dropped with a folder download into it.
+            with tempfile.TemporaryDirectory() as other, \
+                    mock.patch.object(engine, "yt_dlp",
+                                      fake_yt_dlp(make_fake_ydl(streams=1, files_dir=other))):
+                self.drop(self.mime([VIDEO, other]))
+                self.wait(self.idle)
+                self.assertEqual(self.rows()[0].folder, os.path.normpath(other))
+                self.assertEqual(self.files(other), ["v0.mp4"])
+
+    def test_drops_need_ffmpeg_like_download(self):
+        with mock.patch.object(engine, "find_ffmpeg", return_value=None):
+            self.drop(self.mime([VIDEO]))
+        self.assertEqual(self.titles, ["ffmpeg not found"])
+        self.assertEqual(self.rows(), [])
+
+    def test_the_boxes_leave_drops_to_the_window(self):
+        self.assertTrue(self.app.acceptDrops())
+        self.assertFalse(self.app.url.acceptDrops())
+        self.assertFalse(self.app.path.acceptDrops())
+
+    def test_4k_and_1440p_qualities(self):
+        labels = [self.app.quality.itemText(i) for i in range(self.app.quality.count())]
+        self.assertEqual(labels, ["Best quality", "2160p (4K)", "1440p", "1080p", "720p", "480p"])
+        for label, value in ytd.QUALITIES:
+            self.assertIn(value, engine.VIDEO_MAX_RES)
+            self.assertEqual(ytd.Row(VIDEO, value, "f", False).quality_label, label)
+        self.app.quality.setCurrentIndex(self.app.quality.findData("2160p"))
+        self.assertEqual(self.app._chosen_format(), "2160p")
+        self.app.close()   # saves it
+        self.assertEqual(self.new_window()._chosen_format(), "2160p")
 
     # ── Keyboard, right-click menu, double-click ──
 
