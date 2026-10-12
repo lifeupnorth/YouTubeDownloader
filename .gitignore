@@ -4,3 +4,6 @@ __pycache__/
 build/
 dist/
 packaging/.cache/
+
+# Virtual environments (e.g. the Qt prototype's)
+.venv/
