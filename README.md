@@ -3,7 +3,7 @@ A small app to download YouTube videos written in Python.
 
 ## Requirements
 
-- **Python 3.10 or newer**.
+- **Python 3.12 or newer**. On older versions, Qt for Python (PySide6) makes Python crash on Linux a few minutes into a download. The .exe includes Python.
 - **PySide6** (Qt for Python), for the window: `PySide6-Essentials`, pinned in `requirements.txt`.
 - **yt-dlp** with its recommended extras (`yt-dlp[default]`), pinned to a tested version in `requirements.txt`. The extras include **yt-dlp-ejs**, the solver for YouTube's JavaScript challenges.
 - **Pillow** (optional, also in `requirements.txt`), for thumbnails in the Downloads list. Without it the list shows titles only.
