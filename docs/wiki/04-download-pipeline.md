@@ -58,7 +58,7 @@ Sources: [youtube_downloader.py:483-489](https://github.com/lifeupnorth/YouTubeD
 
 ## 2. Several links: the Downloads list
 
-The window does the queueing: a `DownloadJob` downloads one link, and the window runs one job at a time. `_run_next` does nothing while a row is downloading (`_running`) or the window is closing. Otherwise it takes the first row, in list order, that's waiting or still being looked up, marks it Downloading with "Starting…", sets the status line to "Downloading 2 of 3…" (counting the rows not finished yet), logs `▶ <url>`, starts the progress timer and runs `_run_row` on a worker. If no JavaScript runtime was known yet, `_run_row` looks one up with `engine.find_js_runtime()` (it may have been installed since startup). It creates one `DownloadJob` for the row, with the row's link, format, folder and **Whole playlist** setting, the ffmpeg found, and the row's own cancel event. When it ends, `_download_finished` shows the result in the row and calls `_run_next` again, so a link that fails, or whose playlist isn't confirmed, doesn't stop the others. A `_run_row` that raises (a bug, not a download problem) fails only its row. When no row is left waiting, `_queue_finished` sums up (section 8). Links can be added at any time, also while others download.
+The window does the queueing: a `DownloadJob` downloads one link, and the window runs one job at a time. `_run_next` does nothing while a row is downloading (`_running`) or the window is closing. Otherwise it takes the first row, in list order, that's waiting or still being looked up (a paused row isn't), marks it Downloading with "Starting…", sets the status line to "Downloading 2 of 3…" (counting the rows not finished or paused), logs `▶ <url>`, starts the progress timer and runs `_run_row` on a worker. If no JavaScript runtime was known yet, `_run_row` looks one up with `engine.find_js_runtime()` (it may have been installed since startup). It creates one `DownloadJob` for the row, with the row's link, format, folder and **Whole playlist** setting, the ffmpeg found, the row's own cancel and pause events, and the partial files an earlier pause kept. When it ends, `_download_finished` shows the result in the row and calls `_run_next` again, so a link that fails, or whose playlist isn't confirmed, doesn't stop the others. A `_run_row` that raises (a bug, not a download problem) fails only its row. When no row is left waiting, `_queue_finished` sums up (section 8). Links can be added at any time, also while others download.
 
 Sources: [download_engine.py:762-809](https://github.com/lifeupnorth/YouTubeDownloader/blob/b369bd269cac691e2563e27391dbd3702c986e50/download_engine.py#L762-L809)
 
@@ -71,7 +71,7 @@ Sources: [download_engine.py:762-809](https://github.com/lifeupnorth/YouTubeDown
 | `noplaylist` | `not whole_playlist` | Only affects `watch?v=…&list=…` links: off means just that video |
 | `quiet`, `no_warnings` | `True`, `False` | Nothing goes to the console; warnings still reach the logger |
 | `ignoreerrors` | `"only_download"` | Like the yt-dlp CLI: skip unavailable playlist entries instead of stopping |
-| `logger` | `_YdlLogger(_entry_failed, _entry_warning, _check_canceled)` | Errors are logged with ✘ and counted as skipped; warnings are logged with ⚠ (except the missing-JavaScript-runtime warning, which the window shows once at startup). Debug and info messages aren't logged, but each one runs the cancel check (section 7). |
+| `logger` | `_YdlLogger(_entry_failed, _entry_warning, _check_stop)` | Errors are logged with ✘ and counted as skipped; warnings are logged with ⚠ (except the missing-JavaScript-runtime warning, which the window shows once at startup). Debug and info messages aren't logged, but each one runs the cancel and pause check (section 7). |
 | `color` | `never` for stdout and stderr | Keeps ANSI color codes out of error text when started from a terminal |
 | format keys | from `format_opts(fmt)`: `format`, `postprocessors`, `final_ext`, and for video `format_sort` and `merge_output_format` | See [Formats and ffmpeg](05-formats-ffmpeg.md). `final_ext` is the extension after conversion; it lets yt-dlp see that a converted file is already there (section 6). |
 | `ffmpeg_location` | the path `find_ffmpeg()` found | Works even when ffmpeg isn't on this process's `PATH` |
@@ -124,11 +124,19 @@ Sources: [download_engine.py:325-331](https://github.com/lifeupnorth/YouTubeDown
 
 ## 7. Canceling
 
-Each row that isn't finished has a Cancel icon (`_cancel_row`). It sets the row's `cancel_event`, which is also its job's cancel event. A row that's still waiting is just marked Canceled; `_run_next` skips it, and its lookup stops. For the running row, it also calls `row.job.stop_processes()`, which stops the job's ffmpeg, and the row shows "Canceling…" until the job ends. A job checks the event in `_check_canceled` and raises yt-dlp's `DownloadCancelled`, which stops yt-dlp even with `ignoreerrors` set. It checks at every progress update, before each video starts, and at each of yt-dlp's status messages (the `check` that `_YdlLogger.debug` and `info` run), so a download stops almost at once, a playlist stops between two videos, and reading a big channel's pages stops at the next page. Canceling one row doesn't affect the others: the next waiting row starts as usual.
+Each row that isn't finished has a Cancel icon (`_cancel_row`). It sets the row's `cancel_event`, which is also its job's cancel event. A row that's still waiting is just marked Canceled; `_run_next` skips it, and its lookup stops. For the running row, it also calls `row.job.stop_processes()`, which stops the job's ffmpeg, and the row shows "Canceling…" until the job ends. A job checks the event in `_check_stop` (which also stops it for a pause) and raises yt-dlp's `DownloadCancelled`, which stops yt-dlp even with `ignoreerrors` set. It checks at every progress update, before each video starts, and at each of yt-dlp's status messages (the `check` that `_YdlLogger.debug` and `info` run), so a download stops almost at once, a playlist stops between two videos, and reading a big channel's pages stops at the next page. Canceling one row doesn't affect the others: the next waiting row starts as usual.
 
 A running ffmpeg conversion or merge is stopped too. `run` calls `_track_processes`, which swaps the `Popen` that yt-dlp's ffmpeg post-processors and external downloaders use for `_tracked_popen_class`. Each process it starts reports itself to the job running on that thread (`_current.job`, via `_process_started`), together with the file it is about to create: `_new_ffmpeg_output` takes the last argument, `file:<path>`, but only for ffmpeg writing a file that isn't on disk yet (not ffprobe, not a run that only reads a file). `stop_processes` notes those files and kills the processes; one that starts just after a cancel is stopped at once. yt-dlp treats the killed ffmpeg as a failed post-processing step and only logs it, so `run` checks for a cancel after a normal return as well, and the job still ends as "canceled".
 
-yt-dlp leaves the unfinished video's `.part` file behind, plus any of its streams that finished but weren't merged. The progress hook records the files this run writes for the current video, and after a cancel `_remove_partial_files` deletes them, the files the stopped ffmpeg was creating, and their `.ytdl` and `-Frag*` files. Files that were already on disk never get a "downloading" event and are never an ffmpeg's new output, so they're never removed, and `_file_done` clears the list once a video is complete, so finished videos are kept.
+yt-dlp leaves the unfinished video's `.part` file behind, plus any of its streams that finished but weren't merged. The progress hook records the files this run writes for the current video, and after a cancel `_remove_partial_files` deletes them, the files the stopped ffmpeg was creating, the files a paused run kept (see below), and their `.ytdl` and `-Frag*` files (`remove_partial_files`). Files that were already on disk never get a "downloading" event and are never an ffmpeg's new output, so they're never removed, and `_file_done` clears the list once a video is complete, so finished videos are kept.
+
+### Pausing and resuming
+
+Pause (`_pause_row`, the icon or Space) sets the row's `pause_event`, which is also its job's pause event (`DownloadJob.pause`), and stops the job's ffmpeg; the row shows "Pausing…" until the job ends. A waiting row is just marked Paused, and `_run_next` passes it by. The job stops exactly as for a cancel (`_check_stop`), but then `_keep_partial_files` removes only the output of an ffmpeg it stopped and keeps the rest: the `.part` file, fragments and `.ytdl` file, and streams that finished but weren't merged. A stopped ffmpeg's output is never continued, and an MP3 or M4A conversion writes to the final file name, which a resumed download would take for a finished file (`final_ext`). The job's outcome is `"paused"`, its summary "Download paused." (with "(2 saved)" in a playlist), and `job.partial_files` lists what it kept, which the row keeps as `partial_files`. The row shows Paused (amber) with its bar where it stopped.
+
+Resume (`_resume_row`) gives the row a new `pause_event`, puts it back to waiting and calls `_run_next`. The new job gets the row's `partial_files`, and yt-dlp does the resuming: with `continuedl` (its default) it continues a `.part` file from its size, a stream file that's already there counts as downloaded (its progress hook gets `finished` at once, so the bar picks up where it was), and in a playlist the videos already saved are skipped as already downloaded. A stopped merge or conversion runs again. A stream that finished before the pause gets no `downloading` event now, so the job only knows it's this video's from the earlier list (`_earlier_files`): a cancel after a resume removes those files too. Once a video is really downloaded (`__real_download`), the earlier list is dropped, since the paused video is the first one a resumed run downloads and its final file may be one of them. Cancel on a paused row (nothing is running) removes its `partial_files` right away on the main thread and logs "✘ Download canceled (2 partial files removed)."
+
+A playlist question cut short by Pause or Cancel isn't a No: the job ends paused or canceled, and the question comes again on Resume.
 
 Link lookups stop the same way: `preview_link` gives its `_YdlLogger` a `check` that raises `DownloadCancelled` once the row's cancel event is set (its Cancel was clicked, or the window is closing), and it stops the thumbnail download between chunks.
 
@@ -136,7 +144,7 @@ Sources: [download_engine.py:356-403](https://github.com/lifeupnorth/YouTubeDown
 
 ## 8. Finishing: the summary
 
-Each job ends with an outcome (`done`, `failed`, `declined` or `canceled`), counts and a `summary()`. A job where nothing was saved but entries failed (e.g. a single private video) counts as `failed`, with the reason already in the log. Before it runs, or if it crashed, the outcome is `None`.
+Each job ends with an outcome (`done`, `failed`, `declined`, `canceled` or `paused`), counts and a `summary()`. A job where nothing was saved but entries failed (e.g. a single private video) counts as `failed`, with the reason already in the log. Before it runs, or if it crashed, the outcome is `None`.
 
 | Situation | Summary |
 |---|---|
@@ -146,6 +154,7 @@ Each job ends with an outcome (`done`, `failed`, `declined` or `canceled`), coun
 | Failed | `Error: <reason>` |
 | Playlist declined | `Playlist not downloaded.` |
 | Canceled | `Download canceled (1 saved, 2 partial files removed).` |
+| Paused | `Download paused (1 saved).` |
 
 `_download_finished` turns the job's result into the row's state, and remembers `job.last_file` in the row, which shows the Show in folder icon:
 
@@ -156,26 +165,28 @@ Each job ends with an outcome (`done`, `failed`, `declined` or `canceled`), coun
 | `failed` | Failed, with `job.error` under the progress bar | `✘ <summary>`, unless the reason is already there (`error_logged`) |
 | `declined` | Not downloaded | `✘ Playlist not downloaded.` |
 | `canceled` | Canceled | `✘ Download canceled (…)` |
-| `None` (`_run_row` crashed) | Failed, with "An unexpected error (see the log)", or Canceled if the row was canceled | The error, from `_worker_crashed` |
+| `paused` | Paused, with the bar where it stopped and its kept files in `partial_files` | `• Download paused.` |
+| `None` (`_run_row` crashed, or never ran) | Failed, with "An unexpected error (see the log)", or Canceled or Paused if the row was | The error, from `_worker_crashed` |
 
-When no row is left waiting, `_queue_finished` sums up the finished rows still in the list, except those restored from an earlier run, in the status line (`queue_summary`), and flashes the taskbar button (`QApplication.alert`) if the window isn't in front. There's no dialog for success or failure. The summary counts each outcome, in the order completed, failed, canceled, not downloaded, empty, leaving out those with none:
+When no row is left waiting, `_queue_finished` sums up the finished rows still in the list, and the paused ones, except those restored from an earlier run, in the status line (`queue_summary`), and flashes the taskbar button (`QApplication.alert`) if the window isn't in front. There's no dialog for success or failure. The summary counts each outcome, in the order completed, failed, canceled, not downloaded, empty, paused, leaving out those with none:
 
 | Finished rows | Status line |
 |---|---|
 | All Completed | `✔ All downloads complete.` (green) |
-| Some Completed, none Failed | e.g. `✔ Done: 2 completed, 1 canceled, 1 not downloaded.` (green) |
+| Some Completed, none Failed | e.g. `✔ Done: 2 completed, 1 canceled, 1 not downloaded.` or `✔ Done: 2 completed, 1 paused.` (green) |
 | Some Completed, some Failed | e.g. `✔ Done: 2 completed, 1 failed.` (orange) |
 | Some Failed, none Completed | e.g. `✘ Nothing downloaded: 1 failed, 1 canceled.` (red) |
-| Only Canceled, Not downloaded or Nothing found | e.g. `Nothing downloaded: 1 canceled.` (gray) |
+| Only Canceled, Not downloaded, Nothing found or Paused | e.g. `Nothing downloaded: 1 canceled.` (gray) |
 
 Sources: [download_engine.py:619-633](https://github.com/lifeupnorth/YouTubeDownloader/blob/b369bd269cac691e2563e27391dbd3702c986e50/download_engine.py#L619-L633), [download_engine.py:740-759](https://github.com/lifeupnorth/YouTubeDownloader/blob/b369bd269cac691e2563e27391dbd3702c986e50/download_engine.py#L740-L759), [download_engine.py:811-897](https://github.com/lifeupnorth/YouTubeDownloader/blob/b369bd269cac691e2563e27391dbd3702c986e50/download_engine.py#L811-L897), [youtube_downloader.py:705-713](https://github.com/lifeupnorth/YouTubeDownloader/blob/b369bd269cac691e2563e27391dbd3702c986e50/youtube_downloader.py#L705-L713), [youtube_downloader.py:752-786](https://github.com/lifeupnorth/YouTubeDownloader/blob/b369bd269cac691e2563e27391dbd3702c986e50/youtube_downloader.py#L752-L786)
 
 ## Limitations
 
 - Only one download runs at a time (`_running`); up to three lookups run alongside it.
-- Closing the window during a download asks first; Yes cancels it, the waiting rows and the lookups, and the window closes once the download has stopped and its partial files are removed. Closing again while it stops, or a crash, leaves the partial file.
+- Closing the window during a download asks first; Yes pauses it and the waiting rows and cancels the lookups, and the window closes once the download has stopped; the next run lists them as Paused. Closing again while it stops, or a crash, leaves its partial files without the list of them (the row comes back Paused all the same, and Resume continues them, but Cancel can't remove them). If that happens during an MP3 or M4A conversion, the half-converted file stays, and a resumed download takes it for a finished one.
+- A download resumed after a restart is looked up again, and YouTube may offer it in other formats; if yt-dlp then picks another format, it downloads it from the start and the earlier partial file stays.
 - An ffmpeg that is a `.bat`/`.cmd` wrapper runs under `cmd.exe /C`, so Cancel stops only `cmd.exe`.
 - A row's output folder is what **Save to** said when the link was added (default `~/Downloads`); yt-dlp creates missing folders.
-- The Downloads list is saved, up to 200 rows (see [User Interface](06-user-interface.md#kept-between-runs)). A row that was waiting or downloading when the app closed comes back Canceled; it doesn't start again by itself.
+- The Downloads list is saved, up to 200 rows (see [User Interface](06-user-interface.md#kept-between-runs)). A row that was waiting or downloading when the app closed comes back Paused; it doesn't start again by itself.
 
 Sources: [youtube_downloader.py:183](https://github.com/lifeupnorth/YouTubeDownloader/blob/b369bd269cac691e2563e27391dbd3702c986e50/youtube_downloader.py#L183), [youtube_downloader.py:616-643](https://github.com/lifeupnorth/YouTubeDownloader/blob/b369bd269cac691e2563e27391dbd3702c986e50/youtube_downloader.py#L616-L643), [download_engine.py:554-560](https://github.com/lifeupnorth/YouTubeDownloader/blob/b369bd269cac691e2563e27391dbd3702c986e50/download_engine.py#L554-L560)

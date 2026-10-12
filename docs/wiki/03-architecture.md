@@ -40,13 +40,13 @@ flowchart LR
 | | JavaScript runtime | 279–313 | `JS_RUNTIMES`, `js_solver_version`, `find_js_runtime` |
 | | yt-dlp plumbing | 316–432 | `_YdlLogger`, `_callback_pp_class`, `_current` and `_tracked_popen_class` (tracking ffmpeg runs), `_follow_url_results` |
 | | Link preview | 435–552 | `THUMB_SIZE`, `describe_info`, `thumbnail_url`, `fetch_thumbnail`, `encode_thumbnail` and `decode_thumbnail` (for the saved list), `preview_link` |
-| | Downloading | 555–836 | `DownloadJob`, which downloads one link |
+| | Downloading | 555–890 | `remove_partial_files`, `canceled_summary`, `DownloadJob`, which downloads one link and can be canceled or paused |
 | `youtube_downloader.py` | Themes, settings, helpers | 81–328 | `THEMES`, `FORMATS` and `QUALITIES`, `settings_path`/`load_settings`/`save_settings`, `history_path`/`load_history`/`save_history`, `split_links`, `dropped`, `reveal_in_file_manager`, the help texts for ffmpeg and the JavaScript runtime, `application()` |
-| | The Downloads list | 331–787 | `STATES`, `ROW_ACTIONS` and `row_actions`, `bar_percent`, `Row`, `row_entry` and `restored_row` (the saved list), `queue_summary`, `DownloadsModel`, `RowDelegate`, `DownloadsView` |
-| | Drawing | 790–987 | The icons, the logo, `to_qimage`, `write_svgs`, `translucent`, `style_sheet` |
-| | `YouTubeDownloader` | 990–1907 | The window, its state, the worker plumbing, and the lookup, download, drag-and-drop, cancel, saved list, update and install handlers |
-| | Command-line check | 1910–1951 | `self_check` (`--self-check`), see [Getting Started](02-getting-started.md) |
-| | Entry point | 1954–1983 | `main()`: runs the check, or creates the window and runs Qt's event loop (`app.exec()`) |
+| | The Downloads list | 331–814 | `STATES`, `ROW_ACTIONS` and `row_actions`, `bar_percent`, `Row`, `row_entry` and `restored_row` (the saved list), `queue_summary`, `DownloadsModel`, `RowDelegate`, `DownloadsView` |
+| | Drawing | 817–1024 | The icons, the logo, `to_qimage`, `write_svgs`, `translucent`, `style_sheet` |
+| | `YouTubeDownloader` | 1027–1996 | The window, its state, the worker plumbing, and the lookup, download, drag-and-drop, cancel, pause and resume, saved list, update and install handlers |
+| | Command-line check | 1999–2040 | `self_check` (`--self-check`), see [Getting Started](02-getting-started.md) |
+| | Entry point | 2043–2072 | `main()`: runs the check, or creates the window and runs Qt's event loop (`app.exec()`) |
 
 The engine reports through plain callbacks and keeps its own results (outcome, counts, error, last file, summary), so the window only has to turn callbacks into main-thread calls and show the result in the row. The window reads its widgets (format, quality, folder, the playlist switch) on the main thread when a link is added, keeps the values in the link's `Row`, and passes them to the engine.
 
@@ -64,9 +64,9 @@ Every worker runs inside `_run_worker`. If the target raises, it posts `_worker_
 Workers reach the main thread in two ways:
 
 1. **Discrete events** go through `_post(func, *args)`, which emits the window's `_call_on_main` signal. The signal is connected with `Qt.QueuedConnection`, so Qt adds the call to the main thread's event queue and runs `_call(func, args)` there, in the order they were posted. `_call` catches any exception and hands it to `report_error`, which logs "✘ Unexpected error: …" (and prints the traceback when there is a console), so one failing call doesn't stop the others. Log lines, a lookup's result, "download finished" and a yes/no question all go this way.
-2. **Progress** is coalesced: the engine's `on_progress` callback only sets the row's `latest` to `(pct, message)`. Only the newest value matters, so nothing is posted per progress event. While a download runs, a `QTimer` (`_progress_timer`, every 100 ms) runs `_show_progress` on the main thread, which takes `latest` (and sets it back to `None`), updates the row's percentage, state (`processing` when the message says "Processing…") and message, and tells the model the row changed. After a Cancel it leaves the row alone, so "Canceling…" stays. `_run_next` starts the timer and `_download_finished` stops it and clears `_running` before setting the row's final state, so a late progress value can't overwrite that state.
+2. **Progress** is coalesced: the engine's `on_progress` callback only sets the row's `latest` to `(pct, message)`. Only the newest value matters, so nothing is posted per progress event. While a download runs, a `QTimer` (`_progress_timer`, every 100 ms) runs `_show_progress` on the main thread, which takes `latest` (and sets it back to `None`), updates the row's percentage, state (`processing` when the message says "Processing…") and message, and tells the model the row changed. After a Cancel or Pause it leaves the row alone, so "Canceling…" or "Pausing…" stays. `_run_next` starts the timer and `_download_finished` stops it and clears `_running` before setting the row's final state, so a late progress value can't overwrite that state.
 
-`_run_row` has its own `try`/`finally`. If no JavaScript runtime was found at startup it looks again (one may have been installed since), creates the row's `DownloadJob`, stores it in `row.job`, and runs it unless the row was already canceled. It always posts `_download_finished(row, job)`, so the queue can't get stuck. If it crashed, the error goes to the log first and `job` is `None`, which `_download_finished` shows as a Failed row with "An unexpected error (see the log)", or a Canceled one if the row was canceled.
+`_run_row` has its own `try`/`finally`. If no JavaScript runtime was found at startup it looks again (one may have been installed since), creates the row's `DownloadJob` (with the row's cancel and pause events, and the partial files an earlier pause kept), stores it in `row.job`, and runs it unless the row was already canceled or paused. It always posts `_download_finished(row, job)`, so the queue can't get stuck. If it crashed, the error goes to the log first and `job` is `None`, which `_download_finished` shows as a Failed row with "An unexpected error (see the log)", or a Canceled one if the row was canceled.
 
 Errors raised in Qt's own callbacks on the main thread (a button's slot, for example) go to `sys.excepthook`. `main()` sets it to the window's `report_error`, so in the windowed .exe, which has no console, they reach the log too.
 
@@ -98,7 +98,7 @@ Sources: [youtube_downloader.py:547-563](https://github.com/lifeupnorth/YouTubeD
 
 ## Asking the user from a worker
 
-A download sometimes needs an answer before it can continue: whether to download a whole playlist (see [Download Pipeline](04-download-pipeline.md)). The engine calls its `ask` callback, which the window wires to `_ask_on_main(row, "Playlist", question)`. That posts a small `ask()` closure that shows `QMessageBox.question` on the main thread, stores the answer and sets a `threading.Event`. If the row was canceled before the question could show, the answer is No without asking. The worker waits on the event in 0.1 s steps and gives up with `False` if the window starts closing or the row is canceled, so it can't hang on a dialog that will never be answered. If the dialog itself fails, `ask()` logs "✘ Couldn't ask about the playlist: …" and re-raises, so `_call` reports the error as well; the answer counts as No, and a `finally` still sets the event.
+A download sometimes needs an answer before it can continue: whether to download a whole playlist (see [Download Pipeline](04-download-pipeline.md)). The engine calls its `ask` callback, which the window wires to `_ask_on_main(row, "Playlist", question)`. That posts a small `ask()` closure that shows `QMessageBox.question` on the main thread, stores the answer and sets a `threading.Event`. If the row was canceled or paused before the question could show, the answer is No without asking. The worker waits on the event in 0.1 s steps and gives up with `False` if the window starts closing or the row is canceled or paused (the job then ends canceled or paused, not declined), so it can't hang on a dialog that will never be answered. If the dialog itself fails, `ask()` logs "✘ Couldn't ask about the playlist: …" and re-raises, so `_call` reports the error as well; the answer counts as No, and a `finally` still sets the event.
 
 Sources: [youtube_downloader.py:700-701](https://github.com/lifeupnorth/YouTubeDownloader/blob/b369bd269cac691e2563e27391dbd3702c986e50/youtube_downloader.py#L700-L701), [youtube_downloader.py:715-735](https://github.com/lifeupnorth/YouTubeDownloader/blob/b369bd269cac691e2563e27391dbd3702c986e50/youtube_downloader.py#L715-L735)
 
@@ -115,7 +115,7 @@ Sources: [youtube_downloader.py:700-701](https://github.com/lifeupnorth/YouTubeD
 - If the saved folder isn't available (an unplugged drive?), it says so in the log and saves to `~/Downloads` for now.
 - `_maybe_check_for_update` starts `_update_thread` only in a release .exe, while "Check for updates at startup" is on, and at most once a day (`last_update_check` in the settings, saved by `_update_checked` only when the check reached GitHub); `_update_checked` logs a notice if a newer release is out. `self_check` creates the window with `update_check=False`.
 
-Closing goes through `closeEvent`. If a download is running, it first asks "Cancel it and close the app?". On No, `event.ignore()` keeps the window open. On Yes it checks `_running` again, since the download may have finished while the question was open; if it did, the window just closes. Otherwise it sets `_close_when_stopped`, cancels every row (the running one stops, waiting ones are marked Canceled), says "Canceling… the app closes when it has stopped." and ignores the event; `_run_next` starts nothing more, and `_download_finished` calls `close()` again once the partial files are removed. Clicking close a second time while that runs (e.g. stuck on a slow network request) closes right away. When the window does close, `closeEvent` sets `_closing`, sets every row's cancel event (which stops the lookups and makes `_ask_on_main` return), stops the progress timer and saves the settings and the Downloads list. `app.exec()` returns when the last window has closed. Worker threads are daemons, so anything still running then (a pip install, or a download after a forced second close) ends with the process.
+Closing goes through `closeEvent`. If a download is running, it first asks "Pause it and close the app? You can resume it the next time.". On No, `event.ignore()` keeps the window open. On Yes it checks `_running` again, since the download may have finished while the question was open; if it did, the window just closes. Otherwise it sets `_close_when_stopped`, pauses every row (the running one stops and keeps its partial files, waiting ones are marked Paused), says "Pausing… the app closes when it has stopped." and ignores the event; `_run_next` starts nothing more, and `_download_finished` calls `close()` again once the download has stopped. Clicking close a second time while that runs (e.g. stuck on a slow network request) closes right away. When the window does close, `closeEvent` sets `_closing`, sets every row's cancel event, which stops the lookups and makes `_ask_on_main` return (for a download still running after a second close, its pause event instead, so its partial files aren't removed on the way out), stops the progress timer and saves the settings and the Downloads list. `app.exec()` returns when the last window has closed. Worker threads are daemons, so anything still running then (a pip install, or a download after a forced second close) ends with the process.
 
 ```mermaid
 stateDiagram-v2
@@ -123,7 +123,7 @@ stateDiagram-v2
     Idle --> Downloading: _start_download adds rows, _run_next
     Downloading --> Downloading: _download_finished, _run_next starts the next row
     Downloading --> Idle: _download_finished, nothing left (_queue_finished)
-    Downloading --> Closing: close and answer Yes
+    Downloading --> Closing: close and answer Yes (pauses)
     Closing --> Closed: _download_finished calls close()
     Idle --> Installing: _prompt_install answered Yes
     Installing --> Idle: _install_done
@@ -147,6 +147,7 @@ Sources: [download_engine.py:59-89](https://github.com/lifeupnorth/YouTubeDownlo
 | `Row.latest` | download thread (`on_progress`), main (`_show_progress`) | main | Coalesced progress |
 | `Row.job` | download thread (`_run_row`) | main (`_cancel_row`) | The row's running `DownloadJob`, so Cancel can stop its ffmpeg |
 | `Row.cancel_event` | main (`_cancel_row`, `closeEvent`) | lookup and download threads, the engine | Stops the row's lookup, download and playlist question |
+| `Row.pause_event` | main (`_pause_row`, `closeEvent`; `_resume_row` replaces it) | download thread, the engine | Stops the row's download and playlist question, keeping its partial files |
 | Other `Row` fields | main | main | Title, state, progress, message and file shown in the list |
 | `_running` | main (`_run_next`, `_download_finished`) | main | The row downloading now; only one at a time |
 | `_active_workers` | main | main, tests | How many workers are running |
@@ -155,7 +156,7 @@ Sources: [download_engine.py:59-89](https://github.com/lifeupnorth/YouTubeDownlo
 | `_closing`, `_close_when_stopped` | main (`closeEvent`) | main, workers | Shutdown |
 | `_installing` | main (`_install_ytdlp`, `_install_done`) | main | An in-app install is running; Download then asks the user to wait instead of offering the install again |
 | `_js_runtime` | main (`_js_runtime_found`) | main | The `(name, path)` found by the startup lookup, passed to lookups and downloads |
-| `DownloadJob._processes`, `_killed_outputs` | worker (`_process_started`), main (`stop_processes` on Cancel) | main, worker (`_remove_partial_files`) | ffmpeg runs of the job and the new files they were creating; both guarded by `DownloadJob._lock` |
+| `DownloadJob._processes`, `_killed_outputs` | worker (`_process_started`), main (`stop_processes` on Cancel or Pause) | main, worker (`_remove_partial_files`) | ffmpeg runs of the job and the new files they were creating; both guarded by `DownloadJob._lock` |
 | `_current` (engine, `threading.local`) | worker | worker | Which job the thread's ffmpeg runs belong to |
 
 Sources: [youtube_downloader.py:182-206](https://github.com/lifeupnorth/YouTubeDownloader/blob/b369bd269cac691e2563e27391dbd3702c986e50/youtube_downloader.py#L182-L206), [youtube_downloader.py:219-221](https://github.com/lifeupnorth/YouTubeDownloader/blob/b369bd269cac691e2563e27391dbd3702c986e50/youtube_downloader.py#L219-L221), [download_engine.py:356-373](https://github.com/lifeupnorth/YouTubeDownloader/blob/b369bd269cac691e2563e27391dbd3702c986e50/download_engine.py#L356-L373), [download_engine.py:536-566](https://github.com/lifeupnorth/YouTubeDownloader/blob/b369bd269cac691e2563e27391dbd3702c986e50/download_engine.py#L536-L566)
