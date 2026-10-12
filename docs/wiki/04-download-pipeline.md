@@ -25,9 +25,9 @@ sequenceDiagram
     loop each link
         Q->>J: DownloadJob(url, ...).run()
         J->>Y: YoutubeDL(options), add before_dl and after_move hooks
-        alt Whole playlist ticked
+        alt Whole playlist on
             J->>Y: download([url])
-        else unticked
+        else off
             J->>Y: extract_info(process=False), follow url results
             J->>M: ask(...) if it is a playlist
             J->>Y: process_ie_result(info, download=True)
@@ -66,7 +66,7 @@ Sources: [download_engine.py:762-809](https://github.com/lifeupnorth/YouTubeDown
 |---|---|---|
 | `outtmpl` | `<folder>/%(playlist_title\|)s/%(playlist_index&{:03d} - \|)s%(title)s.%(ext)s` | Playlist entries go to a folder named after the playlist, with a 3-digit index that keeps same-title videos apart. For a single video both fields are empty and the path collapses to `<folder>/<title>.<ext>`. A `%` in the folder's name is doubled, so yt-dlp doesn't read it as a field. |
 | `progress_hooks` | `[_progress_hook]` | Progress reporting |
-| `noplaylist` | `not whole_playlist` | Only affects `watch?v=…&list=…` links: unticked means just that video |
+| `noplaylist` | `not whole_playlist` | Only affects `watch?v=…&list=…` links: off means just that video |
 | `quiet`, `no_warnings` | `True`, `False` | Nothing goes to the console; warnings still reach the logger |
 | `ignoreerrors` | `"only_download"` | Like the yt-dlp CLI: skip unavailable playlist entries instead of stopping |
 | `logger` | `_YdlLogger(_entry_failed, _entry_warning, _check_canceled)` | Errors are logged with ✘ and counted as skipped; warnings are logged with ⚠ (except the missing-JavaScript-runtime warning, which the window shows once at startup). Debug and info messages aren't logged, but each one runs the cancel check (section 7). |
@@ -155,6 +155,6 @@ Sources: [download_engine.py:619-633](https://github.com/lifeupnorth/YouTubeDown
 - Only one download (queue) runs at a time (`is_running`).
 - Closing the window during a download asks first; Yes cancels it (and any preview lookup), and the window closes once the download has stopped and its partial files are removed. Closing again while it stops, or a crash, leaves the partial file.
 - An ffmpeg that is a `.bat`/`.cmd` wrapper runs under `cmd.exe /C`, so Cancel stops only `cmd.exe`.
-- The output folder comes from **Save To** and defaults to `~/Downloads`; yt-dlp creates missing folders.
+- The output folder comes from **Save to** and defaults to `~/Downloads`; yt-dlp creates missing folders.
 
 Sources: [youtube_downloader.py:183](https://github.com/lifeupnorth/YouTubeDownloader/blob/b369bd269cac691e2563e27391dbd3702c986e50/youtube_downloader.py#L183), [youtube_downloader.py:616-643](https://github.com/lifeupnorth/YouTubeDownloader/blob/b369bd269cac691e2563e27391dbd3702c986e50/youtube_downloader.py#L616-L643), [download_engine.py:554-560](https://github.com/lifeupnorth/YouTubeDownloader/blob/b369bd269cac691e2563e27391dbd3702c986e50/download_engine.py#L554-L560)

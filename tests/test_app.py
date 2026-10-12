@@ -248,9 +248,11 @@ class UpdateCheckTest(unittest.TestCase):
         app.download_path.get.return_value = "C:/x"
         app.format_var.get.return_value = "mp3"
         app.update_check_var.get.return_value = False
+        app.theme_var.get.return_value = "light"
         ytd.YouTubeDownloader._save_settings(app)
         self.assertEqual(ytd.load_settings(), {"last_update_check": 5, "folder": "C:/x",
-                                               "format": "mp3", "check_updates": False})
+                                               "format": "mp3", "check_updates": False,
+                                               "theme": "light"})
 
 
 class SplitLinksTest(unittest.TestCase):
@@ -290,6 +292,147 @@ class DpiAwarenessTest(unittest.TestCase):
                 mock.patch.object(ytd, "ctypes") as ctypes:
             ytd.enable_dpi_awareness()
         self.assertEqual(ctypes.mock_calls, [])
+
+
+class SystemThemeTest(unittest.TestCase):
+    def windows(self, light=None, error=None):
+        key = mock.MagicMock()
+        winreg = mock.Mock(HKEY_CURRENT_USER="HKCU",
+                           OpenKey=mock.Mock(return_value=key, side_effect=error),
+                           QueryValueEx=mock.Mock(return_value=(light, 4)))
+        with mock.patch.object(ytd.sys, "platform", "win32"), \
+                mock.patch.dict(sys.modules, {"winreg": winreg}):
+            return ytd.system_theme(None)
+
+    def test_windows_setting(self):
+        self.assertEqual(self.windows(light=1), "light")
+        self.assertEqual(self.windows(light=0), "dark")
+        self.assertIsNone(self.windows(error=OSError("no such key")))   # Windows 7
+
+    def linux(self, stdout=None, error=None):
+        done = mock.Mock(stdout=stdout)
+        with mock.patch.object(ytd.sys, "platform", "linux"), \
+                mock.patch.object(ytd.subprocess, "run", return_value=done,
+                                  side_effect=error):
+            return ytd.system_theme(None)
+
+    def test_gnome_setting(self):
+        self.assertEqual(self.linux("'prefer-dark'\n"), "dark")
+        self.assertEqual(self.linux("'prefer-light'\n"), "light")
+        self.assertEqual(self.linux("'default'\n"), "light")
+        self.assertIsNone(self.linux(""))
+        self.assertIsNone(self.linux(error=FileNotFoundError("no gsettings")))
+
+    def test_title_bar_matches_on_windows(self):
+        window = mock.Mock()
+        with mock.patch.object(ytd.sys, "platform", "win32"), \
+                mock.patch.object(ytd, "ctypes") as ctypes:
+            ytd.set_title_bar_theme(window, dark=True)
+        dwm = ctypes.windll.dwmapi.DwmSetWindowAttribute
+        self.assertEqual(dwm.call_args.args[1], 20)   # DWMWA_USE_IMMERSIVE_DARK_MODE
+        ctypes.c_int.assert_called_once_with(1)
+        with mock.patch.object(ytd.sys, "platform", "linux"), \
+                mock.patch.object(ytd, "ctypes") as ctypes:
+            ytd.set_title_bar_theme(window, dark=True)
+        self.assertEqual(ctypes.mock_calls, [])
+
+
+class ThemeTest(unittest.TestCase):
+    def make_app(self, saved=None, system="dark"):
+        gc.collect()
+        settings_dir = tempfile.TemporaryDirectory()
+        self.addCleanup(settings_dir.cleanup)
+        for patcher in (
+                mock.patch.object(engine, "YT_DLP_AVAILABLE", True),
+                mock.patch.object(engine, "find_ffmpeg", return_value="/bin/ffmpeg"),
+                mock.patch.object(engine, "find_js_runtime", return_value=None),
+                mock.patch.object(ytd, "settings_path", return_value=os.path.join(
+                    settings_dir.name, "settings.json")),
+                mock.patch.object(engine, "yt_dlp", None)):
+            patcher.start()
+            self.addCleanup(patcher.stop)
+        self.system = mock.patch.object(ytd, "system_theme", return_value=system).start()
+        self.addCleanup(mock.patch.stopall)
+        if saved is not None:
+            ytd.save_settings(saved)
+        try:
+            app = ytd.YouTubeDownloader(update_check=False)
+        except tkinter.TclError as exc:
+            self.skipTest(f"no display: {exc}")
+        self.addCleanup(gc.collect)
+        self.addCleanup(app.destroy)
+        return app
+
+    def test_follows_the_system_by_default(self):
+        app = self.make_app(system="light")
+        self.assertEqual(app.theme_var.get(), "system")
+        self.assertIs(app.colors, ytd.THEMES["light"])
+        self.assertEqual(app.cget("bg"), ytd.THEMES["light"]["bg"])
+        self.assertTrue(app.theme_chips["system"].selected)
+        # The system switches to dark while the app is open.
+        self.system.return_value = "dark"
+        app._watch_system_theme()
+        self.assertIs(app.colors, ytd.THEMES["dark"])
+        # A system that doesn't say gets the dark theme.
+        self.system.return_value = None
+        app._apply_theme()
+        self.assertIs(app.colors, ytd.THEMES["dark"])
+
+    def test_choosing_a_theme_repaints_and_is_saved(self):
+        app = self.make_app(system="dark")
+        app._set_status("Downloading…", ytd.WARNING)
+        app.theme_chips["light"].invoke()
+        light = ytd.THEMES["light"]
+        self.assertEqual(ytd.load_settings()["theme"], "light")
+        self.assertEqual(app.cget("bg"), light["bg"])
+        self.assertEqual(app.log_box.cget("bg"), light["surface"])
+        self.assertEqual(app.status_lbl.cget("fg"), light["warning"])   # same role
+        self.assertEqual(app.url_entry.cget("fg"), light["text_dim"])  # the placeholder
+        self.assertTrue(app.theme_chips["light"].selected)
+        self.assertFalse(app.theme_chips["system"].selected)
+        # A chosen theme stays when the system's changes.
+        self.system.return_value = "light"
+        app.theme_chips["dark"].invoke()
+        app._watch_system_theme()
+        self.assertIs(app.colors, ytd.THEMES["dark"])
+        self.assertEqual(app.status_lbl.cget("fg"), ytd.THEMES["dark"]["warning"])
+
+    def test_saved_theme_is_used_at_startup(self):
+        app = self.make_app(saved={"theme": "light"}, system="dark")
+        self.assertIs(app.colors, ytd.THEMES["light"])
+        app = self.make_app(saved={"theme": "purple"}, system="dark")
+        self.assertEqual(app.theme_var.get(), "system")   # not a theme: ignored
+
+    def test_format_chips(self):
+        app = self.make_app()
+        self.assertTrue(app.format_chips["mp4_best"].selected)
+        app.format_chips["mp3"].invoke()
+        self.assertEqual(app.format_var.get(), "mp3")
+        self.assertTrue(app.format_chips["mp3"].selected)
+        self.assertFalse(app.format_chips["mp4_best"].selected)
+
+    def test_pill_and_toggle_act_like_buttons(self):
+        app = self.make_app()
+        pressed = mock.Mock()
+        app.dl_btn.config(command=pressed)
+        app.dl_btn.config(state="disabled", text="Canceling…")
+        self.assertEqual(app.dl_btn.cget("text"), "Canceling…")
+        app.dl_btn.invoke()
+        pressed.assert_not_called()
+        app.dl_btn.config(state="normal")
+        app.update()   # mapped: events reach only a widget that is on screen
+        # A click counts only if the mouse is still over it when released.
+        app.dl_btn.event_generate("<ButtonRelease-1>", x=-5, y=5)
+        pressed.assert_not_called()
+        app.dl_btn.event_generate("<ButtonRelease-1>", x=5, y=5)
+        pressed.assert_called_once_with()
+
+        toggle = next(w for w in app._pills if isinstance(w, ytd.Toggle))
+        self.assertIs(toggle.variable, app.playlist_var)
+        self.assertIsNone(app._preview_after)
+        toggle.invoke()
+        self.assertTrue(app.playlist_var.get())
+        self.assertIsNotNone(app._preview_after, "the preview isn't looked up again")
 
 
 if __name__ == "__main__":

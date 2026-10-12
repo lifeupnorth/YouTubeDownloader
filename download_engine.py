@@ -430,7 +430,7 @@ def _follow_url_results(ydl, info):
 
 # ── Link preview ─────────────────────────────────────────────────────────────
 
-THUMB_SIZE = (96, 54)
+THUMB_SIZE = (160, 90)
 
 
 def describe_info(info):
