@@ -99,9 +99,12 @@ SignPath project and policy aren't named `YouTubeDownloader` and
 1. Paste a link into **YouTube URLs**, or click **Paste**. For several videos,
    put several links in the box, separated by spaces. **Paste** adds to the
    links already there and keeps only the links from copied text; `https://`
-   can be left out (`youtu.be/...` works).
+   can be left out (`youtu.be/...` works). You can also drag links onto the
+   window, e.g. from your browser's address bar: they download right away,
+   with the Format and Quality chosen. Drag a folder onto it to save there.
 2. Pick a **Format**: MP4 video, or MP3 or M4A (audio only). For video, pick a
-   **Quality**: Best quality, 1080p, 720p or 480p.
+   **Quality**: Best quality, 2160p (4K), 1440p, 1080p, 720p or 480p. If a
+   video doesn't have that quality, you get the closest one below it.
 3. Choose where to save under **Save to** (default: your Downloads folder). If
    the last folder used isn't there (e.g. on an unplugged drive), the app saves
    to Downloads for now but remembers it.

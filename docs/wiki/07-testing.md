@@ -16,7 +16,7 @@
 
 </details>
 
-The tests use the standard library `unittest`, and nothing touches the internet: most downloads run against a fake yt-dlp, and `test_real_yt_dlp.py` runs the real one against a local server. There are 179 tests in seven files. The window's tests open real Qt windows, but on Qt's "offscreen" platform: `test_window.py` and `test_app.py` set `QT_QPA_PLATFORM=offscreen` before importing Qt (unless it's already set), so no display is needed and nothing shows up on screen. GitHub Actions runs them on every push to `main` and every pull request, together with a ruff lint check.
+The tests use the standard library `unittest`, and nothing touches the internet: most downloads run against a fake yt-dlp, and `test_real_yt_dlp.py` runs the real one against a local server. There are 187 tests in seven files. The window's tests open real Qt windows, but on Qt's "offscreen" platform: `test_window.py` and `test_app.py` set `QT_QPA_PLATFORM=offscreen` before importing Qt (unless it's already set), so no display is needed and nothing shows up on screen. GitHub Actions runs them on every push to `main` and every pull request, together with a ruff lint check.
 
 ```
 python -m unittest discover -s tests -v
@@ -24,9 +24,9 @@ python -m unittest discover -s tests -v
 
 | File | Tests | What it covers | Needs |
 |---|---|---|---|
-| `test_engine.py` | 64 | `download_engine.py` on its own: formats, ffmpeg and JavaScript runtime lookup, the update check, yt-dlp version and loading, preview helpers and thumbnail sizes, the logger, `DownloadJob` | Nothing (some tests use real yt-dlp or Pillow and skip without them) |
+| `test_engine.py` | 65 | `download_engine.py` on its own: formats, ffmpeg and JavaScript runtime lookup, the update check, yt-dlp version and loading, preview helpers and thumbnail sizes, the logger, `DownloadJob` | Nothing (some tests use real yt-dlp or Pillow and skip without them) |
 | `test_real_yt_dlp.py` | 3 | The engine with the real yt-dlp, downloading from a local HTTP server: a download then "Already downloaded", an MP3 converted only once, Cancel removing the `.part` file | yt-dlp; ffmpeg for the MP3 test |
-| `test_window.py` | 70 | The real window driven with a fake yt-dlp: the Downloads list, the queue, Cancel, the keyboard and right-click menu, closing, playlists, lookups, settings and themes; worker threads must never touch Qt or show a dialog | PySide6 |
+| `test_window.py` | 77 | The real window driven with a fake yt-dlp: the Downloads list, the queue, Cancel, drag and drop, the keyboard and right-click menu, closing, playlists, lookups, settings and themes; worker threads must never touch Qt or show a dialog | PySide6 |
 | `test_app.py` | 16 | Settings file, Show in folder (`reveal_in_file_manager`), ffmpeg help text, the update check's once-a-day limit and its setting, `split_links`, what the .exe does differently (no pip install, the `--self-check` report) | PySide6 |
 | `test_requirements.py` | 10 | The yt-dlp pin in `requirements.txt` is exact (`yt-dlp[default]==…`) and is what the in-app installer uses; the `default` extra brings yt-dlp-ejs; every requirement is pinned; Dependabot watches the file | PySide6 (it imports the window module) |
 | `test_build_exe.py` | 12 | `packaging/build_exe.py`: checksum-checked downloads and unpacking, the Windows version information it embeds, the `--check` verdict on the .exe's self-check (including Qt's SVG support), and `THIRD-PARTY-LICENSES.txt` (the bundled packages match what `requirements.txt` installs; Qt and PySide6 get the LGPL and GPL texts, not their packages' commercial-license file; no Tcl/Tk) | Nothing |
@@ -85,6 +85,7 @@ These check the window's behavior and its central rule: **worker threads never t
 | Links and lookups | Paste adds links and leaves out other words; pasted lines go in one line; words that aren't links are left out; no link and a relative folder are refused; Enter downloads; lookups of a video, of `url` results to a playlist and of a bad link; the thumbnail, asked for at the screen's pixel ratio; closing cancels the lookups |
 | Playlists | A single video doesn't ask; a playlist asks; a dialog that fails doesn't hang; `url` results are followed before asking |
 | Row actions | Show in folder and Remove; a missing folder is reported; which icons each state has; a running row can't be removed and Clear finished keeps it; the list paints every state (offscreen) |
+| Drag and drop, qualities | What a drop holds (links, links in text, a folder, not a file); the overlay says what a drop does and how; dropped links download with the chosen format, leaving the URL box alone; a dropped folder becomes Save to, and links dropped with one download into it; drops need ffmpeg like Download; the boxes leave drops to the window; the 4K and 1440p choices, saved and restored |
 | Keyboard, menu, double-click | Esc, Enter (and the keypad's), Delete and Backspace act on the selected row, only when the row has that action and without Ctrl; the arrow keys move and tabbing in selects a row; the right-click menu grays out what the row can't do; a double-click shows the file, but not on the icons; the tooltips name the keys |
 | Crashes | A crashed download fails its row and opens the log; a crashing worker still finishes; errors in calls on the main thread reach the log |
 | yt-dlp, ffmpeg, JavaScript runtime | The runtime is looked up on a worker; a missing one is explained; missing ffmpeg warns and blocks Download; coming back to the window finds it; the version in the header and the mismatch note; install with and without a restart; Download during an install doesn't install again; the update notice is logged |

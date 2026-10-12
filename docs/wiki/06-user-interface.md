@@ -42,7 +42,7 @@ Sources: [youtube_downloader.py:30-44](https://github.com/lifeupnorth/YouTubeDow
 | URL box (`url`, a `QLineEdit`) | `returnPressed` → `_start_download`, `textChanged` → `_one_line` | One line, styled like YouTube's search box, with a dimmed placeholder ("Paste one or more links: …"). Several links go in separated by spaces; pasted line breaks become spaces (`_one_line`). Enter downloads. When Download is clicked, `split_links` picks out the links |
 | Paste button | `_paste_url` | Joined to the URL box's right end. Adds the clipboard's links to those in the box, without repeats, leaving out words that aren't links (`split_links`); a clipboard without a link only changes the status ("The clipboard has no link to paste.") |
 | Format drop-down (`format`) | `currentIndexChanged` | MP4 video, MP3 audio or M4A audio (`FORMATS`). The audio formats disable Quality |
-| Quality drop-down (`quality`) | | Best quality, 1080p, 720p or 480p (`QUALITIES`). `_chosen_format` turns Format and Quality into the engine's value: the quality's (`mp4_best`, `1080p`, …) for video, the format's (`mp3`, `m4a`) for audio. `_set_format` does the reverse for the saved value |
+| Quality drop-down (`quality`) | | Best quality, 2160p (4K), 1440p, 1080p, 720p or 480p (`QUALITIES`). `_chosen_format` turns Format and Quality into the engine's value: the quality's (`mp4_best`, `1080p`, …) for video, the format's (`mp3`, `m4a`) for audio. `_set_format` does the reverse for the saved value |
 | Save to (`path`, a `QLineEdit`) | | Defaults to `~/Downloads`, or the last folder used; a saved folder that's missing (an unplugged drive) is kept in the settings and noted in the log. Download refuses an empty or relative path |
 | Browse | `_browse_folder` | `QFileDialog.getExistingDirectory`, starting at the current folder |
 | Whole playlist (`whole_playlist`) | | A switch, off by default and never remembered. Read for each link when it's added to the list |
@@ -61,13 +61,13 @@ Sources: [youtube_downloader.py:121-134](https://github.com/lifeupnorth/YouTubeD
 
 Each link is a `Row` (a dataclass). The link, format, folder and Whole playlist setting are fixed when it's added; the rest fills in as it's looked up and downloaded: `title`, `details`, `thumb`, `state`, `pct`, `message` (speed and time left, or why it failed), `file` (the last file it saved or found already there), `log` (its own log lines), `cancel_event`, `job` and `latest`. Only the main thread changes a row, except `latest` (the download thread's newest progress) and `job`.
 
-It's a Qt model and view. `DownloadsModel` (a `QAbstractTableModel`) holds the rows; `add`, `changed` and `remove` tell the view what changed. `DownloadsView` (a `QTableView`) shows them without a grid, selection or keyboard focus, scrolls by pixel, and while there are no rows draws a hint in their place: "Paste a link and click Download. Your downloads show up here." `RowDelegate` draws the Video, Progress and action cells itself and handles clicks on the icons; the Format, Quality and Status cells are text from the model. The row under the mouse gets the `surface` color, and a divider line runs under each row.
+It's a Qt model and view. `DownloadsModel` (a `QAbstractTableModel`) holds the rows; `add`, `changed` and `remove` tell the view what changed. `DownloadsView` (a `QTableView`) shows them without a grid, selects one row at a time (the one the keys act on; see below), scrolls by pixel, and while there are no rows draws a hint in their place: "Paste a link and click Download. Your downloads show up here." `RowDelegate` draws the Video, Progress and action cells itself and handles clicks on the icons; the Format, Quality and Status cells are text from the model. The row under the mouse gets the `surface` color, and a divider line runs under each row.
 
 | Column | Shows |
 |---|---|
 | Video | Takes the width that's left. A 128×72 thumbnail (`THUMB_SIZE`) with rounded corners, cropped to fill (`cover`), or until there is one an empty box with a play triangle. Beside it the title in bold (the link until the lookup finds the title), and under it, dimmer, the details: length and channel, "Playlist · 12 videos" and the channel, "Looking up…", "Couldn't load a preview for this link.", or after a playlist download how it went ("Done: 3 saved, 1 skipped"). Its tooltip is the link |
 | Format | MP4, MP3 or M4A (`Row.format_label`) |
-| Quality | Best quality, 1080p, 720p or 480p, or "—" for audio (`Row.quality_label`) |
+| Quality | Best quality, 2160p (4K), 1440p, 1080p, 720p or 480p, or "—" for audio (`Row.quality_label`) |
 | Progress | A 4 px bar: red (`accent`) while it downloads, green (`success`) when done, and empty, with no percentage, in every other state (`bar_percent`; a canceled row's partial file is gone, so its bar doesn't keep the progress it had). The percentage beside it while it downloads, processes or is done. Under it the message: "Starting…", speed and time left (with "Video 2/5" in a playlist), "Canceling…", or in the error color why it failed |
 | Status | The state's label in its color (below). Its tooltip is the last 8 log lines for this link |
 | (actions) | The icons below |
@@ -99,6 +99,14 @@ The action icons are drawn by `draw_icon` in the theme's colors, with a round ba
 `RowDelegate.editorEvent` finds the icon under the mouse when it moves or is released, and on a release emits `action(row, name)`; `_row_action` runs it. Remove only acts on finished rows, so a running row can't be taken out of the list.
 
 The same actions work from the keyboard. The list takes the focus (Tab reaches it, and a click selects a row), the arrow keys move between rows, and `DownloadsView.keyPressEvent` runs the selected row's action for Esc, Enter or Delete (`ACTION_KEYS`; with Ctrl, Alt or Shift held they do nothing). Tabbing into the list selects its first row, so the keys always have one to act on; Tab itself leaves the list (`setTabKeyNavigation(False)`). The selected row is filled with the `button` color while the list has the focus, and like a row under the mouse otherwise. A right-click opens a menu (`row_menu`) with all three actions and their keys, the ones the row doesn't have grayed out, and a double-click on a row (not on its icons) shows its file. Each of these emits the view's own `action(row, name)`, which `_row_action` runs like a click on an icon.
+
+## Drag and drop
+
+The window takes drops (`setAcceptDrops`); the URL and folder boxes don't (`setAcceptDrops(False)`), so a drop on them does the same as anywhere else. `dropped(mime)` reads what's dragged: the `http`/`https` links among its URLs (or, without any, the links in its text, through `split_links`), and the first local folder. Anything else is refused.
+
+While something is dragged over the window, `dragEnterEvent` shows an overlay (`drop_overlay`, a `QLabel` with a dashed blue border over the whole window, letting the mouse through) saying what a drop will do: "Drop to download 2 links" and how ("as MP4 video, 2160p (4K)"), "into <folder>" if a folder comes with them, or "Drop to save to <folder>". `dragLeaveEvent` and `dropEvent` hide it.
+
+`dropEvent` makes a dropped folder the Save to folder (saved at once if no links came with it). Dropped links go through the same checks and the same `_add_links` as Download (`_can_download`: yt-dlp and ffmpeg; then the folder), so they download right away with the chosen format and quality. The URL box is left as it is.
 
 ## Looking links up
 
