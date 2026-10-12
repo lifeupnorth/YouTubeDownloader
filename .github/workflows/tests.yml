@@ -15,8 +15,9 @@ jobs:
       fail-fast: false
       matrix:
         os: [windows-latest, ubuntu-latest]
-        # yt-dlp needs 3.10+; test the oldest supported and the newest.
-        python: ["3.10", "3.14"]
+        # The app needs 3.12+ (see MIN_PYTHON in youtube_downloader.py); test
+        # the oldest supported and the newest.
+        python: ["3.12", "3.14"]
     runs-on: ${{ matrix.os }}
     timeout-minutes: 15
     env:

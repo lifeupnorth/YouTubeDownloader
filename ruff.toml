@@ -1,5 +1,5 @@
 # Settings for `ruff check .`, which CI runs on every push and pull request.
-target-version = "py310"
+target-version = "py312"
 
 [lint]
 # pycodestyle errors, Pyflakes, bugbear, pyupgrade, import order and Ruff's

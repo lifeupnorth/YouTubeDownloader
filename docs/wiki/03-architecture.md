@@ -46,7 +46,7 @@ flowchart LR
 | | Drawing | 822–1083 | The icons, the logo, the app's icon (`app_icon_image`, `app_icon`), `to_qimage`, `write_svgs`, `translucent`, `style_sheet` |
 | | `YouTubeDownloader` | 1086–2128 | The window, its state, the worker plumbing, and the lookup, download, drag-and-drop, cancel, pause and resume, saved list, update and install handlers |
 | | Command-line check | 2131–2172 | `self_check` (`--self-check`), see [Getting Started](02-getting-started.md) |
-| | Entry point | 2175–2204 | `main()`: runs the check, or creates the window and runs Qt's event loop (`app.exec()`) |
+| | Entry point | 2175–2213 | `MIN_PYTHON`; `main()`: stops on an older Python, runs the check, or creates the window and runs Qt's event loop (`app.exec()`) |
 
 The engine reports through plain callbacks and keeps its own results (outcome, counts, error, last file, summary), so the window only has to turn callbacks into main-thread calls and show the result in the row. The window reads its widgets (format, quality, folder, the playlist switch) on the main thread when a link is added, keeps the values in the link's `Row`, and passes them to the engine.
 

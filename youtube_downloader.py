@@ -2173,7 +2173,16 @@ def self_check(path):
 
 
 # ── Entry point ─────────────────────────────────────────────────────────────
+# Before 3.12, PySide6 on Linux loses a reference to None with every Qt call
+# that returns nothing, and Python aborts once there are none left: a few
+# minutes into a download, as the list repaints. From 3.12 None can't run out.
+MIN_PYTHON = (3, 12)
+
+
 def main():
+    if sys.version_info < MIN_PYTHON:
+        sys.exit(f"YT Downloader needs Python {'.'.join(map(str, MIN_PYTHON))} or newer; "
+                 f"this is Python {'.'.join(map(str, sys.version_info[:3]))}.")
     if sys.platform == "win32":
         # The taskbar shows the app's own icon, not Python's.
         try:
