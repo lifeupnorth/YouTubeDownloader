@@ -311,6 +311,15 @@ ROW_ACTIONS = {
 ACTION_KEYS = {key: name for name, (_, _, keys) in ROW_ACTIONS.items() for key in keys}
 
 
+def bar_percent(row):
+    """How full a row's progress bar is, or None for an empty bar with no
+    percentage: only a download in progress or done shows one (a canceled
+    one's partial file is gone)."""
+    if row.state == "done":
+        return 100
+    return row.pct if row.state in ACTIVE else None
+
+
 def row_actions(row):
     """The actions row has now, in the order of its icons."""
     names = []
@@ -350,6 +359,26 @@ class Row:
     @property
     def quality_label(self):
         return dict((value, label) for label, value in QUALITIES).get(self.fmt, "—")
+
+
+# How the finished rows are counted in the summary, in this order.
+SUMMARY_PARTS = [("done", "completed"), ("failed", "failed"), ("canceled", "canceled"),
+                 ("declined", "not downloaded"), ("empty", "empty")]
+
+
+def queue_summary(states):
+    """The status line once the list is done: (text, theme role) for the
+    finished rows' states, e.g. "✔ Done: 2 completed, 1 canceled."."""
+    counts = [(states.count(state), label) for state, label in SUMMARY_PARTS]
+    parts = ", ".join(f"{n} {label}" for n, label in counts if n)
+    done, failed = states.count("done"), states.count("failed")
+    if done == len(states):
+        return "✔ All downloads complete.", SUCCESS
+    if done:
+        return f"✔ Done: {parts}.", WARNING if failed else SUCCESS
+    if failed:
+        return f"✘ Nothing downloaded: {parts}.", ERROR
+    return f"Nothing downloaded: {parts}.", TEXT_DIM
 
 
 class DownloadsModel(QAbstractTableModel):
@@ -504,8 +533,8 @@ class RowDelegate(QStyledItemDelegate):
         painter.setPen(Qt.NoPen)
         painter.setBrush(QColor(c["button"]))
         painter.drawRoundedRect(bar, 2, 2)
-        pct = 100 if row.state == "done" else row.pct
-        if pct > 0 and row.state != "failed":
+        pct = bar_percent(row)
+        if pct:
             done = QRectF(bar.left(), bar.top(), bar.width() * pct / 100, bar.height())
             painter.setBrush(QColor(c["success" if row.state == "done" else "accent"]))
             painter.drawRoundedRect(done, 2, 2)
@@ -515,7 +544,7 @@ class RowDelegate(QStyledItemDelegate):
         painter.setPen(QColor(c["text_dim"]))
         painter.drawText(QRectF(bar.right() + 6, bar.center().y() - 10, 40, 20),
                          Qt.AlignVCenter | Qt.AlignRight,
-                         f"{pct:.0f}%" if row.state in ACTIVE | {"done"} else "")
+                         "" if pct is None else f"{pct:.0f}%")
         below = QRectF(inner.left(), bar.bottom() + 6, inner.width(), 18)
         painter.setPen(QColor(c["error" if row.state == "failed" else "text_dim"]))
         painter.drawText(below, Qt.AlignLeft | Qt.AlignTop, QFontMetrics(small).elidedText(
@@ -1366,15 +1395,18 @@ class YouTubeDownloader(QMainWindow):
         self._running = row
         row.state, row.pct, row.message = "downloading", 0, "Starting…"
         self.model.changed(row)
-        self._set_status(f"Downloading {self._position(row)}…", WARNING)
+        position = self._position(row)
+        self._set_status(f"Downloading {position}…" if position else "Downloading…",
+                         WARNING)
         self._log(f"▶ {row.url}")
         self._progress_timer.start()
         self._start_worker(self._run_row, row, self._ffmpeg, self._js_runtime)
 
     def _position(self, row):
-        """e.g. "2 of 3": where row is among those not finished yet."""
+        """e.g. "2 of 3": where row is among those not finished yet ("" when
+        it's the only one)."""
         todo = [r for r in self.model.rows if r.state not in FINISHED]
-        return f"{todo.index(row) + 1} of {len(todo)}" if len(todo) > 1 else "1 link"
+        return f"{todo.index(row) + 1} of {len(todo)}" if len(todo) > 1 else ""
 
     # Runs on the download thread. The window hears that the row ended even
     # if it crashed, after the error is in the log.
@@ -1457,17 +1489,7 @@ class YouTubeDownloader(QMainWindow):
         finished = [r for r in self.model.rows if r.state in FINISHED]
         if not finished:
             return
-        done = sum(r.state == "done" for r in finished)
-        failed = sum(r.state == "failed" for r in finished)
-        if failed and done:
-            self._set_status(f"✔ Done, but {failed} link{'s' * (failed != 1)} failed.",
-                             WARNING)
-        elif failed:
-            self._set_status("✘ The download failed (the row says why).", ERROR)
-        elif done:
-            self._set_status("✔ All downloads complete.", SUCCESS)
-        else:
-            self._set_status("Nothing downloaded.")
+        self._set_status(*queue_summary([r.state for r in finished]))
         QApplication.alert(self)   # flashes the taskbar if the window isn't in front
 
     # Runs on the download thread; blocks it until the user answers.

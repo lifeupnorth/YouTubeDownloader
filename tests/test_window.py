@@ -209,6 +209,7 @@ class WindowTest(unittest.TestCase):
         self.assertIn("✔ Done!", self.log())
         self.assertNotIn(".f0.webm", self.log(), "logged a temporary stream file")
         self.assertEqual(self.statuses[-1], "✔ All downloads complete.")
+        self.assertIn("Downloading…", self.statuses, "one link has no \"1 of 1\"")
         self.assertEqual(self.app._status_role, ytd.SUCCESS)
         self.assertEqual(self.app.count_lbl.text(), "1 · 1 completed")
         self.assertFalse(self.app._progress_timer.isActive(), "the timer keeps running")
@@ -220,7 +221,7 @@ class WindowTest(unittest.TestCase):
         self.assertEqual(row.state, "failed")
         self.assertEqual(row.message, "boom")
         self.assertEqual(self.dialogs, [], "a failure needs no pop-up: the row says why")
-        self.assertEqual(self.statuses[-1], "✘ The download failed (the row says why).")
+        self.assertEqual(self.statuses[-1], "✘ Nothing downloaded: 1 failed.")
         self.assertIn("✘ Error: boom", self.log())
 
     def test_single_video_error_is_reported_once(self):
@@ -262,7 +263,7 @@ class WindowTest(unittest.TestCase):
         row, = self.rows()
         self.assertEqual((row.state, row.message), ("empty", engine.NOTHING_TO_DOWNLOAD))
         self.assertEqual(ytd.STATES["empty"], ("Nothing found", "warning"))
-        self.assertEqual(self.statuses[-1], "Nothing downloaded.")
+        self.assertEqual(self.statuses[-1], "Nothing downloaded: 1 empty.")
         self.assertIn("remove", ytd.row_actions(row))
 
     def test_already_downloaded_is_not_saved(self):
@@ -299,7 +300,7 @@ class WindowTest(unittest.TestCase):
         self.run_download(FailsOnB, "https://e.com/a https://e.com/b https://e.com/c")
         self.assertEqual(self.states(), ["done", "failed", "done"])
         self.assertEqual(self.rows()[1].message, "no such video")
-        self.assertEqual(self.statuses[-1], "✔ Done, but 1 link failed.")
+        self.assertEqual(self.statuses[-1], "✔ Done: 2 completed, 1 failed.")
         self.assertEqual(self.app._status_role, ytd.WARNING)
         self.assertEqual(self.dialogs, [])
 
@@ -333,6 +334,29 @@ class WindowTest(unittest.TestCase):
         row = self.rows()[0]
         self.assertEqual((row.fmt, row.format_label, row.quality_label), ("720p", "MP4", "720p"))
         self.assertEqual(ytd.Row("u", "m4a", "f", False).quality_label, "—")
+
+    def test_the_summary_counts_every_outcome(self):
+        cases = [
+            (["done", "done"], "✔ All downloads complete.", ytd.SUCCESS),
+            (["done", "done", "declined", "canceled"],
+             "✔ Done: 2 completed, 1 canceled, 1 not downloaded.", ytd.SUCCESS),
+            (["done", "failed", "empty"], "✔ Done: 1 completed, 1 failed, 1 empty.",
+             ytd.WARNING),
+            (["failed", "canceled"], "✘ Nothing downloaded: 1 failed, 1 canceled.", ytd.ERROR),
+            (["canceled", "canceled"], "Nothing downloaded: 2 canceled.", ytd.TEXT_DIM),
+        ]
+        for states, text, role in cases:
+            with self.subTest(states=states):
+                self.assertEqual(ytd.queue_summary(states), (text, role))
+
+    def test_only_a_running_or_finished_download_fills_its_bar(self):
+        for state, pct, expected in (("downloading", 40, 40), ("processing", 99, 99),
+                                     ("done", 0, 100), ("canceled", 5, None),
+                                     ("failed", 30, None), ("waiting", 0, None),
+                                     ("declined", 0, None), ("empty", 0, None)):
+            with self.subTest(state=state):
+                row = ytd.Row(VIDEO, "mp4_best", "f", False, state=state, pct=pct)
+                self.assertEqual(ytd.bar_percent(row), expected)
 
     def test_yt_dlp_warnings_reach_the_log(self):
         self.run_download(make_fake_ydl(streams=1, warn="[youtube] Some formats are missing"))
@@ -375,7 +399,7 @@ class WindowTest(unittest.TestCase):
     def test_cancel_then_download_again(self):
         self.run_download(make_fake_ydl(streams=1, on_progress=self.cancel_at((0, 0, 30))))
         self.assertEqual(self.states(), ["canceled"])
-        self.assertEqual(self.statuses[-1], "Nothing downloaded.")
+        self.assertEqual(self.statuses[-1], "Nothing downloaded: 1 canceled.")
         self.run_download(make_fake_ydl(streams=1))
         self.assertEqual(self.states(), ["canceled", "done"])
 

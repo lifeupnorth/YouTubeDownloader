@@ -68,7 +68,7 @@ It's a Qt model and view. `DownloadsModel` (a `QAbstractTableModel`) holds the r
 | Video | Takes the width that's left. A 128×72 thumbnail (`THUMB_SIZE`) with rounded corners, cropped to fill (`cover`), or until there is one an empty box with a play triangle. Beside it the title in bold (the link until the lookup finds the title), and under it, dimmer, the details: length and channel, "Playlist · 12 videos" and the channel, "Looking up…", "Couldn't load a preview for this link.", or after a playlist download how it went ("Done: 3 saved, 1 skipped"). Its tooltip is the link |
 | Format | MP4, MP3 or M4A (`Row.format_label`) |
 | Quality | Best quality, 1080p, 720p or 480p, or "—" for audio (`Row.quality_label`) |
-| Progress | A 4 px bar: red (`accent`) while it downloads, green (`success`) when done, empty when it failed. The percentage beside it while it downloads, processes or is done. Under it the message: "Starting…", speed and time left (with "Video 2/5" in a playlist), "Canceling…", or in the error color why it failed |
+| Progress | A 4 px bar: red (`accent`) while it downloads, green (`success`) when done, and empty, with no percentage, in every other state (`bar_percent`; a canceled row's partial file is gone, so its bar doesn't keep the progress it had). The percentage beside it while it downloads, processes or is done. Under it the message: "Starting…", speed and time left (with "Video 2/5" in a playlist), "Canceling…", or in the error color why it failed |
 | Status | The state's label in its color (below). Its tooltip is the last 8 log lines for this link |
 | (actions) | The icons below |
 
@@ -119,10 +119,10 @@ Worker threads reach them only through `_post` (see [Architecture and Threading]
 
 | Constant (role) | Dark | Light | Used for |
 |---|---|---|---|
-| `TEXT_DIM` | `#aaaaaa` | `#606060` | Idle ("Ready", "Those links are already in the list.", "Nothing downloaded.") |
-| `WARNING` | `#f59e0b` | `#b45309` | In progress ("Downloading 2 of 3…"), ffmpeg missing, an install running, a clipboard without a link, canceling before closing, "✔ Done, but 1 link failed." |
-| `SUCCESS` | `#2ba640` | `#107c41` | "✔ All downloads complete.", yt-dlp installed |
-| `ERROR` | `#ff4e45` | `#cc0000` | "✘ The download failed (the row says why).", a failed install |
+| `TEXT_DIM` | `#aaaaaa` | `#606060` | Idle ("Ready", "Those links are already in the list.", "Nothing downloaded: 1 canceled.") |
+| `WARNING` | `#f59e0b` | `#b45309` | In progress ("Downloading…", or "Downloading 2 of 3…" with several links), ffmpeg missing, an install running, a clipboard without a link, canceling before closing, "✔ Done: 2 completed, 1 failed." |
+| `SUCCESS` | `#2ba640` | `#107c41` | "✔ All downloads complete.", "✔ Done: 2 completed, 1 canceled.", yt-dlp installed |
+| `ERROR` | `#ff4e45` | `#cc0000` | "✘ Nothing downloaded: 1 failed.", a failed install |
 
 When the last waiting row has finished, `_queue_finished` sets one of those summaries, counted over the finished rows still in the list, and calls `QApplication.alert`, which flashes the taskbar button if the window isn't in front.
 

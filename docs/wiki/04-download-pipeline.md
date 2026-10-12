@@ -158,14 +158,15 @@ Each job ends with an outcome (`done`, `failed`, `declined` or `canceled`), coun
 | `canceled` | Canceled | `✘ Download canceled (…)` |
 | `None` (`_run_row` crashed) | Failed, with "An unexpected error (see the log)", or Canceled if the row was canceled | The error, from `_worker_crashed` |
 
-When no row is left waiting, `_queue_finished` sums up the finished rows still in the list in the status line, and flashes the taskbar button (`QApplication.alert`) if the window isn't in front. There's no dialog for success or failure.
+When no row is left waiting, `_queue_finished` sums up the finished rows still in the list in the status line (`queue_summary`), and flashes the taskbar button (`QApplication.alert`) if the window isn't in front. There's no dialog for success or failure. The summary counts each outcome, in the order completed, failed, canceled, not downloaded, empty, leaving out those with none:
 
 | Finished rows | Status line |
 |---|---|
-| Some Completed, some Failed | `✔ Done, but 1 link failed.` (orange) |
-| Some Failed, none Completed | `✘ The download failed (the row says why).` (red) |
-| Some Completed, none Failed | `✔ All downloads complete.` (green) |
-| Only Canceled or Not downloaded | `Nothing downloaded.` (gray) |
+| All Completed | `✔ All downloads complete.` (green) |
+| Some Completed, none Failed | e.g. `✔ Done: 2 completed, 1 canceled, 1 not downloaded.` (green) |
+| Some Completed, some Failed | e.g. `✔ Done: 2 completed, 1 failed.` (orange) |
+| Some Failed, none Completed | e.g. `✘ Nothing downloaded: 1 failed, 1 canceled.` (red) |
+| Only Canceled, Not downloaded or Nothing found | e.g. `Nothing downloaded: 1 canceled.` (gray) |
 
 Sources: [download_engine.py:619-633](https://github.com/lifeupnorth/YouTubeDownloader/blob/b369bd269cac691e2563e27391dbd3702c986e50/download_engine.py#L619-L633), [download_engine.py:740-759](https://github.com/lifeupnorth/YouTubeDownloader/blob/b369bd269cac691e2563e27391dbd3702c986e50/download_engine.py#L740-L759), [download_engine.py:811-897](https://github.com/lifeupnorth/YouTubeDownloader/blob/b369bd269cac691e2563e27391dbd3702c986e50/download_engine.py#L811-L897), [youtube_downloader.py:705-713](https://github.com/lifeupnorth/YouTubeDownloader/blob/b369bd269cac691e2563e27391dbd3702c986e50/youtube_downloader.py#L705-L713), [youtube_downloader.py:752-786](https://github.com/lifeupnorth/YouTubeDownloader/blob/b369bd269cac691e2563e27391dbd3702c986e50/youtube_downloader.py#L752-L786)
 

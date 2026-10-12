@@ -16,7 +16,7 @@
 
 </details>
 
-The tests use the standard library `unittest`, and nothing touches the internet: most downloads run against a fake yt-dlp, and `test_real_yt_dlp.py` runs the real one against a local server. There are 177 tests in seven files. The window's tests open real Qt windows, but on Qt's "offscreen" platform: `test_window.py` and `test_app.py` set `QT_QPA_PLATFORM=offscreen` before importing Qt (unless it's already set), so no display is needed and nothing shows up on screen. GitHub Actions runs them on every push to `main` and every pull request, together with a ruff lint check.
+The tests use the standard library `unittest`, and nothing touches the internet: most downloads run against a fake yt-dlp, and `test_real_yt_dlp.py` runs the real one against a local server. There are 179 tests in seven files. The window's tests open real Qt windows, but on Qt's "offscreen" platform: `test_window.py` and `test_app.py` set `QT_QPA_PLATFORM=offscreen` before importing Qt (unless it's already set), so no display is needed and nothing shows up on screen. GitHub Actions runs them on every push to `main` and every pull request, together with a ruff lint check.
 
 ```
 python -m unittest discover -s tests -v
@@ -26,7 +26,7 @@ python -m unittest discover -s tests -v
 |---|---|---|---|
 | `test_engine.py` | 64 | `download_engine.py` on its own: formats, ffmpeg and JavaScript runtime lookup, the update check, yt-dlp version and loading, preview helpers and thumbnail sizes, the logger, `DownloadJob` | Nothing (some tests use real yt-dlp or Pillow and skip without them) |
 | `test_real_yt_dlp.py` | 3 | The engine with the real yt-dlp, downloading from a local HTTP server: a download then "Already downloaded", an MP3 converted only once, Cancel removing the `.part` file | yt-dlp; ffmpeg for the MP3 test |
-| `test_window.py` | 68 | The real window driven with a fake yt-dlp: the Downloads list, the queue, Cancel, the keyboard and right-click menu, closing, playlists, lookups, settings and themes; worker threads must never touch Qt or show a dialog | PySide6 |
+| `test_window.py` | 70 | The real window driven with a fake yt-dlp: the Downloads list, the queue, Cancel, the keyboard and right-click menu, closing, playlists, lookups, settings and themes; worker threads must never touch Qt or show a dialog | PySide6 |
 | `test_app.py` | 16 | Settings file, Show in folder (`reveal_in_file_manager`), ffmpeg help text, the update check's once-a-day limit and its setting, `split_links`, what the .exe does differently (no pip install, the `--self-check` report) | PySide6 |
 | `test_requirements.py` | 10 | The yt-dlp pin in `requirements.txt` is exact (`yt-dlp[default]==…`) and is what the in-app installer uses; the `default` extra brings yt-dlp-ejs; every requirement is pinned; Dependabot watches the file | PySide6 (it imports the window module) |
 | `test_build_exe.py` | 12 | `packaging/build_exe.py`: checksum-checked downloads and unpacking, the Windows version information it embeds, the `--check` verdict on the .exe's self-check (including Qt's SVG support), and `THIRD-PARTY-LICENSES.txt` (the bundled packages match what `requirements.txt` installs; Qt and PySide6 get the LGPL and GPL texts, not their packages' commercial-license file; no Tcl/Tk) | Nothing |
@@ -79,7 +79,7 @@ These check the window's behavior and its central rule: **worker threads never t
 
 | Area | Tests |
 |---|---|
-| Downloading | Success (progress never goes backwards, ≤ 99 until done; the row's title, file and state; the summary and the count; the progress timer stops; no dialog); failure; a single video's error reported once; whole playlist; an empty playlist finds nothing; skipped and already-downloaded entries; a playlist where nothing was saved fails; a queue of links, one at a time; a failed link doesn't stop the rest; a link already waiting isn't added again; audio has no quality; yt-dlp's warnings reach the log |
+| Downloading | Success (progress never goes backwards, ≤ 99 until done; the row's title, file and state; the summary and the count; the progress timer stops; no dialog); failure; a single video's error reported once; whole playlist; an empty playlist finds nothing; skipped and already-downloaded entries; a playlist where nothing was saved fails; a queue of links, one at a time; a failed link doesn't stop the rest; the summary counts every outcome; only a running or finished download fills its bar; a link already waiting isn't added again; audio has no quality; yt-dlp's warnings reach the log |
 | Cancel | Only the unfinished video's files are removed; canceling between playlist videos; canceling a waiting link; downloading again after a cancel; progress after Cancel keeps "Canceling…"; no playlist question after a cancel |
 | Closing | Closing during a download asks first, Yes cancels and closes, No keeps going; a download that finished while the question was open; settings saved on close |
 | Links and lookups | Paste adds links and leaves out other words; pasted lines go in one line; words that aren't links are left out; no link and a relative folder are refused; Enter downloads; lookups of a video, of `url` results to a playlist and of a bad link; the thumbnail, asked for at the screen's pixel ratio; closing cancels the lookups |

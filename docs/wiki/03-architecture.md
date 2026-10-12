@@ -42,11 +42,11 @@ flowchart LR
 | | Link preview | 431–522 | `THUMB_SIZE`, `describe_info`, `thumbnail_url`, `fetch_thumbnail`, `preview_link` |
 | | Downloading | 525–806 | `DownloadJob`, which downloads one link |
 | `youtube_downloader.py` | Themes, settings, helpers | 80–283 | `THEMES`, `FORMATS` and `QUALITIES`, `settings_path`/`load_settings`/`save_settings`, `split_links`, `reveal_in_file_manager`, the help texts for ffmpeg and the JavaScript runtime, `application()` |
-| | The Downloads list | 286–660 | `STATES`, `ROW_ACTIONS` and `row_actions`, `Row`, `DownloadsModel`, `RowDelegate`, `DownloadsView` |
-| | Drawing | 663–851 | The icons, the logo, `to_qimage`, `write_svgs`, `style_sheet` |
-| | `YouTubeDownloader` | 854–1681 | The window, its state, the worker plumbing, and the lookup, download, cancel, update and install handlers |
-| | Command-line check | 1684–1725 | `self_check` (`--self-check`), see [Getting Started](02-getting-started.md) |
-| | Entry point | 1728–1757 | `main()`: runs the check, or creates the window and runs Qt's event loop (`app.exec()`) |
+| | The Downloads list | 286–689 | `STATES`, `ROW_ACTIONS` and `row_actions`, `bar_percent`, `queue_summary`, `Row`, `DownloadsModel`, `RowDelegate`, `DownloadsView` |
+| | Drawing | 692–880 | The icons, the logo, `to_qimage`, `write_svgs`, `style_sheet` |
+| | `YouTubeDownloader` | 883–1703 | The window, its state, the worker plumbing, and the lookup, download, cancel, update and install handlers |
+| | Command-line check | 1706–1747 | `self_check` (`--self-check`), see [Getting Started](02-getting-started.md) |
+| | Entry point | 1750–1779 | `main()`: runs the check, or creates the window and runs Qt's event loop (`app.exec()`) |
 
 The engine reports through plain callbacks and keeps its own results (outcome, counts, error, last file, summary), so the window only has to turn callbacks into main-thread calls and show the result in the row. The window reads its widgets (format, quality, folder, the playlist switch) on the main thread when a link is added, keeps the values in the link's `Row`, and passes them to the engine.
 
