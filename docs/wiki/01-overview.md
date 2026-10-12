@@ -92,7 +92,7 @@ Sources: [youtube_downloader.py:1158-1216](https://github.com/lifeupnorth/YouTub
 
 | Component | Role |
 |---|---|
-| Python 3.10+ | Language (the pinned yt-dlp needs 3.10); the .exe is built with Python 3.14 |
+| Python 3.12+ | Language (`MIN_PYTHON`: before 3.12, PySide6 on Linux loses a reference to `None` with every Qt call that returns nothing, and Python aborts once there are none left, a few minutes into a download); the .exe is built with Python 3.14 |
 | Qt 6 through PySide6 | Window and widgets; pinned as `PySide6-Essentials` (Qt's core modules, without QML or 3D) in `requirements.txt`, used under the LGPL v3 |
 | yt-dlp | Extraction, format selection, downloading, post-processing; pinned as `yt-dlp[default]` in `requirements.txt`. The `default` extra brings yt-dlp-ejs and libraries such as requests, websockets and brotli; the .exe leaves out mutagen, which the app doesn't use |
 | JavaScript runtime | deno (yt-dlp's default), node or bun, which runs yt-dlp-ejs to solve YouTube's challenges; without one, some formats may be missing. The .exe bundles deno |
@@ -109,11 +109,11 @@ Sources: [requirements.txt:6-18](https://github.com/lifeupnorth/YouTubeDownloade
 
 | Path | Lines | Contents |
 |---|---|---|
-| `youtube_downloader.py` | 2149 | The window (Qt): UI, the Downloads list (kept between runs), themes, settings, dialogs, worker plumbing, update check, entry point with `--self-check` |
+| `youtube_downloader.py` | 2158 | The window (Qt): UI, the Downloads list (kept between runs), themes, settings, dialogs, worker plumbing, update check, entry point with `--self-check` |
 | `download_engine.py` | 897 | Downloading without Qt: yt-dlp, ffmpeg and the JavaScript runtime, formats, link lookups, the release check, `DownloadJob` |
 | `tests/test_engine.py` | 1038 | The engine with a fake yt-dlp; needs no display |
 | `tests/test_window.py` | 1509 | The real window driven with a fake yt-dlp, on Qt's offscreen platform; fails on any main-thread-only call or dialog from a worker thread |
-| `tests/test_app.py` | 232 | Settings and saved-list files, Show in folder, ffmpeg help, the update check, `split_links`, the .exe's self-check report |
+| `tests/test_app.py` | 243 | Settings and saved-list files, the Python version check, Show in folder, ffmpeg help, the update check, `split_links`, the .exe's self-check report |
 | `tests/test_real_yt_dlp.py` | 142 | The engine with the real yt-dlp, offline, against a local web server (the MP3 test needs ffmpeg) |
 | `tests/test_requirements.py` | 93 | The yt-dlp pin is exact, brings yt-dlp-ejs, and is what the installer uses |
 | `tests/test_build_exe.py` | 241 | Checksum-checked downloads, the `--check` verdict and the third-party licenses of `packaging/build_exe.py` |
@@ -127,7 +127,7 @@ Sources: [requirements.txt:6-18](https://github.com/lifeupnorth/YouTubeDownloade
 | `packaging/THIRD-PARTY-NOTICES.txt` / `DENO-LICENSE.txt` | 79 / 20 | Licenses of the bundled programs, shipped next to the .exe |
 | `packaging/PYTHON-LICENSES.rst` | 1226 | CPython's licenses for the software built into Python, copied into `THIRD-PARTY-LICENSES.txt` |
 | `packaging/LGPL-3.0.txt` / `GPL-3.0.txt` | 165 / 674 | The GNU LGPL v3, under which Qt and PySide6 are used, and the GPL v3 it builds on, copied into `THIRD-PARTY-LICENSES.txt` (the Qt packages only ship the commercial license's text) |
-| `.github/workflows/tests.yml` | 81 | Tests (Windows and Ubuntu, Python 3.10 and 3.14, with and without yt-dlp, on Qt's offscreen platform) and lint on every push to `main` and every PR |
+| `.github/workflows/tests.yml` | 82 | Tests (Windows and Ubuntu, Python 3.12 and 3.14, with and without yt-dlp, on Qt's offscreen platform) and lint on every push to `main` and every PR |
 | `.github/workflows/build-exe.yml` | 226 | Builds and checks the .exe on every PR, every push to `main` and by hand; releases it for a `vX.Y.Z` tag, or as the next patch version when `main` pins another yt-dlp than the latest release, with SHA-256 checksums and a build provenance attestation |
 | `.github/workflows/pins.yml` | 36 | "Bundled programs": runs `check_pins.py --open-issues` every Monday |
 | `.github/dependabot.yml` | 30 | Dependabot: daily for `requirements.txt`, weekly for `packaging/requirements-build.txt` and GitHub Actions |

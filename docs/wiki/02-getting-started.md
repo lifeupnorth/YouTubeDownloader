@@ -20,7 +20,7 @@ How to install, run, configure and test the app. From source, the app is two Pyt
 
 | Requirement | Why | How it's handled |
 |---|---|---|
-| Python 3.10+ | The pinned yt-dlp needs 3.10 | CI tests 3.10 and 3.14; the .exe is built with 3.14 |
+| Python 3.12+ | Before 3.12, PySide6 on Linux loses a reference to `None` with every Qt call that returns nothing, and Python aborts once there are none left, a few minutes into a download (from 3.12 `None` can't run out) | `main()` stops with a message on an older Python (`MIN_PYTHON`); CI tests 3.12 and 3.14; the .exe is built with 3.14 |
 | `PySide6-Essentials` | The window is Qt, through PySide6 ("Essentials" is Qt's core modules, without QML or 3D) | Pinned in `requirements.txt`; required. On a minimal Linux system Qt may also need some system libraries; CI installs `libegl1`, `libgl1`, `libxkbcommon0`, `libfontconfig1` and `libdbus-1-3` |
 | `yt-dlp[default]` | Does the extraction and downloading. The `default` extra brings yt-dlp-ejs (the solver for YouTube's JavaScript challenges) plus websockets, requests, brotli, certifi, mutagen and pycryptodomex | Pinned in `requirements.txt`. Optional at import time: if it's missing, the app offers to install that same requirement with pip and loads it right away, without a restart (the .exe shows an error instead, since it has no pip). The header shows the version in use, and the log notes when it differs from the pin. When a JavaScript runtime is found but yt-dlp-ejs isn't installed, the log says so at startup. |
 | `ffmpeg` | Merging video and audio, remuxing to MP4, converting to MP3/M4A | Checked at startup and before every download; on Windows it's also found after an install made while the app is open. The .exe bundles it. |

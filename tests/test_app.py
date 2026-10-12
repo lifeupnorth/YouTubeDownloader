@@ -211,6 +211,17 @@ class UpdateCheckTest(unittest.TestCase):
                                                "theme": "light", "parallel_downloads": 3})
 
 
+class PythonVersionTest(unittest.TestCase):
+    def test_older_python_is_refused_before_qt_starts(self):
+        with mock.patch.object(sys, "version_info", (3, 11, 9, "final", 0)), \
+                mock.patch.object(ytd, "application") as application, \
+                self.assertRaises(SystemExit) as stop:
+            ytd.main()
+        self.assertEqual(str(stop.exception),
+                         "YT Downloader needs Python 3.12 or newer; this is Python 3.11.9.")
+        application.assert_not_called()
+
+
 class SplitLinksTest(unittest.TestCase):
     def test_links_and_other_words(self):
         cases = {
