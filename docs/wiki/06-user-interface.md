@@ -48,11 +48,12 @@ Sources: [youtube_downloader.py:30-44](https://github.com/lifeupnorth/YouTubeDow
 | Whole playlist (`whole_playlist`) | | A switch, off by default and never remembered. Read for each link when it's added to the list |
 | Download (`dl_btn`) | `_start_download` | Red, with a download arrow drawn by `download_icon` (a "⬇" character comes out as a color emoji on Windows). Adds the links to the list. It stays a Download button while downloads run, so more links can be added at any time |
 | Count (`count_lbl`) | the model's `rowsInserted`, `rowsRemoved` and `dataChanged` → `_update_counts` | "3 · 1 completed" next to the Downloads heading; empty while the list is |
+| At a time (`parallel`) | `_parallel_changed` | A drop-down beside Clear finished: "1 at a time", "2 at a time" (the default) or "3 at a time" (`PARALLEL_CHOICES`), saved as `parallel_downloads`. More starts waiting rows at once; fewer lets those running finish |
 | Clear finished | `_clear_finished` | Removes every finished row (Completed, Failed, Canceled, Not downloaded, Nothing found) from the list and the saved list; the files stay |
 | Downloads list (`view`) | `RowDelegate.action` → `_row_action` | See [The Downloads list](#the-downloads-list) |
 | Log (`log_box`) | `_log` | A read-only `QPlainTextEdit`, 130 px high, hidden until the Log chip is checked |
 | Status line (`status_lbl`) | `_set_status` | Text and color; wraps |
-| Speed (`speed_lbl`) | `_update_counts` | "⚡ 3.4 MB/s", taken from the running row's message while it downloads |
+| Speed (`speed_lbl`) | `_update_counts` | "⚡ 3.4 MB/s": the running rows' speeds, from their messages, added up |
 | Log chip (`log_btn`) | `toggled` → `log_box.setVisible` | Shows or hides the log. `_log(msg, show=True)` checks it |
 
 Sources: [youtube_downloader.py:121-134](https://github.com/lifeupnorth/YouTubeDownloader/blob/b369bd269cac691e2563e27391dbd3702c986e50/youtube_downloader.py#L121-L134), [youtube_downloader.py:229-419](https://github.com/lifeupnorth/YouTubeDownloader/blob/b369bd269cac691e2563e27391dbd3702c986e50/youtube_downloader.py#L229-L419), [youtube_downloader.py:421-438](https://github.com/lifeupnorth/YouTubeDownloader/blob/b369bd269cac691e2563e27391dbd3702c986e50/youtube_downloader.py#L421-L438), [youtube_downloader.py:462-539](https://github.com/lifeupnorth/YouTubeDownloader/blob/b369bd269cac691e2563e27391dbd3702c986e50/youtube_downloader.py#L462-L539), [youtube_downloader.py:782-797](https://github.com/lifeupnorth/YouTubeDownloader/blob/b369bd269cac691e2563e27391dbd3702c986e50/youtube_downloader.py#L782-L797), [youtube_downloader.py:862-879](https://github.com/lifeupnorth/YouTubeDownloader/blob/b369bd269cac691e2563e27391dbd3702c986e50/youtube_downloader.py#L862-L879)
@@ -139,7 +140,7 @@ Worker threads reach them only through `_post` (see [Architecture and Threading]
 | Constant (role) | Dark | Light | Used for |
 |---|---|---|---|
 | `TEXT_DIM` | `#aaaaaa` | `#606060` | Idle ("Ready", "Those links are already in the list.", "Nothing downloaded: 1 canceled.") |
-| `WARNING` | `#f59e0b` | `#b45309` | In progress ("Downloading…", or "Downloading 2 of 3…" with several links), ffmpeg missing, an install running, a clipboard without a link, canceling before closing, "✔ Done: 2 completed, 1 failed." |
+| `WARNING` | `#f59e0b` | `#b45309` | In progress ("Downloading…", "Downloading 2 of 3…" with several links, or "Downloading 2 links, 1 waiting…" while several download at once), ffmpeg missing, an install running, a clipboard without a link, canceling before closing, "✔ Done: 2 completed, 1 failed." |
 | `SUCCESS` | `#2ba640` | `#107c41` | "✔ All downloads complete.", "✔ Done: 2 completed, 1 canceled.", yt-dlp installed |
 | `ERROR` | `#ff4e45` | `#cc0000` | "✘ Nothing downloaded: 1 failed.", a failed install |
 
@@ -175,9 +176,9 @@ All dialogs are `QMessageBox`'s static functions (`question`, `critical`, `warni
 | "ffmpeg not found" (error) | Download clicked without ffmpeg |
 | "No URL" (warning) | No link in the URL box |
 | "Choose a folder" (warning) | Save to is empty or not a full path |
-| "Playlist" (yes/no) | Whole playlist was off for a link that turns out to be a playlist or channel; asked when that row's download starts |
+| "Playlist" (yes/no) | Whole playlist was off for a link that turns out to be a playlist or channel; asked when that row's download starts, one question at a time |
 | "Folder not found" (error) / "Couldn't open the folder" (error) | Show in folder clicked after the folder was removed / the file manager couldn't be started |
-| "Download in progress" (yes/no) | Closing the window during a download: "Pause it and close the app?" |
+| "Download in progress" (yes/no) | Closing the window during a download: "Pause it and close the app?" ("2 downloads are still running… Pause them…" for several) |
 | "Installed" (info) | Only if yt-dlp was installed but couldn't be loaded without a restart |
 
 A download that fails gets no dialog, and neither does success: the row shows the result, and the status line sums up once the list has nothing left to download.

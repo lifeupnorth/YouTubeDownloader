@@ -46,7 +46,7 @@ Sources: [README.md:4-35](https://github.com/lifeupnorth/YouTubeDownloader/blob/
 
 1. Paste one or more links into **YouTube URLs** (separated by spaces), or click **Paste**, which adds the clipboard's links to those already there and leaves out other words. Links work without `https://`.
 2. Pick a **Format** (MP4 video, MP3 or M4A audio), a **Quality** for video, and a folder under **Save to**.
-3. Click **Download** or press Enter. Each link becomes a row in the **Downloads** list, with its thumbnail and title as soon as they're looked up, and the rows download one at a time, each with its own progress bar and status. More links can be added while others download.
+3. Click **Download** or press Enter. Each link becomes a row in the **Downloads** list, with its thumbnail and title as soon as they're looked up, and the rows download two at a time (1 to 3, in the drop-down next to **Clear finished**), each with its own progress bar and status. More links can be added while others download.
 4. Each row has its own icons: Pause and Cancel while it waits or downloads, Resume once it's paused (it continues the partial files), then Show in folder and Remove from the list (which never deletes the file). On the selected row they're also Space, Esc, Enter and Delete, in a right-click menu, and Show in folder on a double-click. **Clear finished** removes all finished rows. The **Log** chip at the bottom shows the log.
 
 With **Whole playlist** off, a link to a video opened from a playlist downloads just that video, and a playlist, channel or tab link asks before downloading everything. Playlist videos go to `<Save to>/<playlist title>/<NNN> - <title>.<ext>`, single videos to `<Save to>/<title>.<ext>`.
@@ -69,7 +69,7 @@ Sources: [Code signing policy](../../README.md#code-signing-policy), `.github/wo
 
 ## Settings
 
-There are no environment variables, and the only command-line option is for a check: `--self-check REPORT` (what the build contains). The last **Save to** folder, the **Format** and **Quality** (one value, `format`, e.g. `720p` or `mp3`) and the **Theme** (`theme`: `system`, `light` or `dark`) are remembered in a small JSON file, and in a release .exe also the **Check for updates at startup** switch in the header (`check_updates`) and when it last checked (`last_update_check`):
+There are no environment variables, and the only command-line option is for a check: `--self-check REPORT` (what the build contains). The last **Save to** folder, the **Format** and **Quality** (one value, `format`, e.g. `720p` or `mp3`) and the **Theme** (`theme`: `system`, `light` or `dark`) and how many links download at a time (`parallel_downloads`: 1, 2 or 3; 2 by default) are remembered in a small JSON file, and in a release .exe also the **Check for updates at startup** switch in the header (`check_updates`) and when it last checked (`last_update_check`):
 
 | System | File |
 |---|---|

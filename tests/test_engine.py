@@ -2,6 +2,7 @@
 
 Run with:  python -m unittest discover -s tests -v
 """
+import functools
 import io
 import os
 import sys
@@ -859,6 +860,76 @@ class DownloadJobTest(unittest.TestCase):
             self.assertEqual(fake.resumed, [], "a finished stream downloaded again")
             self.assertEqual(os.listdir(tmp), ["v0.mp4"])
         self.assertEqual((again.outcome, again.saved), ("done", 1))
+
+    # ── Several jobs at once ──
+
+    @unittest.skipUnless(engine.YT_DLP_AVAILABLE, "needs yt-dlp")
+    def test_jobs_at_the_same_time_stop_only_their_own_ffmpeg(self):
+        import yt_dlp.postprocessor.ffmpeg as ffmpeg_pp
+
+        with tempfile.TemporaryDirectory() as tmp:
+            # Job a converts for 60 s and is canceled; job b for 1.5 s.
+            seconds = {os.path.join(tmp, "a"): 60, os.path.join(tmp, "b"): 1.5}
+            for folder in seconds:
+                os.mkdir(folder)
+
+            class Fake(make_fake_ydl(streams=1, probe=("video", "video"))):
+                def _run(self):
+                    folder = next(f for f in seconds if self.opts["outtmpl"].startswith(f))
+                    out = os.path.join(folder, "v.mp3")
+                    _out, _err, code = ffmpeg_pp.Popen.run(
+                        [sys.executable, "-c", "import sys, time; open(sys.argv[2][5:], 'wb');"
+                         " time.sleep(float(sys.argv[1]))", str(seconds[folder]), "file:" + out])
+                    if code:
+                        self.opts["logger"].error("ERROR: Postprocessing: ffmpeg failed")
+                    else:
+                        self.run_pps("after_move", {"filepath": out, "__real_download": True})
+
+            a, b = (make_job(folder=folder) for folder in seconds)
+            # Once both run, and a has started writing.
+            cancel_when(a, lambda: b._processes and os.listdir(os.path.join(tmp, "a")))
+            start = time.monotonic()
+            with mock.patch.object(engine, "yt_dlp", fake_yt_dlp(Fake)):
+                threads = [threading.Thread(target=job.run) for job in (a, b)]
+                for thread in threads:
+                    thread.start()
+                for thread in threads:
+                    thread.join(30)
+            self.assertLess(time.monotonic() - start, 10)
+            self.assertEqual(os.listdir(os.path.join(tmp, "a")), [])
+            self.assertEqual(os.listdir(os.path.join(tmp, "b")), ["v.mp3"])
+        self.assertEqual(a.summary(), "Download canceled (1 partial file removed).")
+        self.assertEqual((b.outcome, b.saved, b.removed), ("done", 1, 0))
+
+    @unittest.skipUnless(engine.YT_DLP_AVAILABLE, "needs yt-dlp")
+    def test_jobs_starting_at_once_install_one_tracked_popen(self):
+        # Without its lock, two threads could each make a class (cache
+        # doesn't lock) and install one each; slowed down here so they would.
+        modules = [sys.modules[name] for name in engine._PROCESS_MODULES]
+        base = sys.modules["yt_dlp.utils"].Popen
+        for module in modules:
+            self.addCleanup(setattr, module, "Popen", module.Popen)
+            module.Popen = base
+        make_class = engine._tracked_popen_class.__wrapped__
+
+        def slow(base):
+            time.sleep(0.05)
+            return make_class(base)
+
+        start, counts = threading.Barrier(6), []
+
+        def track():
+            start.wait(5)
+            counts.append(engine._track_processes())
+
+        with mock.patch.object(engine, "_tracked_popen_class", functools.cache(slow)):
+            threads = [threading.Thread(target=track) for _ in range(6)]
+            for thread in threads:
+                thread.start()
+            for thread in threads:
+                thread.join(10)
+        self.assertEqual(counts, [len(modules)] * 6)
+        self.assertEqual(len({module.Popen for module in modules}), 1)
 
     def test_only_new_ffmpeg_outputs_count(self):
         with tempfile.TemporaryDirectory() as tmp:

@@ -201,13 +201,14 @@ class UpdateCheckTest(unittest.TestCase):
 
     def test_saving_keeps_the_last_check(self):
         ytd.save_settings({"last_update_check": 5})
-        app = mock.Mock(_unavailable_folder=None, _check_updates=False, theme_mode="light")
+        app = mock.Mock(_unavailable_folder=None, _check_updates=False, theme_mode="light",
+                        _parallel=3)
         app.path.text.return_value = "C:/x"
         app._chosen_format.return_value = "mp3"
         ytd.YouTubeDownloader._save_settings(app)
         self.assertEqual(ytd.load_settings(), {"last_update_check": 5, "folder": "C:/x",
                                                "format": "mp3", "check_updates": False,
-                                               "theme": "light"})
+                                               "theme": "light", "parallel_downloads": 3})
 
 
 class SplitLinksTest(unittest.TestCase):

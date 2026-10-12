@@ -405,20 +405,27 @@ def _new_ffmpeg_output(args):
 # The yt-dlp modules that start ffmpeg through their own name for Popen.
 _PROCESS_MODULES = ("yt_dlp.postprocessor.ffmpeg", "yt_dlp.downloader.external")
 
+# Jobs on several threads start at once: functools.cache doesn't lock, so
+# without this two of them could each make a class and install one each.
+_track_lock = threading.Lock()
+
 
 def _track_processes():
     """Makes yt-dlp's ffmpeg runs go through _tracked_popen_class. Returns
-    how many modules use it (a test notices if yt-dlp changes this)."""
-    base = getattr(sys.modules.get("yt_dlp.utils"), "Popen", None)
-    if base is None:
-        return 0
-    tracked = _tracked_popen_class(base)
-    for name in _PROCESS_MODULES:
-        module = sys.modules.get(name)
-        if module is not None and getattr(module, "Popen", None) is base:
-            module.Popen = tracked
-    return sum(getattr(sys.modules.get(name), "Popen", None) is tracked
-               for name in _PROCESS_MODULES)
+    how many modules use it (a test notices if yt-dlp changes this). Each
+    process reports to the job on the thread that starts it (_current), so
+    jobs running at the same time each stop only their own."""
+    with _track_lock:
+        base = getattr(sys.modules.get("yt_dlp.utils"), "Popen", None)
+        if base is None:
+            return 0
+        tracked = _tracked_popen_class(base)
+        for name in _PROCESS_MODULES:
+            module = sys.modules.get(name)
+            if module is not None and getattr(module, "Popen", None) is base:
+                module.Popen = tracked
+        return sum(getattr(sys.modules.get(name), "Popen", None) is tracked
+                   for name in _PROCESS_MODULES)
 
 
 def _follow_url_results(ydl, info):

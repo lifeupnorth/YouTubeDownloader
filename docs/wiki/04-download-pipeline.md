@@ -8,7 +8,7 @@
 
 </details>
 
-This page follows one click of **Download** from validation to the final summary: how links become rows in the Downloads list that download one at a time, how the yt-dlp options are built, how playlists are confirmed, how progress and saved files are reported, how Cancel works, and how the result is shown. Everything between adding the rows and showing the result is in `download_engine.py` and runs without Qt. The threading it relies on (`_post`, `Row.latest`, the progress timer) is in [Architecture and Threading](03-architecture.md); format and ffmpeg choices are in [Formats and ffmpeg](05-formats-ffmpeg.md).
+This page follows one click of **Download** from validation to the final summary: how links become rows in the Downloads list that download a few at a time, how the yt-dlp options are built, how playlists are confirmed, how progress and saved files are reported, how Cancel works, and how the result is shown. Everything between adding the rows and showing the result is in `download_engine.py` and runs without Qt. The threading it relies on (`_post`, `Row.latest`, the progress timer) is in [Architecture and Threading](03-architecture.md); format and ffmpeg choices are in [Formats and ffmpeg](05-formats-ffmpeg.md).
 
 ## End-to-end flow
 
@@ -24,7 +24,7 @@ sequenceDiagram
     M->>M: _start_download checks, adds a Row per link
     M->>L: _look_up(row) for each row, three at a time
     L->>M: _post(_looked_up, row, ...): title, details, thumbnail
-    loop each waiting row, one at a time (_run_next)
+    loop each waiting row, up to 2 at a time by default (_run_next)
         M->>D: _start_worker(_run_row, row, ...)
         D->>J: DownloadJob(row.url, ...).run()
         J->>Y: YoutubeDL(options), add before_dl and after_move hooks
@@ -58,7 +58,7 @@ Sources: [youtube_downloader.py:483-489](https://github.com/lifeupnorth/YouTubeD
 
 ## 2. Several links: the Downloads list
 
-The window does the queueing: a `DownloadJob` downloads one link, and the window runs one job at a time. `_run_next` does nothing while a row is downloading (`_running`) or the window is closing. Otherwise it takes the first row, in list order, that's waiting or still being looked up (a paused row isn't), marks it Downloading with "Starting…", sets the status line to "Downloading 2 of 3…" (counting the rows not finished or paused), logs `▶ <url>`, starts the progress timer and runs `_run_row` on a worker. If no JavaScript runtime was known yet, `_run_row` looks one up with `engine.find_js_runtime()` (it may have been installed since startup). It creates one `DownloadJob` for the row, with the row's link, format, folder and **Whole playlist** setting, the ffmpeg found, the row's own cancel and pause events, and the partial files an earlier pause kept. When it ends, `_download_finished` shows the result in the row and calls `_run_next` again, so a link that fails, or whose playlist isn't confirmed, doesn't stop the others. A `_run_row` that raises (a bug, not a download problem) fails only its row. When no row is left waiting, `_queue_finished` sums up (section 8). Links can be added at any time, also while others download.
+The window does the queueing: a `DownloadJob` downloads one link, and the window runs up to `_parallel` jobs at a time (the "at a time" drop-down: 1, 2 or 3; 2 by default), each on its own thread (see [Architecture and Threading](03-architecture.md#several-downloads-at-once)). `_run_next` does nothing while the window is closing. Otherwise, while fewer than `_parallel` rows are downloading (`_running`), it takes the first row, in list order, that's waiting or still being looked up (a paused row isn't, nor one whose link and folder are those of a download running now: `_clashes`), marks it Downloading with "Starting…", logs `▶ <url>`, starts the progress timer and runs `_run_row` on a worker. The status line then says "Downloading 2 of 3…" for one download (counting the rows not finished or paused), or "Downloading 2 links, 1 waiting…" for several (`_show_running`). If no JavaScript runtime was known yet, `_run_row` looks one up with `engine.find_js_runtime()` (it may have been installed since startup). It creates one `DownloadJob` for the row, with the row's link, format, folder and **Whole playlist** setting, the ffmpeg found, the row's own cancel and pause events, and the partial files an earlier pause kept. When it ends, `_download_finished` shows the result in the row and calls `_run_next` again, so a link that fails, or whose playlist isn't confirmed, doesn't stop the others. A `_run_row` that raises (a bug, not a download problem) fails only its row. When no row is left waiting, `_queue_finished` sums up (section 8). Links can be added at any time, also while others download.
 
 Sources: [download_engine.py:762-809](https://github.com/lifeupnorth/YouTubeDownloader/blob/b369bd269cac691e2563e27391dbd3702c986e50/download_engine.py#L762-L809)
 
@@ -182,8 +182,8 @@ Sources: [download_engine.py:619-633](https://github.com/lifeupnorth/YouTubeDown
 
 ## Limitations
 
-- Only one download runs at a time (`_running`); up to three lookups run alongside it.
-- Closing the window during a download asks first; Yes pauses it and the waiting rows and cancels the lookups, and the window closes once the download has stopped; the next run lists them as Paused. Closing again while it stops, or a crash, leaves its partial files without the list of them (the row comes back Paused all the same, and Resume continues them, but Cancel can't remove them). If that happens during an MP3 or M4A conversion, the half-converted file stays, and a resumed download takes it for a finished one.
+- At most three downloads run at a time (`PARALLEL_CHOICES`), and up to three lookups alongside them. The same link into the same folder never downloads twice at once; two different links whose videos have the same title, into the same folder, could still write the same file.
+- Closing the window during a download asks first; Yes pauses the downloads and the waiting rows and cancels the lookups, and the window closes once every download has stopped; the next run lists them as Paused. Closing again while it stops, or a crash, leaves its partial files without the list of them (the row comes back Paused all the same, and Resume continues them, but Cancel can't remove them). If that happens during an MP3 or M4A conversion, the half-converted file stays, and a resumed download takes it for a finished one.
 - A download resumed after a restart is looked up again, and YouTube may offer it in other formats; if yt-dlp then picks another format, it downloads it from the start and the earlier partial file stays.
 - An ffmpeg that is a `.bat`/`.cmd` wrapper runs under `cmd.exe /C`, so Cancel stops only `cmd.exe`.
 - A row's output folder is what **Save to** said when the link was added (default `~/Downloads`); yt-dlp creates missing folders.
