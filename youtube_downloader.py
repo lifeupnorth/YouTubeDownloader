@@ -155,6 +155,10 @@ QUALITIES = [("Best quality", "mp4_best"), ("2160p (4K)", "2160p"), ("1440p", "1
              ("1080p", "1080p"), ("720p", "720p"), ("480p", "480p")]
 FORMAT_VALUES = [value for _, value in QUALITIES] + ["mp3", "m4a"]
 
+# How many links may download at the same time (a setting), and the default.
+PARALLEL_CHOICES = (1, 2, 3)
+PARALLEL_DEFAULT = 2
+
 # Heights at 96 DPI (Qt scales them); a pill's corner radius in the style
 # sheet is half its height, since Qt draws a square corner when it's more.
 SEARCH, PILL, PRIMARY, CHIP = 40, 36, 44, 30
@@ -1045,9 +1049,12 @@ class YouTubeDownloader(QMainWindow):
         self._format = "mp4_best"
         self.theme_mode = "system"
         self._check_updates = True
+        self._parallel = PARALLEL_DEFAULT  # downloads at the same time
         self._apply_saved_settings()
         self.model = DownloadsModel()
-        self._running = None              # the row downloading now
+        self._running = set()             # the rows downloading now
+        # One playlist question at a time, though several downloads may ask.
+        self._question_lock = threading.Lock()
         self._active_workers = 0
         self._lookup_slots = threading.Semaphore(3)   # lookups at a time
         self._closing = False
@@ -1216,6 +1223,15 @@ class YouTubeDownloader(QMainWindow):
         self.count_lbl = QLabel(objectName="dim")
         list_head.addWidget(self.count_lbl)
         list_head.addStretch()
+        self.parallel = QComboBox(cursor=Qt.PointingHandCursor,
+                                  toolTip="How many links download at the same time")
+        for n in PARALLEL_CHOICES:
+            self.parallel.addItem(f"{n} at a time", n)
+        self.parallel.setCurrentIndex(self.parallel.findData(self._parallel))
+        self.parallel.setFixedHeight(PILL)
+        self.parallel.currentIndexChanged.connect(self._parallel_changed)
+        list_head.addWidget(self.parallel)
+        list_head.addSpacing(8)
         clear = QPushButton("Clear finished", cursor=Qt.PointingHandCursor)
         clear.setFixedHeight(PILL)
         clear.clicked.connect(self._clear_finished)
@@ -1274,9 +1290,10 @@ class YouTubeDownloader(QMainWindow):
 
     # ── Settings ────────────────────────────────────────────────────────────
 
-    # The folder, format, theme and the update switch are remembered (when a
-    # download starts, a theme is chosen, the switch is clicked, and the app
-    # closes). "Whole playlist" always starts off.
+    # The folder, format, theme, downloads at a time and the update switch
+    # are remembered (when a download starts, a theme or how many at a time is
+    # chosen, the switch is clicked, and the app closes). "Whole playlist"
+    # always starts off.
     def _apply_saved_settings(self):
         saved = load_settings()
         if saved.get("format") in FORMAT_VALUES:
@@ -1291,6 +1308,9 @@ class YouTubeDownloader(QMainWindow):
             self._check_updates = saved["check_updates"]
         if saved.get("theme") in {mode for _, mode in THEME_MODES}:
             self.theme_mode = saved["theme"]
+        parallel = saved.get("parallel_downloads")
+        if type(parallel) is int and parallel in PARALLEL_CHOICES:   # (not True)
+            self._parallel = parallel
 
     def _save_settings(self):
         folder = self.path.text().strip()
@@ -1301,7 +1321,8 @@ class YouTubeDownloader(QMainWindow):
                        "folder": folder,
                        "format": self._chosen_format(),
                        "check_updates": self._check_updates,
-                       "theme": self.theme_mode})
+                       "theme": self.theme_mode,
+                       "parallel_downloads": self._parallel})
 
     def _chosen_format(self):
         """The format as engine.format_opts names it, e.g. "720p" or "mp3"."""
@@ -1318,6 +1339,12 @@ class YouTubeDownloader(QMainWindow):
     def _update_switch_toggled(self, checked):
         self._check_updates = checked
         self._save_settings()
+
+    # More at a time starts waiting rows now; fewer lets those running finish.
+    def _parallel_changed(self):
+        self._parallel = self.parallel.currentData()
+        self._save_settings()
+        self._run_next()
 
     # ── Themes ──────────────────────────────────────────────────────────────
 
@@ -1395,9 +1422,10 @@ class YouTubeDownloader(QMainWindow):
         rows = self.model.rows
         done = sum(r.state == "done" for r in rows)
         self.count_lbl.setText(f"{len(rows)} · {done} completed" if rows else "")
-        running = next((r for r in rows if r.state in ACTIVE), None)
-        speed = re.search(r"[\d.]+ MB/s", running.message) if running else None
-        self.speed_lbl.setText(f"⚡ {speed.group()}" if speed else "")
+        # The downloads running now, together.
+        speeds = [float(m.group(1)) for r in rows if r.state in ACTIVE
+                  for m in [re.search(r"([\d.]+) MB/s", r.message)] if m]
+        self.speed_lbl.setText(f"⚡ {sum(speeds):.1f} MB/s" if speeds else "")
 
     # ── Worker threads ──────────────────────────────────────────────────────
 
@@ -1601,24 +1629,45 @@ class YouTubeDownloader(QMainWindow):
             self._history_changed()
         self.model.changed(row)
 
-    # ── Downloading, one link at a time ─────────────────────────────────────
+    # ── Downloading, a few links at a time ──────────────────────────────────
 
+    # Starts waiting rows, in list order, while fewer than "at a time" run.
     def _run_next(self):
-        if self._running is not None or self._closing or self._close_when_stopped:
+        if self._closing or self._close_when_stopped:
             return
-        row = next((r for r in self.model.rows if r.state in ("waiting", "looking")), None)
-        if row is None:
+        while len(self._running) < self._parallel:
+            row = next((r for r in self.model.rows if r.state in ("waiting", "looking")
+                        and not self._clashes(r)), None)
+            if row is None:
+                break
+            self._running.add(row)
+            row.state, row.pct, row.message = "downloading", 0, "Starting…"
+            self.model.changed(row)
+            self._log(f"▶ {row.url}")
+            self._progress_timer.start()
+            self._start_worker(self._run_row, row, self._ffmpeg, self._js_runtime)
+        if self._running:
+            self._show_running()
+        else:   # (a row only waits for one that's running: see _clashes)
             self._queue_finished()
+
+    def _clashes(self, row):
+        """Whether row would write the files of a download running now: the
+        same link into the same folder (in another format, say). It waits."""
+        return any(r.url == row.url and r.folder == row.folder for r in self._running)
+
+    def _show_running(self):
+        """The status line while downloading: "Downloading 2 of 3…" for one
+        link, "Downloading 2 links, 1 waiting…" for several."""
+        if len(self._running) == 1:
+            row, = self._running
+            position = self._position(row)
+            self._set_status(f"Downloading {position}…" if position else "Downloading…",
+                             WARNING)
             return
-        self._running = row
-        row.state, row.pct, row.message = "downloading", 0, "Starting…"
-        self.model.changed(row)
-        position = self._position(row)
-        self._set_status(f"Downloading {position}…" if position else "Downloading…",
-                         WARNING)
-        self._log(f"▶ {row.url}")
-        self._progress_timer.start()
-        self._start_worker(self._run_row, row, self._ffmpeg, self._js_runtime)
+        waiting = sum(r.state in ("waiting", "looking") for r in self.model.rows)
+        self._set_status(f"Downloading {len(self._running)} links"
+                         + (f", {waiting} waiting" if waiting else "") + "…", WARNING)
 
     def _position(self, row):
         """e.g. "2 of 3": where row is among those to download ("" when it's
@@ -1656,22 +1705,24 @@ class YouTubeDownloader(QMainWindow):
 
     # Progress comes often; the newest is shown 10 times a second.
     def _show_progress(self):
-        row = self._running
-        if (row is None or row.latest is None or row.cancel_event.is_set()
-                or row.pause_event.is_set()):
-            return   # after Cancel or Pause, "Canceling…" or "Pausing…" stays
-        pct, message = row.latest
-        row.latest = None
-        row.pct = pct
-        row.state = "processing" if "Processing" in message else "downloading"
-        # "Video 2/5 · Downloading… 42.0%  3.4 MB/s · ETA 0:07": the bar and
-        # the percentage show the rest.
-        row.message = re.sub(r"(Downloading… [\d.]+%|Processing…)\s*", "", message).strip(" ·")
-        self.model.changed(row)
+        for row in list(self._running):
+            if (row.latest is None or row.cancel_event.is_set()
+                    or row.pause_event.is_set()):
+                continue   # after Cancel or Pause, "Canceling…" or "Pausing…" stays
+            pct, message = row.latest
+            row.latest = None
+            row.pct = pct
+            row.state = "processing" if "Processing" in message else "downloading"
+            # "Video 2/5 · Downloading… 42.0%  3.4 MB/s · ETA 0:07": the bar and
+            # the percentage show the rest.
+            row.message = re.sub(r"(Downloading… [\d.]+%|Processing…)\s*", "",
+                                 message).strip(" ·")
+            self.model.changed(row)
 
     def _download_finished(self, row, job):
-        self._running = None
-        self._progress_timer.stop()
+        self._running.discard(row)
+        if not self._running:
+            self._progress_timer.stop()
         # (A resumed download that saves nothing new keeps an earlier file.)
         row.file = (job.last_file if job else None) or row.file
         if job is None or job.outcome is None:   # it crashed, or never started
@@ -1712,7 +1763,8 @@ class YouTubeDownloader(QMainWindow):
         self.model.changed(row)
         self._history_changed()
         if self._close_when_stopped:   # the user is closing the app
-            self.close()
+            if not self._running:   # all of them have stopped
+                self.close()
             return
         self._run_next()
 
@@ -1727,8 +1779,22 @@ class YouTubeDownloader(QMainWindow):
         self._set_status(*queue_summary([r.state for r in finished]))
         QApplication.alert(self)   # flashes the taskbar if the window isn't in front
 
-    # Runs on the download thread; blocks it until the user answers.
+    # Runs on the download thread; blocks it until the user answers. Another
+    # download's question that's showing is answered first: two dialogs on
+    # top of each other wouldn't say which link each is about.
     def _ask_on_main(self, row, title, question):
+        def stopped():
+            return self._closing or row.cancel_event.is_set() or row.pause_event.is_set()
+
+        while not self._question_lock.acquire(timeout=0.1):
+            if stopped():
+                return False
+        try:
+            return self._ask(row, title, question, stopped)
+        finally:
+            self._question_lock.release()
+
+    def _ask(self, row, title, question, stopped):
         answer, done = [], threading.Event()
 
         # If the dialog fails, the error goes to the log and the answer is
@@ -1748,7 +1814,7 @@ class YouTubeDownloader(QMainWindow):
 
         self._post(ask)
         while not done.wait(0.1):
-            if self._closing or row.cancel_event.is_set() or row.pause_event.is_set():
+            if stopped():
                 return False
         return bool(answer and answer[0])
 
@@ -1774,7 +1840,7 @@ class YouTubeDownloader(QMainWindow):
         if row.state in FINISHED:
             return
         row.cancel_event.set()
-        if row is self._running:
+        if row in self._running:
             if row.job is not None:
                 row.job.stop_processes()
             row.message = "Canceling…"
@@ -1793,7 +1859,7 @@ class YouTubeDownloader(QMainWindow):
         if "pause" not in row_actions(row):
             return
         row.pause_event.set()
-        if row is self._running:
+        if row in self._running:
             if row.job is not None:
                 row.job.stop_processes()
             row.message = "Pausing…"
@@ -1848,19 +1914,21 @@ class YouTubeDownloader(QMainWindow):
     # ── Closing ─────────────────────────────────────────────────────────────
 
     def closeEvent(self, event):
-        # During a download, ask first, then pause it and the waiting rows,
-        # and close once it has stopped: the next run lists them as Paused,
-        # to resume. Closing again while that runs (e.g. stuck on a slow
-        # network request) closes right away.
-        if self._running is not None and not self._close_when_stopped:
+        # During a download, ask first, then pause the downloads and the
+        # waiting rows, and close once they have stopped: the next run lists
+        # them as Paused, to resume. Closing again while that runs (e.g.
+        # stuck on a slow network request) closes right away.
+        if self._running and not self._close_when_stopped:
+            question = ("A download is still running.\n\nPause it and close the app? "
+                        "You can resume it the next time." if len(self._running) == 1 else
+                        f"{len(self._running)} downloads are still running.\n\nPause "
+                        "them and close the app? You can resume them the next time.")
             if QMessageBox.question(self, "Download in progress",
-                                    "A download is still running.\n\n"
-                                    "Pause it and close the app? You can resume it "
-                                    "the next time.") != QMessageBox.Yes:
+                                    question) != QMessageBox.Yes:
                 event.ignore()
                 return
-            # The download may have finished while the question was open.
-            if self._running is not None:
+            # The downloads may have finished while the question was open.
+            if self._running:
                 self._close_when_stopped = True
                 for row in self.model.rows:
                     self._pause_row(row)
@@ -1872,7 +1940,7 @@ class YouTubeDownloader(QMainWindow):
             # Stops lookups, and questions waiting. A download still running
             # (closed a second time) is paused, not canceled: its partial
             # files are for Resume.
-            (row.pause_event if row is self._running else row.cancel_event).set()
+            (row.pause_event if row in self._running else row.cancel_event).set()
         self._progress_timer.stop()
         self._save_settings()
         self._save_history()
