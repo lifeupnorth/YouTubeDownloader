@@ -437,14 +437,14 @@ class ThreadSafetyTest(unittest.TestCase):
         self.app._replace_url_text("")
         self.app._restore_placeholder()
         self.assertEqual(self.app._url_text(), ytd.URL_PLACEHOLDER)
-        self.assertEqual(str(entry.cget("fg")), ytd.TEXT_DIM)
+        self.assertEqual(str(entry.cget("fg")), self.app.colors[ytd.TEXT_DIM])
         self.assertEqual(self.app._urls(), [])
         self.app._start_download()
         self.assertEqual(self.dialogs, ["showwarning"])
         self.assertFalse(self.app.is_running)
         self.app._clear_placeholder()             # clicking into the box
         self.assertEqual(self.app._url_text(), "")
-        self.assertEqual(str(entry.cget("fg")), ytd.TEXT)
+        self.assertEqual(str(entry.cget("fg")), self.app.colors[ytd.TEXT])
         entry.insert("1.0", "https://youtu.be/abc")
         self.assertEqual(self.app._url(), "https://youtu.be/abc")
 
@@ -562,7 +562,7 @@ class ThreadSafetyTest(unittest.TestCase):
         self.assertEqual(self.statuses[-1], "✔ Done: 2 saved, 1 link failed")
         self.assertIn("✘ Error: no such video", self.log())
         self.assertEqual(self.dialogs, [], "a partial success has no error pop-up")
-        self.assertEqual(str(self.app.status_lbl.cget("fg")), ytd.WARNING)
+        self.assertEqual(str(self.app.status_lbl.cget("fg")), self.app.colors[ytd.WARNING])
 
     def test_layout_scales_on_a_high_dpi_screen(self):
         # At 192 DPI (200%) the pixel sizes double; fonts scale by themselves.
@@ -570,14 +570,19 @@ class ThreadSafetyTest(unittest.TestCase):
             big = ytd.YouTubeDownloader(update_check=False)
         try:
             self.assertEqual(big.scale, 2.0)
+            width, height = engine.THUMB_SIZE
             for app, factor in ((self.app, 1), (big, 2)):
                 thumb = app.preview_img.master
-                card = app.dl_btn.master
+                body = app.dl_btn.master
                 self.assertEqual((int(thumb.cget("width")), int(thumb.cget("height"))),
-                                 (96 * factor, 54 * factor))
-                self.assertEqual(int(str(card.cget("padx"))), 28 * factor)
-                self.assertEqual(int(card.grid_info()["padx"]), 20 * factor)
+                                 (width * factor, height * factor))
+                self.assertEqual(int(str(body.cget("padx"))), 24 * factor)
+                self.assertEqual(tuple(int(v) for v in app.dl_btn.grid_info()["pady"]),
+                                 (0, 10 * factor))
                 self.assertEqual(app._px(100), 100 * factor)
+                # A Pill scales its own sizes: once, not twice.
+                self.assertEqual(int(str(app.dl_btn.cget("highlightthickness"))),
+                                 2 * factor)
             # Sizes in characters aren't pixels: the URL box stays 1 wide.
             self.assertEqual(int(big.url_entry.cget("width")), 1)
         finally:
@@ -629,7 +634,7 @@ class ThreadSafetyTest(unittest.TestCase):
         text = self.look_up("https://www.youtube.com/watch?v=x", extract=lambda url: {
             "title": "Me at the zoo", "duration": 19, "channel": "jawed"})
         self.assertEqual(text, "Me at the zoo\n0:19 · jawed")
-        self.assertEqual(str(self.app.preview_lbl.cget("fg")), ytd.TEXT)
+        self.assertEqual(str(self.app.preview_lbl.cget("fg")), self.app.colors[ytd.TEXT])
         self.assertEqual(self.violations, [])
 
     def test_preview_follows_url_results_to_a_playlist(self):
@@ -647,7 +652,7 @@ class ThreadSafetyTest(unittest.TestCase):
             raise RuntimeError("Unsupported URL")
         text = self.look_up("https://example.com/nothing", extract=extract)
         self.assertEqual(text, "Couldn't load a preview for this link.")
-        self.assertEqual(str(self.app.preview_lbl.cget("fg")), ytd.TEXT_DIM)
+        self.assertEqual(str(self.app.preview_lbl.cget("fg")), self.app.colors[ytd.TEXT_DIM])
         self.assertEqual(self.look_up("not a link", extract=extract),
                          "That doesn't look like a link.")
 

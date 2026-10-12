@@ -22,24 +22,75 @@ from tkinter import filedialog, messagebox, ttk
 
 import download_engine as engine
 
-# Optional: thumbnails in the link preview need Pillow (see download_engine).
+# Optional: Pillow draws the rounded buttons and the thumbnails in the link
+# preview (see download_engine). Without it buttons are plain rectangles and
+# previews show text only.
 try:
-    from PIL import ImageTk
+    from PIL import Image, ImageDraw, ImageTk
 except ImportError:
-    ImageTk = None
+    Image = ImageDraw = ImageTk = None
 
 
-# ── Color palette ───────────────────────────────────────────────────────────
-BG        = "#0f0f0f"
-SURFACE   = "#1a1a1a"
-SURFACE2  = "#242424"
-ACCENT    = "#ff0000"
-ACCENT_HV = "#cc0000"
-TEXT      = "#ffffff"
-TEXT_DIM  = "#aaaaaa"
-SUCCESS   = "#22c55e"
-WARNING   = "#f59e0b"
-BORDER    = "#333333"
+# ── Themes ──────────────────────────────────────────────────────────────────
+# YouTube's own colors, dark and light. Widgets get roles ("text", "field"…)
+# rather than colors, so a theme change can repaint them all (see _paint and
+# _apply_theme); status messages name a role too.
+THEMES = {
+    "dark": {
+        "bg":           "#0f0f0f",
+        "surface":      "#1f1f1f",   # the log, an empty thumbnail
+        "field":        "#121212",   # text boxes
+        "field_border": "#303030",
+        "blue":         "#3ea6ff",   # the text box being typed in, a switch that's on
+        "button":       "#272727",   # secondary buttons and chips
+        "button_hover": "#3f3f3f",
+        "chip_on":      "#f1f1f1",   # the selected chip
+        "chip_on_text": "#0f0f0f",
+        "accent":       "#ff0033",   # Download, the progress bar, the logo
+        "accent_hover": "#d9002b",
+        "accent_text":  "#ffffff",
+        "divider":      "#303030",
+        "scroll":       "#4d4d4d",   # the log's scroll bar, a switch that's off
+        "text":         "#f1f1f1",
+        "text_dim":     "#aaaaaa",
+        "disabled":     "#717171",
+        "success":      "#2ba640",
+        "warning":      "#f59e0b",
+        "error":        "#ff4e45",
+    },
+    "light": {
+        "bg":           "#ffffff",
+        "surface":      "#f2f2f2",
+        "field":        "#ffffff",
+        "field_border": "#d3d3d3",
+        "blue":         "#065fd4",
+        "button":       "#f2f2f2",
+        "button_hover": "#e5e5e5",
+        "chip_on":      "#0f0f0f",
+        "chip_on_text": "#ffffff",
+        "accent":       "#ff0033",
+        "accent_hover": "#d9002b",
+        "accent_text":  "#ffffff",
+        "divider":      "#e5e5e5",
+        "scroll":       "#c1c1c1",
+        "text":         "#0f0f0f",
+        "text_dim":     "#606060",
+        "disabled":     "#909090",
+        "success":      "#107c41",
+        "warning":      "#b45309",
+        "error":        "#cc0000",
+    },
+}
+
+# The Theme chips: (label, value of theme_var). "system" follows the OS.
+THEME_MODES = [("System", "system"), ("Light", "light"), ("Dark", "dark")]
+
+# Colors for the status line and the preview, as theme roles.
+TEXT     = "text"
+TEXT_DIM = "text_dim"
+SUCCESS  = "success"
+WARNING  = "warning"
+ERROR    = "error"
 
 # Helvetica falls back to Arial on Windows, so use the system UI font there.
 UI_FONT   = "Segoe UI" if sys.platform == "win32" else "Helvetica"
@@ -50,15 +101,16 @@ URL_PLACEHOLDER = "https://www.youtube.com/watch?v=..."
 
 FFMPEG_MISSING_STATUS = "ffmpeg not found, see the log below"
 
-# The Format radio buttons: (label, value for format_opts).
+# The Format chips, in groups: (group, [(label, value for format_opts)]).
 FORMATS = [
-    ("Best MP4 (Video+Audio)", "mp4_best"),
-    ("1080p MP4",              "1080p"),
-    ("720p MP4",               "720p"),
-    ("480p MP4",               "480p"),
-    ("Audio Only (MP3)",       "mp3"),
-    ("Audio Only (M4A)",       "m4a"),
+    ("Video (MP4)", [("Best quality", "mp4_best"),
+                     ("1080p",        "1080p"),
+                     ("720p",         "720p"),
+                     ("480p",         "480p")]),
+    ("Audio only",  [("MP3",          "mp3"),
+                     ("M4A",          "m4a")]),
 ]
+FORMAT_VALUES = [value for _, chips in FORMATS for _, value in chips]
 
 
 def settings_path():
@@ -134,6 +186,99 @@ def work_area(widget):
             pass
     # Elsewhere, leave room for a panel or dock.
     return 0, 0, widget.winfo_screenwidth(), widget.winfo_screenheight() - 40
+
+
+def system_theme(widget):
+    """"dark" or "light": the theme the operating system uses for apps, or
+    None if it can't tell."""
+    if sys.platform == "win32":
+        try:
+            import winreg
+            with winreg.OpenKey(winreg.HKEY_CURRENT_USER, r"Software\Microsoft\Windows"
+                                r"\CurrentVersion\Themes\Personalize") as key:
+                light = winreg.QueryValueEx(key, "AppsUseLightTheme")[0]
+        except OSError:   # e.g. Windows 7, which has no dark mode
+            return None
+        return "light" if light else "dark"
+    if sys.platform == "darwin":
+        try:
+            dark = widget.tk.call("::tk::unsupported::MacWindowStyle", "isdark", widget)
+        except tk.TclError:   # Tk before 8.6.10
+            return None
+        return "dark" if widget.tk.getboolean(dark) else "light"
+    # GNOME, and the desktops that follow its setting.
+    try:
+        scheme = subprocess.run(
+            ["gsettings", "get", "org.gnome.desktop.interface", "color-scheme"],
+            capture_output=True, text=True, timeout=2).stdout
+    except (OSError, subprocess.SubprocessError):
+        return None
+    if "dark" in scheme:
+        return "dark"
+    return "light" if "light" in scheme or "default" in scheme else None
+
+
+def set_title_bar_theme(window, dark):
+    """On Windows 10 and 11, a dark or light title bar to match the window."""
+    if sys.platform != "win32":
+        return
+    try:
+        hwnd = ctypes.windll.user32.GetParent(window.winfo_id())
+        value = ctypes.c_int(int(dark))
+        DWMWA_USE_IMMERSIVE_DARK_MODE = 20
+        ctypes.windll.dwmapi.DwmSetWindowAttribute(
+            hwnd, DWMWA_USE_IMMERSIVE_DARK_MODE, ctypes.byref(value), ctypes.sizeof(value))
+    except (AttributeError, OSError):   # older Windows: the title bar stays light
+        pass
+
+
+# Pillow draws at 4 times the size and shrinks the result, which smooths the
+# rounded edges (Tk itself can't draw them smoothly).
+SMOOTH = 4
+
+
+def rounded(image, radius):
+    """A copy of a Pillow image with its corners rounded off (transparent)."""
+    mask = Image.new("L", (image.width * SMOOTH, image.height * SMOOTH), 0)
+    ImageDraw.Draw(mask).rounded_rectangle(
+        (0, 0, mask.width - 1, mask.height - 1), radius * SMOOTH, fill=255)
+    image = image.convert("RGBA")
+    image.putalpha(mask.resize(image.size, Image.LANCZOS))
+    return image
+
+
+def pill_image(width, height, color, radius=None):
+    """A rounded rectangle; with no radius, round ends (a pill)."""
+    return rounded(Image.new("RGB", (width, height), color),
+                   height // 2 if radius is None else radius)
+
+
+def logo_image(height):
+    """The header's logo: a white play triangle on a red rounded rectangle."""
+    width = round(height * 1.4)
+    big = Image.new("RGBA", (width * SMOOTH, height * SMOOTH), (0, 0, 0, 0))
+    draw = ImageDraw.Draw(big)
+    draw.rounded_rectangle((0, 0, big.width - 1, big.height - 1),
+                           round(height * 0.28) * SMOOTH, fill=THEMES["dark"]["accent"])
+    x, y, size = big.width / 2, big.height / 2, big.height * 0.42
+    draw.polygon([(x - size * 0.38, y - size / 2), (x + size * 0.5, y),
+                  (x - size * 0.38, y + size / 2)], fill="white")
+    return big.resize((width, height), Image.LANCZOS)
+
+
+def switch_image(height, on, track, knob, gap):
+    """An on/off switch: a knob at one end of a pill-shaped track, then gap
+    transparent pixels (between it and its label)."""
+    width = round(height * 1.75)
+    big = Image.new("RGBA", ((width + gap) * SMOOTH, height * SMOOTH), (0, 0, 0, 0))
+    draw = ImageDraw.Draw(big)
+    draw.rounded_rectangle((0, 0, width * SMOOTH - 1, height * SMOOTH - 1),
+                           height * SMOOTH // 2, fill=track)
+    inset = max(2, height // 6) * SMOOTH
+    size = height * SMOOTH - 2 * inset
+    x = width * SMOOTH - inset - size if on else inset
+    draw.ellipse((x, inset, x + size, inset + size), fill=knob)
+    return big.resize((width + gap, height), Image.LANCZOS)
 
 
 # A word that looks like a link without "https://": a host name and,
@@ -212,11 +357,158 @@ def ffmpeg_help(startup=False):
             f"MP3/M4A, but it wasn't found.\n\n{_ffmpeg_install_hint()}\n\n{then}")
 
 
+# A Pill's colors, by kind: (fill, fill under the mouse, text) as theme roles.
+PILL_KINDS = {
+    "primary":   ("accent", "accent_hover", "accent_text"),
+    "secondary": ("button", "button_hover", "text"),
+    "selected":  ("chip_on", "chip_on", "chip_on_text"),
+}
+
+
+class Pill(tk.Label):
+    """A YouTube-style button: its text on a rounded shape that Pillow draws
+    with smooth edges (without Pillow, a plain rectangle). Like a tk.Button
+    it has a command, invoke() and a "disabled" state, and Space or Enter
+    clicks it once Tab has moved to it.
+
+    kind "primary" is red, "secondary" gray; a selected one is inverted, like
+    YouTube's chips (select()). radius None gives round ends. With
+    stretch=True it's as wide as its grid cell rather than its text. Sizes
+    are at 96 DPI; the pill scales them itself (app._px)."""
+
+    def __init__(self, app, master, text, command=None, *, kind="secondary",
+                 font=(UI_FONT, 10), padx=16, pady=7, radius=None, stretch=False):
+        super().__init__(master, text=text, font=font, compound="center", bd=0,
+                         highlightthickness=app._px(2), takefocus=1)
+        self.app, self.command, self.kind = app, command, kind
+        self.selected = False
+        self._pad = (app._px(padx), app._px(pady))
+        self._radius = None if radius is None else app._px(radius)
+        self._hover = False
+        self._state = "normal"   # or "disabled" (see configure)
+        self._width = None    # with stretch: the grid cell's width
+        self._image = None    # keeps the PhotoImage alive
+        self.bind("<Enter>", lambda e: self._set_hover(True))
+        self.bind("<Leave>", lambda e: self._set_hover(False))
+        self.bind("<ButtonRelease-1>", self._released)
+        self.bind("<space>", self._key)
+        self.bind("<Return>", self._key)
+        if stretch:
+            self.bind("<Configure>", self._resized)
+        app._pills.append(self)
+        self.repaint()
+
+    # config(text=..., state=..., command=...) and cget("state") as for a
+    # tk.Button. The pill keeps its state itself: a disabled Tk label would
+    # draw its image grayed out with a coarse stipple; a pill turns gray.
+    def configure(self, cnf=None, **kw):
+        kw = {**(cnf or {}), **kw}
+        if not kw:
+            return super().configure()
+        if "command" in kw:
+            self.command = kw.pop("command")
+        repaint = {"text", "font"} & kw.keys()
+        if "state" in kw:
+            self._state = str(kw.pop("state"))
+            repaint = True
+        result = super().configure(kw) if kw else None
+        if repaint:
+            self.repaint()
+        return result
+
+    config = configure
+
+    def cget(self, key):
+        return self._state if key == "state" else super().cget(key)
+
+    __getitem__ = cget
+
+    def invoke(self):
+        if self.command and self._state != "disabled":
+            return self.command()
+        return None
+
+    def select(self, selected=True):
+        if selected != self.selected:
+            self.selected = selected
+            self.repaint()
+
+    def _set_hover(self, hover):
+        self._hover = hover
+        self.repaint()
+
+    def _released(self, event):
+        # Like a button: only if the mouse is still over it.
+        if 0 <= event.x < self.winfo_width() and 0 <= event.y < self.winfo_height():
+            self.invoke()
+
+    def _key(self, _e):
+        self.invoke()
+        return "break"
+
+    def _resized(self, event):
+        width = event.width - 2 * int(str(self.cget("highlightthickness")))
+        if width > 0 and width != self._width:
+            self._width = width
+            self.repaint()
+
+    def repaint(self):
+        colors = self.app.colors
+        disabled = self._state == "disabled"
+        fill, hover, fg = PILL_KINDS["selected" if self.selected else self.kind]
+        fill = colors["button" if disabled else hover if self._hover else fill]
+        fg = colors["disabled" if disabled else fg]
+        bg = colors["bg"]
+        options = {"fg": fg, "disabledforeground": fg, "highlightbackground": bg,
+                   "highlightcolor": colors["blue"],
+                   "cursor": "arrow" if disabled else "hand2"}
+        padx, pady = self._pad
+        if ImageTk is None:
+            super().configure(bg=fill, padx=padx, pady=pady, **options)
+            return
+        font, text = self.cget("font"), self.cget("text")
+        width = self._width or int(self.tk.call("font", "measure", font, text)) + 2 * padx
+        height = int(self.tk.call("font", "metrics", font, "-linespace")) + 2 * pady
+        self._image = self.app._photo(pill_image, width, height, fill, self._radius)
+        super().configure(image=self._image, bg=bg, padx=0, pady=0, **options)
+
+
+class Toggle(Pill):
+    """A YouTube-style on/off switch, then its label, for a BooleanVar.
+    Clicking it (or Space or Enter) flips the variable, then calls command.
+    Without Pillow it's a check box character before the label."""
+
+    def __init__(self, app, master, text, variable, command=None, *, font=(UI_FONT, 10)):
+        self.variable, self._label, self._changed = variable, text, command
+        super().__init__(app, master, text, self._flip, font=font)
+        variable.trace_add("write", lambda *_: self.repaint())
+
+    def _flip(self):
+        self.variable.set(not self.variable.get())
+        if self._changed:
+            self._changed()
+
+    def repaint(self):
+        colors = self.app.colors
+        on = bool(self.variable.get())
+        options = {"bg": colors["bg"], "fg": colors["text"], "padx": 0, "pady": 0,
+                   "highlightbackground": colors["bg"], "highlightcolor": colors["blue"],
+                   "cursor": "hand2"}
+        if ImageTk is None:
+            tk.Label.configure(self, text=("☑ " if on else "☐ ") + self._label, **options)
+            return
+        height = round(int(self.tk.call("font", "metrics", self.cget("font"),
+                                         "-linespace")) * 0.8)
+        self._image = self.app._photo(switch_image, height, on,
+                                      colors["blue" if on else "scroll"],
+                                      "white", self.app._px(8))
+        tk.Label.configure(self, image=self._image, compound="left", **options)
+
+
 class YouTubeDownloader(tk.Tk):
     def __init__(self, *, update_check=True):
         super().__init__()
         self.title("YT Downloader")
-        self.configure(bg=BG)
         # How much bigger than 96 DPI the screen is, when the app is DPI aware
         # (1.0 otherwise: Windows then reports 96 DPI and stretches the window).
         # (Tk reports e.g. 96.08 for 96: a difference that small isn't scaling.)
@@ -249,14 +541,30 @@ class YouTubeDownloader(tk.Tk):
         self._preview_token = 0        # newest lookup; older answers are dropped
         self._preview_cancel = threading.Event()   # set to stop the running lookup
         self._preview_image = None     # keeps the PhotoImage alive
+        self._preview_dim   = True     # a hint rather than a video's details
+        self._thumb_placeholder = None # the empty thumbnail (with Pillow)
         self.update_check_var = tk.BooleanVar(value=True)
+        # Theme: "system", "light" or "dark"; see _apply_theme.
+        self.theme_var     = tk.StringVar(value="system")
+        self._painted = []             # (widget, {option: theme role})
+        self._pills   = []
+        self._fields  = []             # the text boxes' border frames
+        self._focused_fields = set()
+        self._photos  = {}             # Pill and Toggle images (see _photo)
+        self._status_role = TEXT_DIM
+        self._theme_after = None       # pending check of the system's theme
         self._apply_saved_settings()
+        self._shown_theme = self._theme_name()
+        self.colors = THEMES[self._shown_theme]
 
         self._build_ui()
         if self.scale != 1.0:
             self._scale_layout(self)
         self._fit_window()
+        set_title_bar_theme(self, self._shown_theme == "dark")   # now that it exists
         self.protocol("WM_DELETE_WINDOW", self._on_close)
+        if sys.platform in ("win32", "darwin"):   # asking is cheap there
+            self._theme_after = self.after(2000, self._watch_system_theme)
 
         if not engine.YT_DLP_AVAILABLE:
             self.after(300, self._prompt_install)
@@ -279,42 +587,57 @@ class YouTubeDownloader(tk.Tk):
 
     def _build_ui(self):
         self.columnconfigure(0, weight=1)
+        paint = self._paint
 
-        # ── Header ──
-        hdr = tk.Frame(self, bg=SURFACE, pady=16)
+        # ── Header: the logo on the left, the theme on the right ──
+        hdr = paint(tk.Frame(self, padx=20, pady=10), bg="bg")
         hdr.grid(row=0, column=0, sticky="ew")
-        hdr.columnconfigure(0, weight=1)
+        hdr.columnconfigure(1, weight=1)
 
-        tk.Label(hdr, text="▶  YT Downloader", font=(UI_FONT, 20, "bold"),
-                 bg=SURFACE, fg=ACCENT).grid(row=0, column=0)
-        self.powered_lbl = tk.Label(hdr, text=self._powered_by_text(),
-                                    font=(UI_FONT, 9), bg=SURFACE, fg=TEXT_DIM)
-        self.powered_lbl.grid(row=1, column=0, pady=(2, 0))
+        if ImageTk is not None:
+            self._logo = ImageTk.PhotoImage(logo_image(self._px(30)), master=self)
+            logo = paint(tk.Label(hdr, image=self._logo, bd=0), bg="bg")
+        else:
+            logo = paint(tk.Label(hdr, text="▶", font=(UI_FONT, 20, "bold")),
+                         bg="bg", fg="accent")
+        logo.grid(row=0, column=0, rowspan=2, padx=(0, 10))
+        paint(tk.Label(hdr, text="YT Downloader", font=(UI_FONT, 15, "bold")),
+              bg="bg", fg="text").grid(row=0, column=1, sticky="sw")
+        self.powered_lbl = paint(tk.Label(hdr, text=self._powered_by_text(),
+                                          font=(UI_FONT, 9)), bg="bg", fg="text_dim")
+        self.powered_lbl.grid(row=1, column=1, sticky="nw")
+
+        themes = paint(tk.Frame(hdr), bg="bg")
+        themes.grid(row=0, column=2, rowspan=2, sticky="e")
+        paint(tk.Label(themes, text="Theme", font=(UI_FONT, 9)),
+              bg="bg", fg="text_dim").grid(row=0, column=0, padx=(0, 4))
+        self.theme_chips = {}
+        for col, (label, mode) in enumerate(THEME_MODES, 1):
+            chip = Pill(self, themes, label, lambda m=mode: self._choose_theme(m),
+                        font=(UI_FONT, 9), padx=12, pady=4, radius=8)
+            chip.grid(row=0, column=col)
+            self.theme_chips[mode] = chip
         if engine.app_version():   # only a release .exe checks
-            tk.Checkbutton(hdr, text="Check for updates at startup",
-                           variable=self.update_check_var, font=(UI_FONT, 8),
-                           bg=SURFACE, fg=TEXT_DIM, selectcolor=SURFACE2,
-                           activebackground=SURFACE, activeforeground=TEXT,
-                           cursor="hand2", command=self._save_settings,
-                           ).grid(row=2, column=0)
+            Toggle(self, hdr, "Check for updates at startup", self.update_check_var,
+                   self._save_settings, font=(UI_FONT, 8),
+                   ).grid(row=2, column=2, sticky="e", pady=(4, 0))
 
-        # ── Main card ──
-        card = tk.Frame(self, bg=SURFACE, padx=28, pady=24,
-                        highlightbackground=BORDER, highlightthickness=1)
-        card.grid(row=1, column=0, sticky="nsew", padx=20, pady=16)
-        card.columnconfigure(1, weight=1)
+        paint(tk.Frame(self, height=1), bg="divider").grid(row=1, column=0, sticky="ew")
+
+        # ── The controls ──
+        body = paint(tk.Frame(self, padx=24, pady=16), bg="bg")
+        body.grid(row=2, column=0, sticky="nsew")
+        body.columnconfigure(0, weight=1)
 
         row = 0
 
-        # URL
-        tk.Label(card, text="YouTube URLs (one per line)", font=(UI_FONT, 11, "bold"),
-                 bg=SURFACE, fg=TEXT).grid(row=row, column=0, columnspan=2,
-                                           sticky="w", pady=(0, 6))
+        # URL, in a box like YouTube's search box
+        self._heading(body, "YouTube URLs (one per line)").grid(
+            row=row, column=0, columnspan=2, sticky="w", pady=(0, 6))
         row += 1
 
-        url_frame = tk.Frame(card, bg=SURFACE2, highlightbackground=ACCENT,
-                             highlightthickness=1)
-        url_frame.grid(row=row, column=0, columnspan=2, sticky="ew", pady=(0, 8))
+        url_frame = tk.Frame(body, highlightthickness=1)
+        url_frame.grid(row=row, column=0, sticky="ew", pady=(0, 12))
         url_frame.columnconfigure(0, weight=1)
 
         # Several links can go in, one per line; they download in order. The
@@ -322,9 +645,8 @@ class YouTubeDownloader(tk.Tk):
         # width=1: it fills the row, and the window's size comes from the
         # other controls rather than from a default of 80 characters.
         self.url_entry = tk.Text(url_frame, height=1, width=1, wrap="none",
-                                 font=(UI_FONT, 12), bg=SURFACE2, fg=TEXT,
-                                 insertbackground=TEXT, relief="flat", bd=0,
-                                 padx=8, pady=8, highlightthickness=0, undo=True)
+                                 font=(UI_FONT, 12), relief="flat", bd=0,
+                                 padx=12, pady=8, highlightthickness=0, undo=True)
         self.url_entry.grid(row=0, column=0, sticky="ew")
         self._restore_placeholder()
         self.url_entry.bind("<FocusIn>",  self._clear_placeholder)
@@ -335,114 +657,110 @@ class YouTubeDownloader(tk.Tk):
         self.url_entry.bind("<Shift-Return>", lambda e: None)   # a new line
         self.url_entry.bind("<Tab>", self._focus_next)
         self.url_entry.bind("<Shift-Tab>", self._focus_prev)
+        self._field(url_frame, self.url_entry)
 
-        btn_paste = tk.Button(url_frame, text="Paste", font=(UI_FONT, 9),
-                              bg=ACCENT, fg=TEXT, relief="flat", bd=0,
-                              padx=10, cursor="hand2",
-                              command=self._paste_url)
-        btn_paste.grid(row=0, column=1, padx=(0, 2), pady=2)
+        Pill(self, body, "Paste", self._paste_url, pady=9).grid(
+            row=row, column=1, sticky="n", padx=(8, 0))
         row += 1
 
-        # Preview of the link: thumbnail, title, length and channel
-        preview = tk.Frame(card, bg=SURFACE)
-        preview.grid(row=row, column=0, columnspan=2, sticky="ew", pady=(0, 14))
+        # Preview of the link, like a video in a YouTube list: thumbnail,
+        # then the title and, dimmer, the length and channel
+        preview = paint(tk.Frame(body), bg="bg")
+        preview.grid(row=row, column=0, columnspan=2, sticky="ew", pady=(0, 16))
         preview.columnconfigure(1, weight=1)
-        thumb_box = tk.Frame(preview, bg=SURFACE2, width=engine.THUMB_SIZE[0],
-                             height=engine.THUMB_SIZE[1])
-        thumb_box.grid(row=0, column=0, sticky="nw")   # fixed size, image or not
-        self.preview_img = tk.Label(thumb_box, bg=SURFACE2, bd=0)
+        preview.rowconfigure(1, weight=1)
+        # Without Pillow there's no image, so the box itself shows the shape.
+        thumb_bg = "bg" if ImageTk is not None else "surface"
+        thumb_box = paint(tk.Frame(preview, width=engine.THUMB_SIZE[0],
+                                   height=engine.THUMB_SIZE[1]), bg=thumb_bg)
+        thumb_box.grid(row=0, column=0, rowspan=2, sticky="nw")   # fixed size, image or not
+        self.preview_img = paint(tk.Label(thumb_box, bd=0), bg=thumb_bg)
         self.preview_img.place(relx=0.5, rely=0.5, anchor="center")
-        self.preview_lbl = tk.Label(preview, textvariable=self.preview_text,
-                                    font=(UI_FONT, 10), bg=SURFACE, fg=TEXT_DIM,
-                                    justify="left", anchor="nw", wraplength=400)
-        self.preview_lbl.grid(row=0, column=1, sticky="new", padx=(12, 0))
-        self.preview_lbl.bind("<Configure>", lambda e: self.preview_lbl.config(
-            wraplength=max(e.width - self._px(4), self._px(100))))
+        self.preview_title = tk.StringVar()
+        self.preview_details = tk.StringVar()
+        self.preview_lbl = paint(tk.Label(preview, textvariable=self.preview_title,
+                                          justify="left", anchor="nw", wraplength=400),
+                                 bg="bg")
+        self.preview_lbl.grid(row=0, column=1, sticky="new", padx=(14, 0))
+        details = paint(tk.Label(preview, textvariable=self.preview_details,
+                                 font=(UI_FONT, 9), justify="left", anchor="nw",
+                                 wraplength=400), bg="bg", fg="text_dim")
+        details.grid(row=1, column=1, sticky="new", padx=(14, 0), pady=(2, 0))
+        for label in (self.preview_lbl, details):
+            label.bind("<Configure>", lambda e: e.widget.config(
+                wraplength=max(e.width - self._px(4), self._px(100))))
+        self._set_preview(PREVIEW_HINT, dim=True)
         row += 1
 
-        # Format
-        tk.Label(card, text="Format", font=(UI_FONT, 11, "bold"),
-                 bg=SURFACE, fg=TEXT).grid(row=row, column=0, columnspan=2,
-                                           sticky="w", pady=(0, 8))
+        # Format: chips, like those at the top of YouTube's home page
+        fmt_head = paint(tk.Frame(body), bg="bg")
+        fmt_head.grid(row=row, column=0, columnspan=2, sticky="ew", pady=(0, 6))
+        fmt_head.columnconfigure(0, weight=1)
+        self._heading(fmt_head, "Format").grid(row=0, column=0, sticky="w")
+        Toggle(self, fmt_head, "Whole playlist", self.playlist_var,
+               self._schedule_preview).grid(row=0, column=1, sticky="e")
         row += 1
 
-        fmt_frame = tk.Frame(card, bg=SURFACE)
-        fmt_frame.grid(row=row, column=0, columnspan=2, sticky="ew", pady=(0, 16))
-
-        for i, (label, val) in enumerate(FORMATS):
-            col, rrow = divmod(i, 3)
-            rb = tk.Radiobutton(fmt_frame, text=label, variable=self.format_var,
-                                value=val, font=(UI_FONT, 10),
-                                bg=SURFACE, fg=TEXT_DIM, selectcolor=SURFACE2,
-                                activebackground=SURFACE, activeforeground=TEXT,
-                                cursor="hand2")
-            rb.grid(row=rrow, column=col, sticky="w", padx=(0, 20), pady=2)
-        # The radio buttons fill columns 0-1; column 2 is free.
-        tk.Checkbutton(fmt_frame, text="Whole playlist",
-                       variable=self.playlist_var, font=(UI_FONT, 10),
-                       bg=SURFACE, fg=TEXT_DIM, selectcolor=SURFACE2,
-                       activebackground=SURFACE, activeforeground=TEXT,
-                       cursor="hand2", command=self._schedule_preview,
-                       ).grid(row=0, column=2, sticky="w", pady=2)
+        chips = paint(tk.Frame(body), bg="bg")
+        chips.grid(row=row, column=0, columnspan=2, sticky="w", pady=(0, 14))
+        self.format_chips = {}
+        for group_row, (group, choices) in enumerate(FORMATS):
+            paint(tk.Label(chips, text=group, font=(UI_FONT, 9)), bg="bg", fg="text_dim",
+                  ).grid(row=group_row, column=0, sticky="w", padx=(0, 12))
+            line = paint(tk.Frame(chips), bg="bg")
+            line.grid(row=group_row, column=1, sticky="w", pady=1)
+            for col, (label, value) in enumerate(choices):
+                chip = Pill(self, line, label, lambda v=value: self.format_var.set(v),
+                            padx=12, pady=5, radius=8)
+                chip.grid(row=0, column=col, padx=(0, 4))
+                self.format_chips[value] = chip
+        self.format_var.trace_add("write", lambda *_: self._select_format_chip())
         row += 1
 
         # Output folder
-        tk.Label(card, text="Save To", font=(UI_FONT, 11, "bold"),
-                 bg=SURFACE, fg=TEXT).grid(row=row, column=0, columnspan=2,
-                                           sticky="w", pady=(0, 8))
+        self._heading(body, "Save to").grid(row=row, column=0, columnspan=2,
+                                            sticky="w", pady=(0, 6))
         row += 1
 
-        path_frame = tk.Frame(card, bg=SURFACE)
-        path_frame.grid(row=row, column=0, columnspan=2, sticky="ew", pady=(0, 20))
+        path_frame = tk.Frame(body, highlightthickness=1)
+        path_frame.grid(row=row, column=0, sticky="ew", pady=(0, 20))
         path_frame.columnconfigure(0, weight=1)
+        path_entry = paint(tk.Entry(path_frame, textvariable=self.download_path,
+                                    font=(UI_FONT, 10), relief="flat", bd=0,
+                                    highlightthickness=0), fg="text")
+        path_entry.grid(row=0, column=0, sticky="ew", padx=10, pady=8)
+        self._field(path_frame, path_entry)
 
-        path_entry = tk.Entry(path_frame, textvariable=self.download_path,
-                              font=(UI_FONT, 10), bg=SURFACE2, fg=TEXT,
-                              insertbackground=TEXT, relief="flat", bd=6)
-        path_entry.grid(row=0, column=0, sticky="ew")
-
-        tk.Button(path_frame, text="Browse", font=(UI_FONT, 9),
-                  bg=SURFACE2, fg=TEXT_DIM, relief="flat", bd=0,
-                  padx=10, cursor="hand2",
-                  command=self._browse_folder).grid(row=0, column=1, padx=(6, 0))
+        Pill(self, body, "Browse", self._browse_folder).grid(
+            row=row, column=1, sticky="n", padx=(8, 0))
         row += 1
 
         # Download button
-        self.dl_btn = tk.Button(card, text="⬇  Download",
-                                font=(UI_FONT, 13, "bold"),
-                                bg=ACCENT, fg=TEXT, relief="flat", bd=0,
-                                pady=12, cursor="hand2",
-                                command=self._start_download,
-                                activebackground=ACCENT_HV, activeforeground=TEXT)
-        self.dl_btn.grid(row=row, column=0, columnspan=2, sticky="ew", pady=(0, 8))
+        self.dl_btn = Pill(self, body, "⬇  Download", self._start_download,
+                           kind="primary", font=(UI_FONT, 12, "bold"), pady=10,
+                           stretch=True)
+        self.dl_btn.grid(row=row, column=0, columnspan=2, sticky="ew", pady=(0, 10))
         row += 1
 
-        # Progress bar
-        style = ttk.Style(self)
-        style.theme_use("clam")
-        style.configure("Red.Horizontal.TProgressbar",
-                        troughcolor=SURFACE2, background=ACCENT,
-                        bordercolor=BORDER, lightcolor=ACCENT, darkcolor=ACCENT)
-
-        self.progress = ttk.Progressbar(card, variable=self.progress_var,
-                                        maximum=100, length=400,
-                                        style="Red.Horizontal.TProgressbar")
-        self.progress.grid(row=row, column=0, columnspan=2, sticky="ew", pady=(0, 6))
+        # Progress bar: thin and red, like a YouTube player's (ttk's can't
+        # be made this thin)
+        self.progress = paint(tk.Frame(body, height=4), bg="button")
+        self.progress.grid(row=row, column=0, columnspan=2, sticky="ew", pady=(0, 10))
+        bar = paint(tk.Frame(self.progress), bg="accent")
+        self.progress_var.trace_add("write", lambda *_: bar.place(
+            relheight=1, relwidth=min(max(self.progress_var.get(), 0), 100) / 100))
         row += 1
 
         # Status label, with an "Open folder" button after a download
-        status_row = tk.Frame(card, bg=SURFACE)
+        status_row = paint(tk.Frame(body), bg="bg")
         status_row.grid(row=row, column=0, columnspan=2, sticky="ew")
         status_row.columnconfigure(0, weight=1)
-        self.status_lbl = tk.Label(status_row, textvariable=self.status_var,
-                                   font=(UI_FONT, 10), bg=SURFACE, fg=TEXT_DIM,
-                                   wraplength=580, justify="left", anchor="w")
+        self.status_lbl = paint(tk.Label(status_row, textvariable=self.status_var,
+                                         font=(UI_FONT, 10), wraplength=580,
+                                         justify="left", anchor="w"), bg="bg")
         self.status_lbl.grid(row=0, column=0, sticky="ew")
-        self.open_btn = tk.Button(status_row, text="📂  Open folder",
-                                  font=(UI_FONT, 9), bg=SURFACE2, fg=TEXT,
-                                  relief="flat", bd=0, padx=10, cursor="hand2",
-                                  activebackground=BORDER, activeforeground=TEXT,
-                                  command=self._open_folder)
+        self.open_btn = Pill(self, status_row, "📂  Open folder", self._open_folder,
+                             font=(UI_FONT, 9), padx=12, pady=4)
         self.open_btn.grid(row=0, column=1, sticky="ne", padx=(8, 0))
         self.open_btn.grid_remove()   # shown once a download has saved a file
         # Wrap long messages at the label's current width, not a fixed one.
@@ -451,29 +769,141 @@ class YouTubeDownloader(tk.Tk):
         row += 1
 
         # ── Log box ──
-        log_frame = tk.Frame(self, bg=BG)
-        log_frame.grid(row=2, column=0, sticky="nsew", padx=20, pady=(0, 16))
+        log_frame = paint(tk.Frame(self, padx=24), bg="bg")
+        log_frame.grid(row=3, column=0, sticky="nsew", pady=(0, 16))
         log_frame.columnconfigure(0, weight=1)
         log_frame.rowconfigure(1, weight=1)
-        self.rowconfigure(2, weight=1)
+        self.rowconfigure(3, weight=1)
 
-        tk.Label(log_frame, text="Log", font=(UI_FONT, 9, "bold"),
-                 bg=BG, fg=TEXT_DIM).grid(row=0, column=0, sticky="w")
+        paint(tk.Label(log_frame, text="Log", font=(UI_FONT, 9, "bold")),
+              bg="bg", fg="text_dim").grid(row=0, column=0, sticky="w", pady=(0, 4))
 
-        self.log_box = tk.Text(log_frame, height=6, width=1, font=(MONO_FONT, 9),
-                               bg=SURFACE2, fg=TEXT_DIM, relief="flat",
-                               state="disabled", wrap="word")
+        self.log_box = paint(tk.Text(log_frame, height=6, width=1, font=(MONO_FONT, 9),
+                                     relief="flat", bd=0, padx=10, pady=8,
+                                     highlightthickness=0, state="disabled",
+                                     wrap="word"), bg="surface", fg="text_dim")
         self.log_box.grid(row=1, column=0, sticky="nsew")
 
-        sb = tk.Scrollbar(log_frame, command=self.log_box.yview, bg=SURFACE)
-        sb.grid(row=1, column=1, sticky="ns")
+        sb = ttk.Scrollbar(log_frame, command=self.log_box.yview,
+                           style="Log.Vertical.TScrollbar")
+        sb.grid(row=1, column=1, sticky="ns", padx=(2, 0))
         self.log_box.configure(yscrollcommand=sb.set)
 
-    # The last folder and format are remembered (when a download starts and
-    # when the app closes). The "Whole playlist" box always starts unticked.
+        self._apply_theme()
+
+    def _heading(self, master, text):
+        return self._paint(tk.Label(master, text=text, font=(UI_FONT, 11, "bold")),
+                           bg="bg", fg="text")
+
+    # Text boxes look like YouTube's search box: a thin border that turns
+    # blue while the box has the cursor.
+    def _field(self, frame, box):
+        self._paint(frame, bg="field")
+        self._paint(box, bg="field", insertbackground="text")
+        self._fields.append(frame)
+        box.bind("<FocusIn>", lambda e: self._paint_field(frame, True), add="+")
+        box.bind("<FocusOut>", lambda e: self._paint_field(frame, False), add="+")
+
+    def _paint_field(self, frame, focused):
+        if focused:
+            self._focused_fields.add(frame)
+        else:
+            self._focused_fields.discard(frame)
+        color = self.colors["blue" if focused else "field_border"]
+        frame.config(highlightbackground=color, highlightcolor=color)
+
+    def _select_format_chip(self):
+        for value, chip in self.format_chips.items():
+            chip.select(value == self.format_var.get())
+
+    # ── Themes ──────────────────────────────────────────────────────────────
+
+    def _paint(self, widget, **roles):
+        """Colors widget's options from theme roles, now and after every
+        theme change, e.g. _paint(label, bg="bg", fg="text_dim")."""
+        self._painted.append((widget, roles))
+        widget.configure({option: self.colors[role] for option, role in roles.items()})
+        return widget
+
+    def _photo(self, draw, *args):
+        """draw(*args) as a PhotoImage. They're kept: Pills and Toggles
+        draw the same few shapes again and again (e.g. on hover)."""
+        key = (draw, *args)
+        if key not in self._photos:
+            if len(self._photos) > 200:   # e.g. after much resizing
+                self._photos.clear()      # (each Pill keeps its own image)
+            self._photos[key] = ImageTk.PhotoImage(draw(*args), master=self)
+        return self._photos[key]
+
+    def _theme_name(self):
+        """The theme to show: the one chosen, or else the system's (dark,
+        the app's original look, if the system doesn't say)."""
+        mode = self.theme_var.get()
+        return mode if mode in THEMES else system_theme(self) or "dark"
+
+    def _choose_theme(self, mode):
+        self.theme_var.set(mode)
+        self._apply_theme()
+        self._save_settings()
+
+    # Repaints every widget in the theme's colors.
+    def _apply_theme(self):
+        self._shown_theme = self._theme_name()
+        self.colors = colors = THEMES[self._shown_theme]
+        self.configure(bg=colors["bg"])
+        for widget, roles in self._painted:
+            widget.configure({option: colors[role] for option, role in roles.items()})
+        for frame in self._fields:
+            self._paint_field(frame, frame in self._focused_fields)
+        for mode, chip in self.theme_chips.items():
+            chip.selected = mode == self.theme_var.get()
+        for value, chip in self.format_chips.items():
+            chip.selected = value == self.format_var.get()
+        for pill in self._pills:
+            pill.repaint()
+        placeholder = self._placeholder_shown and self._url_text() == URL_PLACEHOLDER
+        self.url_entry.config(fg=colors[TEXT_DIM if placeholder else TEXT])
+        self.status_lbl.config(fg=colors[self._status_role])
+        self._paint_preview()
+
+        style = ttk.Style(self)
+        style.theme_use("clam")
+        # The log's scroll bar: just a thumb, without arrows.
+        style.layout("Log.Vertical.TScrollbar", [("Vertical.Scrollbar.trough", {
+            "sticky": "ns", "children": [
+                ("Vertical.Scrollbar.thumb", {"expand": "1", "sticky": "nswe"})]})])
+        style.configure("Log.Vertical.TScrollbar", arrowsize=self._px(10), gripcount=0,
+                        troughcolor=colors["surface"], bordercolor=colors["surface"],
+                        background=colors["scroll"], lightcolor=colors["scroll"],
+                        darkcolor=colors["scroll"])
+        style.map("Log.Vertical.TScrollbar",
+                  background=[("active", colors["text_dim"])],
+                  lightcolor=[("active", colors["text_dim"])],
+                  darkcolor=[("active", colors["text_dim"])])
+        set_title_bar_theme(self, self._shown_theme == "dark")
+
+    # While the theme follows the system's, notice when that changes. (On
+    # Linux asking runs gsettings, too slow to repeat every few seconds; it's
+    # read at startup and when System is chosen.)
+    def _watch_system_theme(self):
+        self._theme_after = self.after(2000, self._watch_system_theme)
+        if self.theme_var.get() == "system" and self._theme_name() != self._shown_theme:
+            self._apply_theme()
+
+    def destroy(self):
+        if self._theme_after is not None:
+            self.after_cancel(self._theme_after)
+            self._theme_after = None
+        super().destroy()
+
+    # The last folder, format and theme are remembered (when a download starts,
+    # a theme is chosen, and the app closes). "Whole playlist" always starts
+    # unticked.
     def _apply_saved_settings(self):
         saved = load_settings()
-        if saved.get("format") in {value for _, value in FORMATS}:
+        if saved.get("theme") in {mode for _, mode in THEME_MODES}:
+            self.theme_var.set(saved["theme"])
+        if saved.get("format") in FORMAT_VALUES:
             self.format_var.set(saved["format"])
         folder = saved.get("folder")
         if isinstance(folder, str) and os.path.isdir(folder):
@@ -492,7 +922,8 @@ class YouTubeDownloader(tk.Tk):
         save_settings({**load_settings(),
                        "folder": folder,
                        "format": self.format_var.get(),
-                       "check_updates": self.update_check_var.get()})
+                       "check_updates": self.update_check_var.get(),
+                       "theme": self.theme_var.get()})
 
     def _fit_window(self):
         # Open wide and tall enough to show everything, but no bigger than
@@ -522,7 +953,7 @@ class YouTubeDownloader(tk.Tk):
         return round(pixels * self.scale)
 
     # The layout's pixel sizes (padding, borders, the thumbnail box, wrap
-    # widths, the progress bar's length) are written for 96 DPI; on a
+    # widths, the progress bar's height) are written for 96 DPI; on a
     # high-DPI screen they're scaled once, after the window is built, so it
     # keeps its proportions. Fonts scale by themselves (they're in points),
     # and so do sizes in characters (e.g. a Text's width and height).
@@ -530,15 +961,15 @@ class YouTubeDownloader(tk.Tk):
     _GRID_OPTIONS = ("padx", "pady", "ipadx", "ipady")
 
     def _scale_layout(self, widget):
-        for name in self._PIXEL_OPTIONS:
+        # A Pill scales its own sizes; only its place in the grid scales here.
+        for name in () if isinstance(widget, Pill) else self._PIXEL_OPTIONS:
             try:
                 value = int(str(widget.cget(name)))
             except (tk.TclError, ValueError):   # not this widget's option, or not pixels
                 continue
             if value:
                 widget.configure({name: self._px(value)})
-        sizes = (("width", "height") if isinstance(widget, tk.Frame)
-                 else ("length",) if isinstance(widget, ttk.Progressbar) else ())
+        sizes = ("width", "height") if isinstance(widget, tk.Frame) else ()
         for name in sizes:
             value = int(str(widget.cget(name)))
             if value:
@@ -566,7 +997,7 @@ class YouTubeDownloader(tk.Tk):
     def _restore_placeholder(self, _e=None):
         if not self._url_text().strip():
             self._replace_url_text(URL_PLACEHOLDER)
-            self.url_entry.config(fg=TEXT_DIM)
+            self.url_entry.config(fg=self.colors[TEXT_DIM])
             self._placeholder_shown = True
             self.url_entry.edit_reset()
 
@@ -576,7 +1007,7 @@ class YouTubeDownloader(tk.Tk):
     def _replace_url_text(self, text):
         self.url_entry.delete("1.0", "end")
         self.url_entry.insert("1.0", text)
-        self.url_entry.config(fg=TEXT)
+        self.url_entry.config(fg=self.colors[TEXT])
         self._fit_url_box()
 
     def _urls(self):
@@ -649,9 +1080,10 @@ class YouTubeDownloader(tk.Tk):
         self.log_box.see("end")
         self.log_box.configure(state="disabled")
 
-    def _set_status(self, msg, color=TEXT_DIM):
+    def _set_status(self, msg, color=TEXT_DIM):   # color: a theme role
         self.status_var.set(msg)
-        self.status_lbl.config(fg=color)
+        self._status_role = color
+        self.status_lbl.config(fg=self.colors[color])
 
     # Tkinter is not thread-safe: worker threads must not touch widgets or
     # Tk variables. They _post() discrete events and overwrite
@@ -889,13 +1321,13 @@ class YouTubeDownloader(tk.Tk):
         if job.outcome is None:   # it crashed; the error is in the log
             self.progress_var.set(0)
             self._set_status("✘ The download stopped because of an unexpected "
-                             "error (see the log).", ACCENT)
+                             "error (see the log).", ERROR)
             self._offer_open_folder()
             return
         summary = job.summary()
         if job.outcome == "failed":
             self.progress_var.set(0)
-            self._set_status(f"✘ {summary}", ACCENT)
+            self._set_status(f"✘ {summary}", ERROR)
             if not job.error_logged:
                 self._log(f"✘ {summary}\n")
             messagebox.showerror("Download Failed", job.error or "See the log for details.")
@@ -972,13 +1404,29 @@ class YouTubeDownloader(tk.Tk):
         if token == self._preview_token:   # drop answers for an older link
             self._set_preview(text, image, dim=not found)
 
+    # The first line of text is the title; the rest goes under it, dimmer.
     def _set_preview(self, text, image=None, dim=False):
         self.preview_text.set(text)
-        self.preview_lbl.config(fg=TEXT_DIM if dim else TEXT)
+        title, _, details = text.partition("\n")
+        self.preview_title.set(title)
+        self.preview_details.set(details)
+        self._preview_dim = dim
         # Some Linux distributions package Pillow's ImageTk separately.
         show = image is not None and ImageTk is not None
-        self._preview_image = ImageTk.PhotoImage(image) if show else None
-        self.preview_img.config(image=self._preview_image or "")
+        self._preview_image = (ImageTk.PhotoImage(rounded(image, self._px(8)), master=self)
+                               if show else None)
+        self._paint_preview()
+
+    def _paint_preview(self):
+        self.preview_lbl.config(fg=self.colors[TEXT_DIM if self._preview_dim else TEXT],
+                                font=(UI_FONT, 10) if self._preview_dim
+                                else (UI_FONT, 11, "bold"))
+        if ImageTk is not None and self._preview_image is None:
+            # An empty thumbnail, in this theme's color.
+            self._thumb_placeholder = ImageTk.PhotoImage(pill_image(
+                *(self._px(n) for n in engine.THUMB_SIZE), self.colors["surface"],
+                self._px(8)), master=self)
+        self.preview_img.config(image=self._preview_image or self._thumb_placeholder or "")
 
     def _recheck_ffmpeg(self, event=None):
         # The root's <FocusIn> binding also fires for each child widget.
@@ -1094,7 +1542,7 @@ class YouTubeDownloader(tk.Tk):
                                 "Please restart the application.")
         else:
             self._log(f"✘ Install failed: {err}")
-            self._set_status(f"Install failed. Try: {pip_install_command()}", ACCENT)
+            self._set_status(f"Install failed. Try: {pip_install_command()}", ERROR)
 
 
 def self_check(path):

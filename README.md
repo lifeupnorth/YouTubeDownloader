@@ -5,7 +5,7 @@ A small app to download YouTube videos written in Python.
 
 - **Python 3.10 or newer**, with Tkinter. The python.org installers for Windows and macOS include it; on Linux you may need a separate package, e.g. `sudo apt install python3-tk`.
 - **yt-dlp** with its recommended extras (`yt-dlp[default]`), pinned to a tested version in `requirements.txt`. The extras include **yt-dlp-ejs**, the solver for YouTube's JavaScript challenges.
-- **Pillow** (optional, also in `requirements.txt`), for thumbnails in the link preview.
+- **Pillow** (optional, also in `requirements.txt`), for thumbnails in the link preview and the rounded buttons. Without it buttons are square and previews show text only.
 - **ffmpeg**, used to merge video and audio and to convert to MP3/M4A.
 - **A JavaScript runtime** for YouTube: deno (yt-dlp's default; `winget install DenoLand.Deno`), node or bun, which runs yt-dlp-ejs. Without it some formats may be missing. The .exe includes deno.
 
@@ -99,20 +99,25 @@ SignPath project and policy aren't named `YouTubeDownloader` and
    thumbnail, title and length appears under it. **Paste** adds to the links
    already there, one per line, and keeps only the links from copied text;
    `https://` can be left out (`youtu.be/...` works).
-2. Pick a **Format**: Best MP4, 1080p, 720p, 480p, MP3 or M4A.
-3. Choose where to save under **Save To** (default: your Downloads folder). If
+2. Pick a **Format**: Best quality, 1080p, 720p or 480p (MP4 video), or MP3 or
+   M4A (audio only).
+3. Choose where to save under **Save to** (default: your Downloads folder). If
    the last folder used isn't there (e.g. on an unplugged drive), the app saves
    to Downloads for now but remembers it.
 4. Click **Download**, or press Enter. Progress and saved files show in the status line and the log.
 5. When it's done, click **Open folder** to see the file.
 
-The app remembers the folder and format you used last time.
+The app remembers the folder, format and theme you used last time.
+
+**Theme** (top right) switches between a light and a dark look, both in
+YouTube's colors. **System**, the default, follows the light or dark setting
+of Windows, macOS or GNOME, and changes along with it on Windows and macOS.
 
 To download several videos in a row, put one link per line (Shift+Enter adds
 a line, and pasting several links puts each on its own line). If one link
 fails, the others still download, and the summary says how many worked.
 
-A link to a video opened from a playlist downloads just that video. Tick
+A link to a video opened from a playlist downloads just that video. Switch on
 **Whole playlist** to download the whole list instead. For a playlist or
 channel link, the app asks before downloading all its videos, and saves them
 to a folder named after the playlist.
