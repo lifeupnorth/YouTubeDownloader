@@ -42,7 +42,7 @@ flowchart LR
 | | Downloading | 506–897 | `DownloadJob` (one link) and `DownloadQueue` (several) |
 | `youtube_downloader.py` | Palette, fonts, settings, helpers | 30–173 | Colors, `FORMATS`, `settings_path`/`load_settings`/`save_settings`, `work_area`, `reveal_in_file_manager`, the help texts for ffmpeg and the JavaScript runtime |
 | | `YouTubeDownloader` | 176–958 | The window, its state, the worker plumbing, and the download, preview, update and install handlers |
-| | Command-line checks | 961–1024 | `self_check` (`--self-check`) and `smoke_download` (`--smoke-download`), see [Getting Started](02-getting-started.md) |
+| | Command-line checks | 961–1024 | `self_check` (`--self-check`), see [Getting Started](02-getting-started.md) |
 | | Entry point | 1027–1034 | Runs one of the checks, or creates the window and runs `mainloop()` |
 
 The engine reports through plain callbacks and keeps its own results, so the window only has to turn callbacks into queued updates and show a summary. The window reads Tk variables (format, folder, the playlist box) on the main thread and passes their values to the engine.

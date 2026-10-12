@@ -10,16 +10,13 @@
 - [tests/test_requirements.py](https://github.com/lifeupnorth/YouTubeDownloader/blob/b369bd269cac691e2563e27391dbd3702c986e50/tests/test_requirements.py)
 - [tests/test_build_exe.py](https://github.com/lifeupnorth/YouTubeDownloader/blob/b369bd269cac691e2563e27391dbd3702c986e50/tests/test_build_exe.py)
 - [tests/test_check_pins.py](https://github.com/lifeupnorth/YouTubeDownloader/blob/b369bd269cac691e2563e27391dbd3702c986e50/tests/test_check_pins.py)
-- [tests/test_smoke.py](https://github.com/lifeupnorth/YouTubeDownloader/blob/b369bd269cac691e2563e27391dbd3702c986e50/tests/test_smoke.py)
 - [tests/fakes.py](https://github.com/lifeupnorth/YouTubeDownloader/blob/b369bd269cac691e2563e27391dbd3702c986e50/tests/fakes.py)
-- [packaging/smoke_test.py](https://github.com/lifeupnorth/YouTubeDownloader/blob/b369bd269cac691e2563e27391dbd3702c986e50/packaging/smoke_test.py)
 - [.github/workflows/tests.yml](https://github.com/lifeupnorth/YouTubeDownloader/blob/b369bd269cac691e2563e27391dbd3702c986e50/.github/workflows/tests.yml)
-- [.github/workflows/smoke.yml](https://github.com/lifeupnorth/YouTubeDownloader/blob/b369bd269cac691e2563e27391dbd3702c986e50/.github/workflows/smoke.yml)
 - [.github/dependabot.yml](https://github.com/lifeupnorth/YouTubeDownloader/blob/b369bd269cac691e2563e27391dbd3702c986e50/.github/dependabot.yml)
 
 </details>
 
-The tests use the standard library `unittest`, and nothing touches the internet: most downloads run against a fake yt-dlp, and `test_real_yt_dlp.py` runs the real one against a local server. There are 190 tests in eight files. The engine's tests need no display; the window's tests open real Tk windows. GitHub Actions runs them on every push to `main` and every pull request, together with a ruff lint check.
+The tests use the standard library `unittest`, and nothing touches the internet: most downloads run against a fake yt-dlp, and `test_real_yt_dlp.py` runs the real one against a local server. There are 180 tests in seven files. The engine's tests need no display; the window's tests open real Tk windows. GitHub Actions runs them on every push to `main` and every pull request, together with a ruff lint check.
 
 ```
 python -m unittest discover -s tests -v
@@ -34,13 +31,8 @@ python -m unittest discover -s tests -v
 | `test_requirements.py` | 10 | The yt-dlp pin in `requirements.txt` is exact (`yt-dlp[default]==…`) and is what the in-app installer uses; the `default` extra brings yt-dlp-ejs; every requirement is pinned; Dependabot watches the file | Tkinter (it imports the window) |
 | `test_build_exe.py` | 12 | `packaging/build_exe.py`: checksum-checked downloads and unpacking, the Windows version information it embeds, and the `--check` verdict on the .exe's self-check | Nothing |
 | `test_check_pins.py` | 4 | `packaging/check_pins.py` with GitHub's API faked: newer ffmpeg and deno releases, version comparison, an issue opened only once | Nothing |
-| `test_smoke.py` | 10 | `packaging/smoke_test.py` and `--smoke-download` with a fake job: the report, retries, timeouts, the bot check | Tkinter (it imports the window) |
 
-### The nightly smoke test
-
-The unit tests never touch the network, so they can't see YouTube breaking yt-dlp. `.github/workflows/smoke.yml` does, every night, by hand, and on pull requests that change it: `packaging/smoke_test.py` downloads one 19-second video as MP4 and as MP3, from source on Linux and with a freshly built .exe on Windows. Each download runs `youtube_downloader.py --smoke-download URL FORMAT FOLDER REPORT` (no window; the log also streams to `REPORT.log`), gets two attempts of 4 minutes, and passes when the file has the right extension and size. If YouTube only answers with its "Sign in to confirm you're not a bot" check, which says nothing about the app, the job warns and passes. `SMOKE_URL` (a repository variable) picks another video.
-
-Sources: [README.md:113-131](https://github.com/lifeupnorth/YouTubeDownloader/blob/b369bd269cac691e2563e27391dbd3702c986e50/README.md#L113-L131), [tests/test_engine.py:1-4](https://github.com/lifeupnorth/YouTubeDownloader/blob/b369bd269cac691e2563e27391dbd3702c986e50/tests/test_engine.py#L1-L4), [tests/test_real_yt_dlp.py:1-10](https://github.com/lifeupnorth/YouTubeDownloader/blob/b369bd269cac691e2563e27391dbd3702c986e50/tests/test_real_yt_dlp.py#L1-L10), [tests/test_thread_safety.py:1-4](https://github.com/lifeupnorth/YouTubeDownloader/blob/b369bd269cac691e2563e27391dbd3702c986e50/tests/test_thread_safety.py#L1-L4), [packaging/smoke_test.py:1-25](https://github.com/lifeupnorth/YouTubeDownloader/blob/b369bd269cac691e2563e27391dbd3702c986e50/packaging/smoke_test.py#L1-L25), [.github/workflows/smoke.yml](https://github.com/lifeupnorth/YouTubeDownloader/blob/b369bd269cac691e2563e27391dbd3702c986e50/.github/workflows/smoke.yml)
+Sources: [README.md:113-131](https://github.com/lifeupnorth/YouTubeDownloader/blob/b369bd269cac691e2563e27391dbd3702c986e50/README.md#L113-L131), [tests/test_engine.py:1-4](https://github.com/lifeupnorth/YouTubeDownloader/blob/b369bd269cac691e2563e27391dbd3702c986e50/tests/test_engine.py#L1-L4), [tests/test_real_yt_dlp.py:1-10](https://github.com/lifeupnorth/YouTubeDownloader/blob/b369bd269cac691e2563e27391dbd3702c986e50/tests/test_real_yt_dlp.py#L1-L10), [tests/test_thread_safety.py:1-4](https://github.com/lifeupnorth/YouTubeDownloader/blob/b369bd269cac691e2563e27391dbd3702c986e50/tests/test_thread_safety.py#L1-L4)
 
 ## The fake yt-dlp (`tests/fakes.py`)
 
@@ -106,7 +98,7 @@ Sources: [tests/test_thread_safety.py:25-90](https://github.com/lifeupnorth/YouT
 - **Tests** on Windows and Ubuntu, each with Python 3.10 (the oldest the pinned yt-dlp supports) and 3.14. On Ubuntu it installs `xvfb` and `ffmpeg` (for the real yt-dlp MP3 test, which skips where ffmpeg is missing) and runs under a virtual display (`xvfb-run`). Each job runs the suite twice: normally, and with yt-dlp blocked, so the tests that need it must skip rather than fail.
 - **Lint**: `ruff check .` with the rules in `ruff.toml` (ruff is pinned in `requirements-dev.txt`); findings show up on the PR's lines.
 
-Other workflows check what the unit tests can't. **Windows app** (`build-exe.yml`) builds the .exe on every pull request and push to `main` and checks it with `build_exe.py --check`; it also makes the releases. **Bundled programs** (`pins.yml`) runs `packaging/check_pins.py` every Monday and opens an issue when ffmpeg or deno, which the .exe bundles and Dependabot can't see, has a newer release. The nightly smoke test is described above.
+Other workflows check what the unit tests can't. **Windows app** (`build-exe.yml`) builds the .exe on every pull request and push to `main` and checks it with `build_exe.py --check`; it also makes the releases. **Bundled programs** (`pins.yml`) runs `packaging/check_pins.py` every Monday and opens an issue when ffmpeg or deno, which the .exe bundles and Dependabot can't see, has a newer release.
 
 Dependabot keeps the pins current, and its PRs run the same checks:
 

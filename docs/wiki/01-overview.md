@@ -20,9 +20,9 @@ It runs from source with Python, or as `YT-Downloader.exe`, a one-file Windows a
 
 The code is split in two, plus the packaging scripts:
 
-- **`youtube_downloader.py`** is the window: widgets, settings, dialogs, the update check, and the plumbing that gets updates from background threads onto the screen. It also has two check-only command-line modes, `--self-check` and `--smoke-download`.
+- **`youtube_downloader.py`** is the window: widgets, settings, dialogs, the update check, and the plumbing that gets updates from background threads onto the screen. It also has a check-only command-line mode, `--self-check`.
 - **`download_engine.py`** does the work without any Tk: it finds yt-dlp, ffmpeg and a JavaScript runtime, builds yt-dlp's options, previews links, asks GitHub for the latest release, and runs downloads (`DownloadJob` for one link, `DownloadQueue` for several in a row).
-- **`packaging/`** builds, checks and optionally signs the .exe, runs the smoke test, and looks for newer ffmpeg and deno builds.
+- **`packaging/`** builds and checks the .exe, and looks for newer ffmpeg and deno builds.
 
 The pages in this wiki:
 
@@ -31,7 +31,7 @@ The pages in this wiki:
 - [Download Pipeline](04-download-pipeline.md): what happens from clicking Download to the final summary, including playlists, several links and Cancel
 - [Formats and ffmpeg](05-formats-ffmpeg.md): how each format choice maps to yt-dlp options, and how ffmpeg is found
 - [User Interface](06-user-interface.md): widgets, bindings, status colors, previews and dialogs
-- [Testing](07-testing.md): the unit tests, the nightly smoke test and the CI
+- [Testing](07-testing.md): the unit tests and the CI
 - [Glossary](08-glossary.md)
 
 Sources: [README.md:1-56](https://github.com/lifeupnorth/YouTubeDownloader/blob/b369bd269cac691e2563e27391dbd3702c986e50/README.md#L1-L56), [download_engine.py:1-7](https://github.com/lifeupnorth/YouTubeDownloader/blob/b369bd269cac691e2563e27391dbd3702c986e50/download_engine.py#L1-L7), [youtube_downloader.py:2-8](https://github.com/lifeupnorth/YouTubeDownloader/blob/b369bd269cac691e2563e27391dbd3702c986e50/youtube_downloader.py#L2-L8), [youtube_downloader.py:1027-1034](https://github.com/lifeupnorth/YouTubeDownloader/blob/b369bd269cac691e2563e27391dbd3702c986e50/youtube_downloader.py#L1027-L1034), [packaging/build_exe.py:1-13](https://github.com/lifeupnorth/YouTubeDownloader/blob/b369bd269cac691e2563e27391dbd3702c986e50/packaging/build_exe.py#L1-L13), [.github/workflows/build-exe.yml:1-13](https://github.com/lifeupnorth/YouTubeDownloader/blob/b369bd269cac691e2563e27391dbd3702c986e50/.github/workflows/build-exe.yml#L1-L13)
@@ -105,7 +105,7 @@ Sources: [requirements.txt:6-14](https://github.com/lifeupnorth/YouTubeDownloade
 
 | Path | Lines | Contents |
 |---|---|---|
-| `youtube_downloader.py` | 1034 | The window: UI, settings, dialogs, worker plumbing, update check, entry point with `--self-check` and `--smoke-download` |
+| `youtube_downloader.py` | 1034 | The window: UI, settings, dialogs, worker plumbing, update check, entry point with `--self-check` |
 | `download_engine.py` | 897 | Downloading without Tk: yt-dlp, ffmpeg and the JavaScript runtime, formats, previews, the release check, `DownloadJob`, `DownloadQueue` |
 | `tests/test_engine.py` | 898 | The engine with a fake yt-dlp; needs no display |
 | `tests/test_thread_safety.py` | 894 | The real window driven through simulated downloads; fails on any Tk call from a worker thread |
@@ -114,23 +114,20 @@ Sources: [requirements.txt:6-14](https://github.com/lifeupnorth/YouTubeDownloade
 | `tests/test_requirements.py` | 93 | The yt-dlp pin is exact, brings yt-dlp-ejs, and is what the installer uses |
 | `tests/test_build_exe.py` | 147 | Checksum-checked downloads and the `--check` verdict of `packaging/build_exe.py` |
 | `tests/test_check_pins.py` | 77 | `packaging/check_pins.py` with GitHub's API faked |
-| `tests/test_smoke.py` | 123 | The smoke test's report, retries, timeouts and bot check, with a fake job |
 | `tests/fakes.py` | 124 | The fake yt-dlp shared by the tests |
 | `requirements.txt` / `requirements-dev.txt` | 14 / 3 | Pinned `yt-dlp[default]` (which brings yt-dlp-ejs) and Pillow / ruff |
 | `ruff.toml` | 8 | Lint rules |
 | `packaging/build_exe.py` | 189 | Builds the one-file Windows app with PyInstaller, with ffmpeg and deno downloaded and checked against pinned checksums (`FFMPEG_VERSION`, `DENO_VERSION`); `--check` runs the .exe's `--self-check` |
 | `packaging/requirements-build.txt` | 38 | PyInstaller and its dependencies, pinned with hashes |
-| `packaging/smoke_test.py` | 108 | One real MP4 and MP3 download via `--smoke-download`, from source or with the .exe |
 | `packaging/check_pins.py` | 115 | Reports newer ffmpeg and deno releases; `--open-issues` opens an issue for each |
 | `packaging/THIRD-PARTY-NOTICES.txt` / `DENO-LICENSE.txt` | 54 / 20 | Licenses of the bundled programs, shipped next to the .exe |
 | `packaging/PYTHON-LICENSES.rst` | 1226 | CPython's licenses for the software built into Python, copied into `THIRD-PARTY-LICENSES.txt` |
 | `packaging/TCLTK-LICENSE.txt` | 90 | Tcl's and Tk's licenses, copied into `THIRD-PARTY-LICENSES.txt` |
 | `.github/workflows/tests.yml` | 79 | Tests (Windows and Ubuntu, Python 3.10 and 3.14, with and without yt-dlp) and lint on every push to `main` and every PR |
 | `.github/workflows/build-exe.yml` | 188 | Builds and checks the .exe on every PR, every push to `main` and by hand; releases it for a `vX.Y.Z` tag, or as the next patch version when `main` pins another yt-dlp than the latest release, with SHA-256 checksums and a build provenance attestation |
-| `.github/workflows/smoke.yml` | 82 | Runs the smoke test nightly, by hand, and on PRs that change it |
 | `.github/workflows/pins.yml` | 36 | "Bundled programs": runs `check_pins.py --open-issues` every Monday |
 | `.github/dependabot.yml` | 30 | Dependabot: daily for `requirements.txt`, weekly for `packaging/requirements-build.txt` and GitHub Actions |
 | `README.md` | 139 | Requirements, install, run, the Windows app (releases, building, signing), usage, tests, disclaimer, license |
 | `LICENSE` | 21 | MIT |
 
-Sources: [.github/workflows/tests.yml](https://github.com/lifeupnorth/YouTubeDownloader/blob/b369bd269cac691e2563e27391dbd3702c986e50/.github/workflows/tests.yml), [.github/workflows/build-exe.yml:1-75](https://github.com/lifeupnorth/YouTubeDownloader/blob/b369bd269cac691e2563e27391dbd3702c986e50/.github/workflows/build-exe.yml#L1-L75), [.github/workflows/build-exe.yml:143-188](https://github.com/lifeupnorth/YouTubeDownloader/blob/b369bd269cac691e2563e27391dbd3702c986e50/.github/workflows/build-exe.yml#L143-L188), [.github/workflows/smoke.yml:1-15](https://github.com/lifeupnorth/YouTubeDownloader/blob/b369bd269cac691e2563e27391dbd3702c986e50/.github/workflows/smoke.yml#L1-L15), [.github/workflows/pins.yml](https://github.com/lifeupnorth/YouTubeDownloader/blob/b369bd269cac691e2563e27391dbd3702c986e50/.github/workflows/pins.yml), [packaging/build_exe.py:148-189](https://github.com/lifeupnorth/YouTubeDownloader/blob/b369bd269cac691e2563e27391dbd3702c986e50/packaging/build_exe.py#L148-L189), [packaging/check_pins.py:1-9](https://github.com/lifeupnorth/YouTubeDownloader/blob/b369bd269cac691e2563e27391dbd3702c986e50/packaging/check_pins.py#L1-L9), [ruff.toml](https://github.com/lifeupnorth/YouTubeDownloader/blob/b369bd269cac691e2563e27391dbd3702c986e50/ruff.toml), [README.md](https://github.com/lifeupnorth/YouTubeDownloader/blob/b369bd269cac691e2563e27391dbd3702c986e50/README.md)
+Sources: [.github/workflows/tests.yml](https://github.com/lifeupnorth/YouTubeDownloader/blob/b369bd269cac691e2563e27391dbd3702c986e50/.github/workflows/tests.yml), [.github/workflows/build-exe.yml:1-75](https://github.com/lifeupnorth/YouTubeDownloader/blob/b369bd269cac691e2563e27391dbd3702c986e50/.github/workflows/build-exe.yml#L1-L75), [.github/workflows/build-exe.yml:143-188](https://github.com/lifeupnorth/YouTubeDownloader/blob/b369bd269cac691e2563e27391dbd3702c986e50/.github/workflows/build-exe.yml#L143-L188), [.github/workflows/pins.yml](https://github.com/lifeupnorth/YouTubeDownloader/blob/b369bd269cac691e2563e27391dbd3702c986e50/.github/workflows/pins.yml), [packaging/build_exe.py:148-189](https://github.com/lifeupnorth/YouTubeDownloader/blob/b369bd269cac691e2563e27391dbd3702c986e50/packaging/build_exe.py#L148-L189), [packaging/check_pins.py:1-9](https://github.com/lifeupnorth/YouTubeDownloader/blob/b369bd269cac691e2563e27391dbd3702c986e50/packaging/check_pins.py#L1-L9), [ruff.toml](https://github.com/lifeupnorth/YouTubeDownloader/blob/b369bd269cac691e2563e27391dbd3702c986e50/ruff.toml), [README.md](https://github.com/lifeupnorth/YouTubeDownloader/blob/b369bd269cac691e2563e27391dbd3702c986e50/README.md)

@@ -134,11 +134,6 @@ server run them with `xvfb-run -a python -m unittest discover -s tests -v`.
 The real yt-dlp tests download from a local server, so they need no internet;
 the MP3 one needs ffmpeg and is skipped without it.
 
-A nightly workflow (`.github/workflows/smoke.yml`) also downloads one short
-video for real, from source and with the .exe. Run it locally with
-`python packaging/smoke_test.py` (add `--exe dist/YT-Downloader.exe` for the
-.exe).
-
 Check the code style (the rules are in `ruff.toml`):
 ```
 pip install -r requirements-dev.txt
