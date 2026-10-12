@@ -352,6 +352,10 @@ class HelpersTest(unittest.TestCase):
             image = engine.fetch_thumbnail("https://t/x.png")
         self.assertEqual(image.size, engine.THUMB_SIZE)
         with mock.patch.object(engine.urllib.request, "urlopen",
+                               return_value=io.BytesIO(png.getvalue())):
+            image = engine.fetch_thumbnail("https://t/x.png", size=(192, 108))
+        self.assertEqual(image.size, (192, 108), "larger on a high-DPI screen")
+        with mock.patch.object(engine.urllib.request, "urlopen",
                                return_value=io.BytesIO(b"not an image")):
             self.assertIsNone(engine.fetch_thumbnail("https://t/x.png"))
 

@@ -459,9 +459,9 @@ def thumbnail_url(info):
     return info.get("thumbnail")
 
 
-def fetch_thumbnail(url, canceled=lambda: False):
-    """Downloads and shrinks a thumbnail; None without Pillow, on errors, or
-    once canceled() is true."""
+def fetch_thumbnail(url, canceled=lambda: False, size=THUMB_SIZE):
+    """Downloads and shrinks a thumbnail to fit size; None without Pillow,
+    on errors, or once canceled() is true."""
     if Image is None or not url or not url.startswith(("https://", "http://")):
         return None
     try:
@@ -472,14 +472,16 @@ def fetch_thumbnail(url, canceled=lambda: False):
                 if canceled() or len(data) > 2_000_000:
                     return None
         image = Image.open(io.BytesIO(data)).convert("RGB")
-        image.thumbnail(THUMB_SIZE)
+        image.thumbnail(size)
         return image
     except Exception:   # a preview isn't worth an error message
         return None
 
 
-def preview_link(url, whole_playlist, cancel_event=None, js_runtime=None):
+def preview_link(url, whole_playlist, cancel_event=None, js_runtime=None,
+                 thumb_size=THUMB_SIZE):
     """Looks a link up without downloading: (text, PIL image or None, found).
+    The thumbnail fits thumb_size (larger on a high-DPI screen).
 
     Like a download, it follows "url" results, but it doesn't page through a
     playlist's entries (process=False), so even big playlists take a second
@@ -512,7 +514,7 @@ def preview_link(url, whole_playlist, cancel_event=None, js_runtime=None):
         return None
     if not info:
         return "Couldn't load a preview for this link.", None, False
-    image = fetch_thumbnail(thumbnail_url(info), canceled)
+    image = fetch_thumbnail(thumbnail_url(info), canceled, thumb_size)
     if canceled():
         return None
     return describe_info(info), image, True

@@ -14,6 +14,8 @@ The window is plain Tkinter plus a ttk progress bar, built once by `_build_ui` w
 
 The root window has three grid rows: a header, the main card and the log. Only the log row grows and shrinks with the window (`rowconfigure(2, weight=1)`). The URL box and the log are `Text` widgets with `width=1`, so they fill their row and the window's width comes from the other controls rather than from Tk's default of 80 characters. `_fit_window` opens the window 680 px wide, or wider if the controls need it (e.g. with Windows display scaling), and as tall as its contents need. It caps both at the screen's work area without the taskbar (`work_area`), leaving `TITLE_BAR` (40 px) for the title bar and frame, centers the window there, and sets a minimum size that keeps every control, the status line and a couple of log lines visible. Text uses Segoe UI on Windows (Helvetica would fall back to Arial there) and Helvetica elsewhere; the log uses Consolas or Courier.
 
+On Windows the app declares itself DPI aware before the window opens (`enable_dpi_awareness`, "system aware"), so on a scaled display (e.g. 150%) Windows doesn't draw it at 96 DPI and stretch it, which blurs the text. Fonts are in points, so Tk sizes them for the real DPI by itself; the layout's pixel sizes (padding, borders, the thumbnail box, wrap widths, the progress bar, the window's 680/580 px widths) are multiplied by `scale` (the screen's DPI / 96) once, after the window is built (`_scale_layout`, `_px`), and the preview asks the engine for a thumbnail of the scaled size. Below 1.05 the scale counts as 1, since Tk reports e.g. 96.08 DPI for 96.
+
 ```mermaid
 flowchart TD
     root["YouTubeDownloader (tk.Tk)"] --> hdr["Header: title, version line, update Checkbutton (.exe only)"]
