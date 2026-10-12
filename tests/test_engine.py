@@ -460,24 +460,25 @@ class ErrorColorTest(unittest.TestCase):
         self.assertEqual(errors, [])
 
 
-def cancel_when(job, ready, timeout=10):
-    """Cancels job from another thread as soon as ready() is true."""
+def cancel_when(job, ready, timeout=10, action="cancel"):
+    """Cancels (or pauses) job from another thread as soon as ready() is true."""
     def wait():
         deadline = time.monotonic() + timeout
         while not ready() and time.monotonic() < deadline:
             time.sleep(0.01)
-        job.cancel()
+        getattr(job, action)()
     threading.Thread(target=wait, daemon=True).start()
 
 
 def make_job(url="https://www.youtube.com/watch?v=x", *, whole_playlist=False,
-             ask=None, folder="dl", fmt="mp4_best"):
+             ask=None, folder="dl", fmt="mp4_best", partial_files=()):
     """A DownloadJob whose callbacks record into job.progress and job.log."""
     progress, log = [], []
     job = engine.DownloadJob(
         url, fmt=fmt, folder=folder, ffmpeg="ffmpeg", whole_playlist=whole_playlist,
         on_progress=lambda pct, message: progress.append((pct, message)),
-        on_log=log.append, ask=ask or (lambda question: True))
+        on_log=log.append, ask=ask or (lambda question: True),
+        partial_files=partial_files)
     job.progress, job.log = progress, log
     return job
 
@@ -675,6 +676,7 @@ class DownloadJobTest(unittest.TestCase):
         job = self.run_job(make_fake_ydl(
             streams=1, warn="[youtube] No supported JavaScript runtime could be found."))
         self.assertFalse([line for line in job.log if "JavaScript" in line])
+
     def test_cancel_while_reading_a_playlist(self):
         # yt-dlp reads a big channel's pages before the first progress
         # update; each page is a status message, where cancel is checked.
@@ -746,6 +748,117 @@ class DownloadJobTest(unittest.TestCase):
             self.assertEqual(os.listdir(tmp), ["old.m4a"])
         self.assertEqual(job.outcome, "canceled")
         self.assertEqual(job.summary(), "Download canceled.")
+
+    # ── Pause and resume ──
+
+    def pause_at(self, point, tmp, videos=1, streams=2, partial_files=(), **fake_args):
+        """Runs a job in tmp that's paused when the fake reaches point (None:
+        never), with the partial files of an earlier job."""
+        job = make_job(whole_playlist=True, folder=tmp, partial_files=partial_files)
+
+        def on_progress(*where):
+            if where == point:
+                job.pause()
+        fake = make_fake_ydl(streams=streams, videos=videos, files_dir=tmp,
+                             on_progress=on_progress, **fake_args)
+        self.run_job(fake, job=job)
+        job.fake = fake
+        return job
+
+    def test_pause_keeps_the_partial_files(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            # The first stream has finished, the second is half done.
+            job = self.pause_at((0, 1, 50), tmp)
+            self.assertEqual(sorted(os.listdir(tmp)), ["v0.f0.webm", "v0.f1.webm.part"])
+            self.assertEqual(job.outcome, "paused")
+            self.assertEqual(job.summary(), "Download paused.")
+            self.assertEqual(job.partial_files, sorted(
+                os.path.join(tmp, name) for name in ("v0.f0.webm", "v0.f0.webm.part",
+                                                     "v0.f1.webm", "v0.f1.webm.part")))
+            self.assertEqual(job.skipped, [])
+
+            again = self.pause_at(None, tmp, partial_files=job.partial_files)
+            self.assertEqual(again.fake.resumed, [(0, 1, 50)])
+            self.assertEqual(sorted(os.listdir(tmp)), ["v0.mp4"])
+        self.assertEqual((again.outcome, again.saved), ("done", 1))
+        percents = [pct for pct, _ in again.progress]
+        self.assertGreater(percents[0], 70, "the first stream counted again")
+        self.assertEqual(percents, sorted(percents))
+
+    def test_cancel_after_a_resume_removes_what_the_pause_kept(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            job = self.pause_at((0, 1, 50), tmp)
+            again = make_job(folder=tmp, partial_files=job.partial_files)
+
+            def on_progress(*where):
+                if where == (0, 1, 70):
+                    again.cancel()
+            self.run_job(make_fake_ydl(streams=2, files_dir=tmp, on_progress=on_progress),
+                         job=again)
+            # The first stream finished before the pause: only the earlier
+            # job's list knows it's this video's.
+            self.assertEqual(os.listdir(tmp), [])
+        self.assertEqual(again.summary(), "Download canceled (2 partial files removed).")
+
+    def test_a_paused_playlist_resumes_at_its_video(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            job = self.pause_at((1, 0, 30), tmp, videos=3)
+            self.assertEqual(job.summary(), "Download paused (1 saved).")
+            again = self.pause_at(None, tmp, videos=3, partial_files=job.partial_files)
+            self.assertEqual(again.fake.resumed, [(1, 0, 30)])
+            self.assertEqual(sorted(os.listdir(tmp)), ["v0.mp4", "v1.mp4", "v2.mp4"])
+        self.assertEqual(again.summary(), "Done: 2 saved, 1 already downloaded")
+
+    def test_the_earlier_files_are_dropped_once_their_video_is_saved(self):
+        # Before the paused video, those already there are skipped; the first
+        # one downloaded is the paused one, and its final file may be one of
+        # the earlier files (a single-stream video), which cancel must keep.
+        job = make_job(partial_files=["v.mp4", "v.mp4.part"])
+        job._file_done({"filepath": "old.mp4", "__real_download": False})
+        self.assertEqual(job._earlier_files, {"v.mp4", "v.mp4.part"})
+        job._file_done({"filepath": "v.mp4", "__real_download": True})
+        self.assertEqual(job._earlier_files, set())
+
+    def test_a_question_cut_short_by_pause_isnt_a_no(self):
+        job = make_job(ask=lambda question: job.pause() or False)
+        self.run_job(make_fake_ydl(streams=1, probe=("playlist",)), job=job)
+        self.assertEqual(job.outcome, "paused")
+
+    @unittest.skipUnless(engine.YT_DLP_AVAILABLE, "needs yt-dlp")
+    def test_pause_stops_the_merge_and_resume_merges_again(self):
+        import yt_dlp.postprocessor.ffmpeg as ffmpeg_pp
+
+        with tempfile.TemporaryDirectory() as tmp:
+            temp = os.path.join(tmp, "v0.temp.mp4")
+            job = make_job(folder=tmp)
+
+            def merge(final):
+                # Like yt-dlp's merger: ffmpeg writes a temporary file, last on
+                # its command line, and it's renamed when it's done. Here a
+                # process that would take 60 s, paused once it has started
+                # writing.
+                cancel_when(job, lambda: os.path.exists(temp), action="pause")
+                _out, _err, code = ffmpeg_pp.Popen.run(
+                    [sys.executable, "-c", "import sys, time; open(sys.argv[1][5:], 'wb');"
+                     " time.sleep(60)", "file:" + temp])
+                if code:
+                    return False
+                os.replace(temp, final)
+                return True
+
+            start = time.monotonic()
+            self.run_job(make_fake_ydl(streams=2, files_dir=tmp, merge=merge), job=job)
+            self.assertLess(time.monotonic() - start, 10)
+            # Both streams are kept; the half-merged file isn't.
+            self.assertEqual(sorted(os.listdir(tmp)), ["v0.f0.webm", "v0.f1.webm"])
+            self.assertEqual((job.outcome, job.removed, job.skipped), ("paused", 1, []))
+
+            again = make_job(folder=tmp, partial_files=job.partial_files)
+            fake = make_fake_ydl(streams=2, files_dir=tmp)
+            self.run_job(fake, job=again)
+            self.assertEqual(fake.resumed, [], "a finished stream downloaded again")
+            self.assertEqual(os.listdir(tmp), ["v0.mp4"])
+        self.assertEqual((again.outcome, again.saved), ("done", 1))
 
     def test_only_new_ffmpeg_outputs_count(self):
         with tempfile.TemporaryDirectory() as tmp:

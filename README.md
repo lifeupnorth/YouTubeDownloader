@@ -113,13 +113,14 @@ SignPath project and policy aren't named `YouTubeDownloader` and
    bar and its status. The rows download one at a time, and you can add more
    links while they do. If one link fails, the others still download, and the
    row says why.
-5. Each row has icons on the right: **Cancel** while it waits or downloads,
-   then **Show in folder** and **Remove from the list** (which never deletes
-   the file). **Clear finished** removes all finished rows.
+5. Each row has icons on the right: **Pause** and **Cancel** while it waits
+   or downloads, **Resume** once it's paused, then **Show in folder** and
+   **Remove from the list** (which never deletes the file). **Clear finished**
+   removes all finished rows.
 6. The same actions work from the keyboard on the selected row (arrow keys or
-   a click select one): **Esc** cancels, **Enter** shows the file in its folder,
-   and **Delete** removes the row. Right-click a row for a menu with all
-   three, or double-click it to show its file.
+   a click select one): **Space** pauses or resumes, **Esc** cancels, **Enter**
+   shows the file in its folder, and **Delete** removes the row. Right-click a
+   row for a menu with all of them, or double-click it to show its file.
 
 The status line at the bottom sums up when the list is done. Click **Log** next
 to it to see the details; it opens by itself when there's something to read,
@@ -128,7 +129,7 @@ e.g. when ffmpeg is missing.
 The app remembers the folder, format and theme you used last time. It keeps
 the Downloads list too (the last 200 rows, with their thumbnails), so your
 downloads are still listed the next time you start it. Rows that hadn't
-finished when it closed come back as Canceled. **Remove from the list** and
+finished when it closed come back as Paused. **Remove from the list** and
 **Clear finished** take rows out of the saved list as well.
 
 **Theme** (top right) switches between a light and a dark look, both in
@@ -144,6 +145,13 @@ Canceling stops within moments in most cases, also while ffmpeg converts or
 merges a video or while a big playlist is being read. It removes the partial
 file of the video in progress and keeps the ones that finished; the other
 links still download.
+
+Pausing stops a download the same way but keeps its partial files, and
+**Resume** continues from where it stopped (a conversion or merge that was
+stopped runs again). Pausing a link that's waiting holds it back. Closing the
+app during a download pauses it and the links still waiting, and they're
+listed as Paused the next time, to resume. After a restart YouTube may offer
+the video in another format; then it downloads from the start.
 
 ## Run the tests
 

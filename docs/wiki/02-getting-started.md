@@ -47,7 +47,7 @@ Sources: [README.md:4-35](https://github.com/lifeupnorth/YouTubeDownloader/blob/
 1. Paste one or more links into **YouTube URLs** (separated by spaces), or click **Paste**, which adds the clipboard's links to those already there and leaves out other words. Links work without `https://`.
 2. Pick a **Format** (MP4 video, MP3 or M4A audio), a **Quality** for video, and a folder under **Save to**.
 3. Click **Download** or press Enter. Each link becomes a row in the **Downloads** list, with its thumbnail and title as soon as they're looked up, and the rows download one at a time, each with its own progress bar and status. More links can be added while others download.
-4. Each row has its own icons: Cancel while it waits or downloads, then Show in folder and Remove from the list (which never deletes the file). On the selected row they're also Esc, Enter and Delete, in a right-click menu, and Show in folder on a double-click. **Clear finished** removes all finished rows. The **Log** chip at the bottom shows the log.
+4. Each row has its own icons: Pause and Cancel while it waits or downloads, Resume once it's paused (it continues the partial files), then Show in folder and Remove from the list (which never deletes the file). On the selected row they're also Space, Esc, Enter and Delete, in a right-click menu, and Show in folder on a double-click. **Clear finished** removes all finished rows. The **Log** chip at the bottom shows the log.
 
 With **Whole playlist** off, a link to a video opened from a playlist downloads just that video, and a playlist, channel or tab link asks before downloading everything. Playlist videos go to `<Save to>/<playlist title>/<NNN> - <title>.<ext>`, single videos to `<Save to>/<title>.<ext>`.
 

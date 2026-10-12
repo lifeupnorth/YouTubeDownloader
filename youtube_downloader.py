@@ -336,6 +336,7 @@ STATES = {
     "looking":     ("Looking up…",    "text_dim"),
     "downloading": ("Downloading",    "blue"),
     "processing":  ("Processing…",    "blue"),
+    "paused":      ("Paused",         "warning"),   # its partial files are kept
     "done":        ("Completed",      "success"),
     "failed":      ("Failed",         "error"),
     "canceled":    ("Canceled",       "text_dim"),
@@ -346,28 +347,40 @@ ACTIVE = {"downloading", "processing"}
 FINISHED = {"done", "failed", "canceled", "declined", "empty"}
 
 # What can be done with a row: (what its icon's tooltip and the right-click
-# menu say, its key in the list, the Qt keys).
+# menu say, its key in the list, the Qt keys). A row has Pause or Resume,
+# never both, so they share Space.
 ROW_ACTIONS = {
+    "pause": ("Pause", "Space", (Qt.Key_Space,)),
+    "resume": ("Resume", "Space", (Qt.Key_Space,)),
     "cancel": ("Cancel", "Esc", (Qt.Key_Escape,)),
     "folder": ("Show in folder", "Enter", (Qt.Key_Return, Qt.Key_Enter)),
     "remove": ("Remove from the list (the file stays)", "Delete",
                (Qt.Key_Delete, Qt.Key_Backspace)),   # Backspace: the Mac's Delete key
 }
-ACTION_KEYS = {key: name for name, (_, _, keys) in ROW_ACTIONS.items() for key in keys}
+ACTION_KEYS = {}   # Qt key: the actions it's for
+for _name, (_text, _key, _keys) in ROW_ACTIONS.items():
+    for _qt_key in _keys:
+        ACTION_KEYS.setdefault(_qt_key, []).append(_name)
 
 
 def bar_percent(row):
     """How full a row's progress bar is, or None for an empty bar with no
-    percentage: only a download in progress or done shows one (a canceled
-    one's partial file is gone)."""
+    percentage: only a download in progress, paused partway or done shows
+    one (a canceled one's partial file is gone)."""
     if row.state == "done":
         return 100
+    if row.state == "paused":
+        return row.pct or None
     return row.pct if row.state in ACTIVE else None
 
 
 def row_actions(row):
     """The actions row has now, in the order of its icons."""
     names = []
+    if row.state == "paused":
+        names.append("resume")
+    elif row.state not in FINISHED and not row.pause_event.is_set():   # not "Pausing…"
+        names.append("pause")
     if row.state not in FINISHED:
         names.append("cancel")
     if row.file:
@@ -394,8 +407,10 @@ class Row:
     message: str = ""        # speed and ETA, or why it failed
     file: str | None = None  # the last file it saved (or found already there)
     restored: bool = False   # from the list saved by an earlier run
+    partial_files: list[str] = field(default_factory=list)   # kept by a pause
     log: list[str] = field(default_factory=list)
     cancel_event: threading.Event = field(default_factory=threading.Event)
+    pause_event: threading.Event = field(default_factory=threading.Event)
     job: engine.DownloadJob | None = None
     latest: tuple[float, str] | None = None
 
@@ -416,8 +431,9 @@ def row_entry(row):
     """What the saved list keeps of a row (see restored_row)."""
     entry = {"url": row.url, "fmt": row.fmt, "folder": row.folder,
              "whole_playlist": row.whole_playlist, "title": row.title,
-             "details": row.details, "state": row.state, "message": row.message,
-             "file": row.file}
+             "details": row.details, "state": row.state, "pct": row.pct,
+             "message": row.message, "file": row.file,
+             "partial_files": row.partial_files}
     if row.thumb_jpeg:
         entry["thumb"] = base64.b64encode(row.thumb_jpeg).decode("ascii")
     return entry
@@ -426,10 +442,10 @@ def row_entry(row):
 def restored_row(entry):
     """The Row for an entry of the saved list, or None if it isn't one.
 
-    A row that was waiting or downloading when the app closed comes back
-    Canceled: closing during a download cancels it (removing its partial
-    file), and after a crash nothing is running anymore either. Its
-    thumbnail comes from the saved list, so restoring needs no network.
+    A row that was waiting or downloading when the app closed (after a
+    crash: closing pauses them) comes back Paused, so Resume continues it
+    rather than it starting by itself. Its thumbnail comes from the saved
+    list, so restoring needs no network.
     """
     if not isinstance(entry, dict):
         return None
@@ -445,10 +461,16 @@ def restored_row(entry):
     row = Row(url, fmt, folder, entry.get("whole_playlist") is True,
               title=text("title"), details=text("details"), message=text("message"),
               file=text("file") or None, restored=True)
-    if entry.get("state") in FINISHED:
+    if entry.get("state") in FINISHED or entry.get("state") == "paused":
         row.state = entry["state"]
     else:
-        row.state, row.message = "canceled", INTERRUPTED
+        row.state, row.message = "paused", INTERRUPTED
+    if row.state == "paused":
+        pct, files = entry.get("pct"), entry.get("partial_files")
+        if isinstance(pct, (int, float)) and 0 <= pct <= 100:
+            row.pct = pct
+        if isinstance(files, list):
+            row.partial_files = [f for f in files if isinstance(f, str) and f]
     try:
         row.thumb_jpeg = base64.b64decode(text("thumb"), validate=True) or None
     except ValueError:   # damaged: the row just has no thumbnail
@@ -461,12 +483,12 @@ def restored_row(entry):
 
 # How the finished rows are counted in the summary, in this order.
 SUMMARY_PARTS = [("done", "completed"), ("failed", "failed"), ("canceled", "canceled"),
-                 ("declined", "not downloaded"), ("empty", "empty")]
+                 ("declined", "not downloaded"), ("empty", "empty"), ("paused", "paused")]
 
 
 def queue_summary(states):
     """The status line once the list is done: (text, theme role) for the
-    finished rows' states, e.g. "✔ Done: 2 completed, 1 canceled."."""
+    finished and paused rows' states, e.g. "✔ Done: 2 completed, 1 paused."."""
     counts = [(states.count(state), label) for state, label in SUMMARY_PARTS]
     parts = ", ".join(f"{n} {label}" for n, label in counts if n)
     done, failed = states.count("done"), states.count("failed")
@@ -542,7 +564,7 @@ class RowDelegate(QStyledItemDelegate):
     """Draws the Video, Progress and Actions cells, and handles clicks on
     the action icons. The other cells are plain text."""
 
-    action = Signal(object, str)   # (row, "cancel" / "folder" / "remove")
+    action = Signal(object, str)   # (row, a name in ROW_ACTIONS)
 
     ICON = 30   # an action icon's round hover area
 
@@ -699,10 +721,11 @@ class DownloadsView(QTableView):
     """The table, with a hint in place of the rows while there are none.
 
     The selected row's actions also work from the keyboard (ROW_ACTIONS'
-    keys: Esc cancels, Enter shows the file, Delete removes the row), from
-    a right-click menu, and a double-click shows the file."""
+    keys: Space pauses or resumes, Esc cancels, Enter shows the file, Delete
+    removes the row), from a right-click menu, and a double-click shows the
+    file."""
 
-    action = Signal(object, str)   # (row, "cancel" / "folder" / "remove")
+    action = Signal(object, str)   # (row, a name in ROW_ACTIONS)
 
     def __init__(self, model):
         super().__init__()
@@ -740,9 +763,13 @@ class DownloadsView(QTableView):
             self.action.emit(row, name)
 
     def keyPressEvent(self, event):
-        name = ACTION_KEYS.get(event.key())
-        if name and not event.modifiers() & ~Qt.KeypadModifier:
-            self._act(self.current_row(), name)
+        names = ACTION_KEYS.get(event.key())
+        if names and not event.modifiers() & ~Qt.KeypadModifier:
+            row = self.current_row()
+            available = row_actions(row) if row is not None else []
+            name = next((n for n in names if n in available), None)
+            if name:
+                self.action.emit(row, name)
             event.accept()
             return
         super().keyPressEvent(event)
@@ -818,7 +845,17 @@ def draw_icon(painter, name, area, color):
     painter.setPen(pen)
     painter.setBrush(Qt.NoBrush)
     x, y = area.center().x(), area.center().y()
-    if name == "cancel":
+    if name == "pause":
+        painter.drawLine(QPointF(x - 3, y - 6), QPointF(x - 3, y + 6))
+        painter.drawLine(QPointF(x + 3, y - 6), QPointF(x + 3, y + 6))
+    elif name == "resume":   # a play triangle
+        path = QPainterPath()
+        path.moveTo(x - 4, y - 6.5)
+        path.lineTo(x + 6, y)
+        path.lineTo(x - 4, y + 6.5)
+        path.closeSubpath()
+        painter.drawPath(path)
+    elif name == "cancel":
         painter.drawLine(QPointF(x - 5, y - 5), QPointF(x + 5, y + 5))
         painter.drawLine(QPointF(x - 5, y + 5), QPointF(x + 5, y - 5))
     elif name == "folder":
@@ -1584,9 +1621,9 @@ class YouTubeDownloader(QMainWindow):
         self._start_worker(self._run_row, row, self._ffmpeg, self._js_runtime)
 
     def _position(self, row):
-        """e.g. "2 of 3": where row is among those not finished yet ("" when
-        it's the only one)."""
-        todo = [r for r in self.model.rows if r.state not in FINISHED]
+        """e.g. "2 of 3": where row is among those to download ("" when it's
+        the only one); paused rows aren't counted."""
+        todo = [r for r in self.model.rows if r.state not in FINISHED and r.state != "paused"]
         return f"{todo.index(row) + 1} of {len(todo)}" if len(todo) > 1 else ""
 
     # Runs on the download thread. The window hears that the row ended even
@@ -1602,9 +1639,10 @@ class YouTubeDownloader(QMainWindow):
                 on_progress=lambda pct, msg: setattr(row, "latest", (pct, msg)),
                 on_log=lambda msg: self._post(self._job_log, row, msg),
                 ask=lambda question: self._ask_on_main(row, "Playlist", question),
-                cancel_event=row.cancel_event, js_runtime=js_runtime)
+                cancel_event=row.cancel_event, pause_event=row.pause_event,
+                partial_files=row.partial_files, js_runtime=js_runtime)
             row.job = job
-            if not row.cancel_event.is_set():
+            if not job.stopping:
                 job.run()
         except Exception:
             self._post(self._worker_crashed, traceback.format_exc())
@@ -1619,8 +1657,9 @@ class YouTubeDownloader(QMainWindow):
     # Progress comes often; the newest is shown 10 times a second.
     def _show_progress(self):
         row = self._running
-        if row is None or row.latest is None or row.cancel_event.is_set():
-            return   # after Cancel, "Canceling…" stays
+        if (row is None or row.latest is None or row.cancel_event.is_set()
+                or row.pause_event.is_set()):
+            return   # after Cancel or Pause, "Canceling…" or "Pausing…" stays
         pct, message = row.latest
         row.latest = None
         row.pct = pct
@@ -1633,15 +1672,24 @@ class YouTubeDownloader(QMainWindow):
     def _download_finished(self, row, job):
         self._running = None
         self._progress_timer.stop()
-        row.file = job.last_file if job else None
+        # (A resumed download that saves nothing new keeps an earlier file.)
+        row.file = (job.last_file if job else None) or row.file
         if job is None or job.outcome is None:   # it crashed, or never started
             if row.cancel_event.is_set():
                 row.state, row.message = "canceled", ""
+            elif row.pause_event.is_set():
+                row.state, row.message = "paused", ""
             else:   # the error is in the log
                 row.state, row.message = "failed", "An unexpected error (see the log)"
         elif job.outcome == "canceled":
             row.state, row.message = "canceled", ""
             self._log(f"✘ {job.summary()}")
+        elif job.outcome == "paused":
+            row.state, row.message = "paused", ""
+            if row.latest:   # where it stopped, if the timer hadn't shown it yet
+                row.pct = row.latest[0]
+            row.partial_files = job.partial_files
+            self._log(f"• {job.summary()}")
         elif job.outcome == "failed":
             row.state, row.message = "failed", job.error or "See the log."
             if not job.error_logged:
@@ -1659,6 +1707,8 @@ class YouTubeDownloader(QMainWindow):
                 if summary != "Download complete!":   # a playlist: how it went
                     row.details = summary
                 self._log("✔ Done!" if summary == "Download complete!" else f"✔ {summary}")
+        if row.state != "paused":   # removed, continued, or of no use now
+            row.partial_files = []
         self.model.changed(row)
         self._history_changed()
         if self._close_when_stopped:   # the user is closing the app
@@ -1666,10 +1716,12 @@ class YouTubeDownloader(QMainWindow):
             return
         self._run_next()
 
-    # Says how the downloads went, once the last one has finished. Rows from
-    # an earlier run aren't counted: they aren't this run's downloads.
+    # Says how the downloads went, once the last one has finished or paused.
+    # Rows from an earlier run aren't counted: they aren't this run's
+    # downloads (until they're resumed).
     def _queue_finished(self):
-        finished = [r for r in self.model.rows if r.state in FINISHED and not r.restored]
+        finished = [r for r in self.model.rows
+                    if (r.state in FINISHED or r.state == "paused") and not r.restored]
         if not finished:
             return
         self._set_status(*queue_summary([r.state for r in finished]))
@@ -1683,8 +1735,8 @@ class YouTubeDownloader(QMainWindow):
         # No; either way the download thread stops waiting.
         def ask():
             try:
-                if row.cancel_event.is_set():
-                    answer.append(False)   # canceled before the question showed
+                if row.cancel_event.is_set() or row.pause_event.is_set():
+                    answer.append(False)   # stopped before the question showed
                     return
                 answer.append(QMessageBox.question(self, title, question)
                               == QMessageBox.Yes)
@@ -1696,14 +1748,18 @@ class YouTubeDownloader(QMainWindow):
 
         self._post(ask)
         while not done.wait(0.1):
-            if self._closing or row.cancel_event.is_set():
+            if self._closing or row.cancel_event.is_set() or row.pause_event.is_set():
                 return False
         return bool(answer and answer[0])
 
     # ── Row actions ─────────────────────────────────────────────────────────
 
     def _row_action(self, row, action):
-        if action == "cancel":
+        if action == "pause":
+            self._pause_row(row)
+        elif action == "resume":
+            self._resume_row(row)
+        elif action == "cancel":
             self._cancel_row(row)
         elif action == "folder":
             self._open_folder(row)
@@ -1713,7 +1769,7 @@ class YouTubeDownloader(QMainWindow):
 
     # yt-dlp stops at its next progress update or status message (also while
     # it reads a playlist), and a running ffmpeg conversion or merge is
-    # stopped; the row's partial file is removed.
+    # stopped; the row's partial file is removed, also one a pause kept.
     def _cancel_row(self, row):
         if row.state in FINISHED:
             return
@@ -1722,10 +1778,39 @@ class YouTubeDownloader(QMainWindow):
             if row.job is not None:
                 row.job.stop_processes()
             row.message = "Canceling…"
-        else:   # still waiting: nothing to stop
+        else:   # waiting or paused: nothing to stop
             row.state, row.message = "canceled", ""
+            if row.partial_files:
+                removed = engine.remove_partial_files(row.partial_files, self._log)
+                row.partial_files = []
+                self._log(f"✘ {engine.canceled_summary(0, removed)}")
             self._history_changed()
         self.model.changed(row)
+
+    # Stops like Cancel, but the partial files stay for Resume (see
+    # DownloadJob). A waiting row is just held back.
+    def _pause_row(self, row):
+        if "pause" not in row_actions(row):
+            return
+        row.pause_event.set()
+        if row is self._running:
+            if row.job is not None:
+                row.job.stop_processes()
+            row.message = "Pausing…"
+        else:
+            row.state, row.message = "paused", ""
+            self._history_changed()
+        self.model.changed(row)
+
+    # Back in the queue: its download continues the files the pause kept.
+    def _resume_row(self, row):
+        if row.state != "paused":
+            return
+        row.pause_event = threading.Event()   # the next job's
+        row.state, row.message, row.restored = "waiting", "", False
+        self.model.changed(row)
+        self._history_changed()
+        self._run_next()
 
     def _open_folder(self, row):
         path = row.file
@@ -1763,27 +1848,31 @@ class YouTubeDownloader(QMainWindow):
     # ── Closing ─────────────────────────────────────────────────────────────
 
     def closeEvent(self, event):
-        # During a download, ask first, then cancel it and close once it has
-        # stopped, so its partial file is removed. Closing again while that
-        # runs (e.g. stuck on a slow network request) closes right away.
+        # During a download, ask first, then pause it and the waiting rows,
+        # and close once it has stopped: the next run lists them as Paused,
+        # to resume. Closing again while that runs (e.g. stuck on a slow
+        # network request) closes right away.
         if self._running is not None and not self._close_when_stopped:
             if QMessageBox.question(self, "Download in progress",
                                     "A download is still running.\n\n"
-                                    "Cancel it and close the app?") != QMessageBox.Yes:
+                                    "Pause it and close the app? You can resume it "
+                                    "the next time.") != QMessageBox.Yes:
                 event.ignore()
                 return
             # The download may have finished while the question was open.
             if self._running is not None:
                 self._close_when_stopped = True
                 for row in self.model.rows:
-                    self._cancel_row(row)
-                self._set_status("Canceling… the app closes when it has stopped.",
-                                 WARNING)
+                    self._pause_row(row)
+                self._set_status("Pausing… the app closes when it has stopped.", WARNING)
                 event.ignore()
                 return
         self._closing = True
         for row in self.model.rows:
-            row.cancel_event.set()   # stops lookups, and questions waiting
+            # Stops lookups, and questions waiting. A download still running
+            # (closed a second time) is paused, not canceled: its partial
+            # files are for Resume.
+            (row.pause_event if row is self._running else row.cancel_event).set()
         self._progress_timer.stop()
         self._save_settings()
         self._save_history()

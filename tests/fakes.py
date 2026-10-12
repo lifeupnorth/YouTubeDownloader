@@ -11,20 +11,26 @@ class FakeCancelled(Exception):
 
 def make_fake_ydl(streams=2, videos=1, overshoot=0, error=None, fail=(),
                   already=(), probe=("video",), files_dir=None, on_progress=None,
-                  warn=None, delay=0):
+                  warn=None, delay=0, merge=None):
     """probe: the _type returned by each extract_info(process=False) call.
 
     files_dir: write real stream files there (.part while downloading, then
-    renamed, then "merged" into v<N>.mp4), as yt-dlp does.
+    renamed, then "merged" into v<N>.mp4), as yt-dlp does. Like yt-dlp, it
+    continues a .part file that's there (a byte in it per 5% downloaded),
+    and skips a stream or a video whose file is there.
     on_progress(video, stream, done): called on the download thread before
     each progress event, and with stream=-1 before each video starts.
     delay: seconds between progress events (a real download takes time).
+    merge(final): with files_dir, merges a video's streams into final; it
+    returns False if that failed (e.g. its ffmpeg was stopped). FakeYDL.resumed
+    records (video, stream, percent) for each .part file continued.
     """
     probes = list(probe)
     on_progress = on_progress or (lambda *a: None)
 
     class FakeYDL:
         calls: ClassVar[list[str]] = []   # shared: one list per fake class
+        resumed: ClassVar[list[tuple[int, int, int]]] = []
 
         def __init__(self, opts):
             self.opts = FakeYDL.last_opts = opts
@@ -75,25 +81,42 @@ def make_fake_ydl(streams=2, videos=1, overshoot=0, error=None, fail=(),
                     continue
                 if warn and video == 0:
                     self.opts["logger"].warning(warn)
+                final = f"v{video}.mp4"
+                if files_dir:
+                    final = os.path.join(files_dir, final)
+                    if os.path.exists(final):   # what yt-dlp says is already there
+                        self.run_pps("after_move", {**info, "filepath": final,
+                                                    "__real_download": False})
+                        continue
                 on_progress(video, -1, 0)
                 self.run_pps("before_dl", info)
                 names = []
                 for stream in range(streams):
                     name = f"v{video}.f{stream}.webm"
-                    files = {}
+                    files, start = {}, 0
                     if files_dir:
                         name = os.path.join(files_dir, name)
                         files = {"filename": name, "tmpfilename": name + ".part"}
-                        open(name + ".part", "wb").close()
                     names.append(name)
+                    if files_dir and os.path.exists(name):   # finished before
+                        for hook in hooks:
+                            hook({"status": "finished", "video": video,
+                                  "info_dict": info, "filename": name})
+                        continue
+                    if files_dir and os.path.exists(name + ".part"):
+                        start = os.path.getsize(name + ".part") * 5
+                        FakeYDL.resumed.append((video, stream, start))
                     # total_bytes_estimate can be exceeded (overshoot).
-                    for done in range(0, 101 + overshoot, 5):
+                    for done in range(start, 101 + overshoot, 5):
                         on_progress(video, stream, done)
                         for hook in hooks:
                             hook({"status": "downloading", "video": video,
                                   "total_bytes_estimate": 100,
                                   "downloaded_bytes": done, "speed": 1e6,
                                   "eta": 1, "info_dict": info, **files})
+                        if files_dir:
+                            with open(name + ".part", "ab") as part:
+                                part.write(b"x")
                         if delay:
                             time.sleep(delay)
                     if files_dir:
@@ -101,10 +124,13 @@ def make_fake_ydl(streams=2, videos=1, overshoot=0, error=None, fail=(),
                     for hook in hooks:
                         hook({"status": "finished", "video": video, "info_dict": info,
                               "filename": name})
-                final = f"v{video}.mp4"
                 if files_dir:
-                    final = os.path.join(files_dir, final)
-                    open(final, "wb").close()
+                    if merge is None:
+                        open(final, "wb").close()
+                    elif not merge(final):
+                        # What yt-dlp does when ffmpeg fails (ignoreerrors).
+                        self.opts["logger"].error("ERROR: Postprocessing: ffmpeg failed")
+                        continue
                     for name in names:
                         os.remove(name)
                 self.run_pps("after_move", {

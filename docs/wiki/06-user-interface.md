@@ -68,7 +68,7 @@ It's a Qt model and view. `DownloadsModel` (a `QAbstractTableModel`) holds the r
 | Video | Takes the width that's left. A 128×72 thumbnail (`THUMB_SIZE`) with rounded corners, cropped to fill (`cover`), or until there is one an empty box with a play triangle. Beside it the title in bold (the link until the lookup finds the title), and under it, dimmer, the details: length and channel, "Playlist · 12 videos" and the channel, "Looking up…", "Couldn't load a preview for this link.", or after a playlist download how it went ("Done: 3 saved, 1 skipped"). Its tooltip is the link |
 | Format | MP4, MP3 or M4A (`Row.format_label`) |
 | Quality | Best quality, 2160p (4K), 1440p, 1080p, 720p or 480p, or "—" for audio (`Row.quality_label`) |
-| Progress | A 4 px bar: red (`accent`) while it downloads, green (`success`) when done, and empty, with no percentage, in every other state (`bar_percent`; a canceled row's partial file is gone, so its bar doesn't keep the progress it had). The percentage beside it while it downloads, processes or is done. Under it the message: "Starting…", speed and time left (with "Video 2/5" in a playlist), "Canceling…", or in the error color why it failed |
+| Progress | A 4 px bar: red (`accent`) while it downloads or is paused partway, green (`success`) when done, and empty, with no percentage, in every other state (`bar_percent`; a canceled row's partial file is gone, so its bar doesn't keep the progress it had). The percentage beside it while it downloads, processes, is paused partway or is done. Under it the message: "Starting…", speed and time left (with "Video 2/5" in a playlist), "Canceling…", "Pausing…", or in the error color why it failed |
 | Status | The state's label in its color (below). Its tooltip is the last 8 log lines for this link |
 | (actions) | The icons below |
 
@@ -80,33 +80,36 @@ A row's `state` is one of `STATES`, each with the Status column's text and a the
 | `looking` | Looking up… | `text_dim` |
 | `downloading` | Downloading | `blue` |
 | `processing` | Processing… | `blue` |
+| `paused` | Paused | `warning` |
 | `done` | Completed | `success` |
 | `failed` | Failed | `error` |
 | `canceled` | Canceled | `text_dim` |
 | `declined` | Not downloaded | `text_dim` |
 | `empty` | Nothing found | `warning` |
 
-`ACTIVE` is `downloading` and `processing`; `FINISHED` is `done`, `failed`, `canceled`, `declined` and `empty`. A row is `processing` while the engine's progress message says "Processing…" (ffmpeg merging or converting). For how each download outcome becomes a state, see [Download Pipeline](04-download-pipeline.md#8-finishing-the-summary).
+`ACTIVE` is `downloading` and `processing`; `FINISHED` is `done`, `failed`, `canceled`, `declined` and `empty`. `paused` is neither: a paused row keeps its partial files, so it can't be removed or cleared until it's resumed or canceled. A row is `processing` while the engine's progress message says "Processing…" (ffmpeg merging or converting). For how each download outcome becomes a state, see [Download Pipeline](04-download-pipeline.md#8-finishing-the-summary).
 
 The action icons are drawn by `draw_icon` in the theme's colors, with a round background under the mouse and a tooltip naming them and their key (e.g. "Cancel (Esc)"). `row_actions(row)` decides which a row has; `ROW_ACTIONS` holds their names and keys:
 
 | Icon | Key | Shown | Does |
 |---|---|---|---|
-| ✕ "Cancel" | Esc | While the row isn't finished | `_cancel_row`: a waiting row is just marked Canceled; the running one shows "Canceling…" and stops at yt-dlp's next status or progress update, and its partial files are removed (see [Download Pipeline](04-download-pipeline.md#7-canceling)) |
+| Two bars, "Pause" | Space | While the row waits or downloads (not while it's pausing) | `_pause_row`: a waiting row is just marked Paused; the running one shows "Pausing…", stops like a cancel, and keeps its partial files (see [Download Pipeline](04-download-pipeline.md#pausing-and-resuming)) |
+| Play triangle, "Resume" | Space | While the row is paused | `_resume_row`: back to waiting; its download continues the partial files |
+| ✕ "Cancel" | Esc | While the row isn't finished | `_cancel_row`: a waiting row is just marked Canceled; the running one shows "Canceling…" and stops at yt-dlp's next status or progress update, and its partial files are removed, also those a pause kept (see [Download Pipeline](04-download-pipeline.md#7-canceling)) |
 | Folder, "Show in folder" | Enter (or a double-click on the row) | Once the row has a file | `_open_folder` → `reveal_in_file_manager`: Explorer with the file selected, Finder with it revealed, or the Linux file manager on its folder |
 | Trash can, "Remove from the list (the file stays)" | Delete (Backspace too: the Mac's Delete key) | Once the row is finished | Removes the row from the list; it turns red under the mouse. It never deletes files |
 
 `RowDelegate.editorEvent` finds the icon under the mouse when it moves or is released, and on a release emits `action(row, name)`; `_row_action` runs it. Remove only acts on finished rows, so a running row can't be taken out of the list.
 
-The same actions work from the keyboard. The list takes the focus (Tab reaches it, and a click selects a row), the arrow keys move between rows, and `DownloadsView.keyPressEvent` runs the selected row's action for Esc, Enter or Delete (`ACTION_KEYS`; with Ctrl, Alt or Shift held they do nothing). Tabbing into the list selects its first row, so the keys always have one to act on; Tab itself leaves the list (`setTabKeyNavigation(False)`). The selected row is filled with the `button` color while the list has the focus, and like a row under the mouse otherwise. A right-click opens a menu (`row_menu`) with all three actions and their keys, the ones the row doesn't have grayed out, and a double-click on a row (not on its icons) shows its file. Each of these emits the view's own `action(row, name)`, which `_row_action` runs like a click on an icon.
+The same actions work from the keyboard. The list takes the focus (Tab reaches it, and a click selects a row), the arrow keys move between rows, and `DownloadsView.keyPressEvent` runs the selected row's action for Space, Esc, Enter or Delete (`ACTION_KEYS`: a key's actions, of which a row has at most one, since Space is both Pause and Resume; with Ctrl, Alt or Shift held they do nothing). Tabbing into the list selects its first row, so the keys always have one to act on; Tab itself leaves the list (`setTabKeyNavigation(False)`). The selected row is filled with the `button` color while the list has the focus, and like a row under the mouse otherwise. A right-click opens a menu (`row_menu`) with all the actions and their keys, the ones the row doesn't have grayed out, and a double-click on a row (not on its icons) shows its file. Each of these emits the view's own `action(row, name)`, which `_row_action` runs like a click on an icon.
 
 ### Kept between runs
 
-The list is saved in `downloads.json`, next to the settings file (`history_path`), and comes back when the app starts (`_load_history`): the newest 200 rows (`HISTORY_LIMIT`), in their order. For each row it keeps what the list shows (`row_entry`): the link, format, folder, Whole playlist setting, title, details, state, message and file, and the thumbnail as a small JPEG (`thumb_jpeg`, a few KB, base64 in the JSON). Each save writes the model's rows, so a removed row, or the rows Clear finished removes, leave the saved list too. It's saved a second after the list last changed (`_history_changed` restarts the single-shot `_history_timer`), so a burst of changes, such as many lookups finishing at once, is one write, and right away when the window closes.
+The list is saved in `downloads.json`, next to the settings file (`history_path`), and comes back when the app starts (`_load_history`): the newest 200 rows (`HISTORY_LIMIT`), in their order. For each row it keeps what the list shows (`row_entry`): the link, format, folder, Whole playlist setting, title, details, state, progress, message and file, a paused row's `partial_files`, and the thumbnail as a small JPEG (`thumb_jpeg`, a few KB, base64 in the JSON). Each save writes the model's rows, so a removed row, or the rows Clear finished removes, leave the saved list too. It's saved a second after the list last changed (`_history_changed` restarts the single-shot `_history_timer`), so a burst of changes, such as many lookups finishing at once, is one write, and right away when the window closes.
 
 Thumbnails are cached rather than looked up again: a restored row shows its thumbnail at once, also offline, and the app doesn't contact YouTube for links nobody entered in this run (see the README's privacy policy). The lookup's worker already has the Pillow image, so it encodes it there (`engine.encode_thumbnail`), and `restored_row` decodes it with Pillow too (`engine.decode_thumbnail`), so it doesn't depend on Qt's JPEG plugin being bundled. Without Pillow there are no thumbnails to keep.
 
-`restored_row` checks each entry and leaves out one it can't use (no link, an unknown format, no folder); a damaged thumbnail only leaves its row without one. Restored rows are marked `restored`: they aren't looked up or downloaded again, and the status line's summary doesn't count them. A row that was waiting or downloading when the app closed comes back Canceled, with "Stopped when the app closed" (`INTERRUPTED`): closing during a download cancels it and removes its partial file anyway, after a crash nothing is running either, and a download starting again by itself would be a surprise.
+`restored_row` checks each entry and leaves out one it can't use (no link, an unknown format, no folder); a damaged thumbnail only leaves its row without one. Restored rows are marked `restored`: they aren't looked up again, they don't download until they're resumed, and the status line's summary doesn't count them until then. A paused row comes back Paused, with its progress and partial files, so Resume continues it. Closing during a download pauses it and the waiting rows, so that's how they come back; a row that was still waiting or downloading (after a crash) comes back Paused too, with "Stopped when the app closed" (`INTERRUPTED`): a download starting again by itself would be a surprise, and Resume continues its `.part` files all the same.
 
 ## Drag and drop
 
@@ -174,7 +177,7 @@ All dialogs are `QMessageBox`'s static functions (`question`, `critical`, `warni
 | "Choose a folder" (warning) | Save to is empty or not a full path |
 | "Playlist" (yes/no) | Whole playlist was off for a link that turns out to be a playlist or channel; asked when that row's download starts |
 | "Folder not found" (error) / "Couldn't open the folder" (error) | Show in folder clicked after the folder was removed / the file manager couldn't be started |
-| "Download in progress" (yes/no) | Closing the window during a download |
+| "Download in progress" (yes/no) | Closing the window during a download: "Pause it and close the app?" |
 | "Installed" (info) | Only if yt-dlp was installed but couldn't be loaded without a restart |
 
 A download that fails gets no dialog, and neither does success: the row shows the result, and the status line sums up once the list has nothing left to download.

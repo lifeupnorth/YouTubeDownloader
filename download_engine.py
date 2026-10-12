@@ -568,17 +568,41 @@ def _remove(path):
     return True
 
 
-def _canceled_summary(saved, removed):
+def canceled_summary(saved, removed):
     parts = [f"{saved} saved"] if saved else []
     if removed:
         parts.append(f"{removed} partial file{'s' * (removed != 1)} removed")
     return "Download canceled" + (f" ({', '.join(parts)})" if parts else "") + "."
 
 
+def remove_partial_files(paths, on_log=lambda msg: None):
+    """Removes an unfinished download's files: each path (a .part file, a
+    stream that wasn't merged yet, a file a stopped ffmpeg was writing) and
+    its .ytdl and -Frag* files. Returns how many were removed; logs those
+    that couldn't be."""
+    files = [p for path in set(paths)
+             for p in [path, path + ".ytdl", *glob.glob(glob.escape(path) + "-Frag*")]
+             if os.path.exists(p)]
+    stuck = [p for p in files if not _remove(p)]
+    if stuck:
+        # On Windows a file can't be removed while open, and yt-dlp's
+        # fragment downloader leaves its file to be closed by the garbage
+        # collector after a cancel.
+        gc.collect()
+        stuck = [p for p in stuck if not _remove(p)]
+    for p in stuck:
+        on_log(f"⚠ Couldn't remove the partial file {p}")
+    return len(files) - len(stuck)
+
+
 class DownloadJob:
     """Downloads one link: a video, or a whole playlist or channel.
 
-    Call run() on a worker thread; cancel() may be called from any thread.
+    Call run() on a worker thread; cancel() and pause() may be called from
+    any thread. Both stop it the same way, but pause keeps the unfinished
+    video's partial files (listed in .partial_files): a new job for the same
+    link continues them, as yt-dlp resumes .part files. Given the earlier
+    job's partial_files, a canceled job removes those too.
     The job reports through callbacks, which also run on the worker thread:
 
     on_progress(percent, message): often; only the newest call matters.
@@ -587,22 +611,28 @@ class DownloadJob:
     """
 
     def __init__(self, url, *, fmt, folder, ffmpeg, whole_playlist,
-                 on_progress, on_log, ask, cancel_event=None, js_runtime=None):
+                 on_progress, on_log, ask, cancel_event=None, pause_event=None,
+                 partial_files=(), js_runtime=None):
         self.url = url
         self.fmt, self.folder, self.ffmpeg = fmt, folder, ffmpeg
         self.js_runtime = js_runtime   # (name, path) from find_js_runtime()
         self.whole_playlist = whole_playlist
         self.on_progress, self.on_log, self.ask = on_progress, on_log, ask
         self._cancel = cancel_event or threading.Event()
+        self._pause = pause_event or threading.Event()
 
         # The result, filled in while it runs.
-        self.outcome = None         # "done", "failed", "declined", "canceled"
+        self.outcome = None         # "done", "failed", "declined", "canceled", "paused"
         self.saved = self.already = self.removed = 0
         self.skipped = []           # why entries failed (e.g. private videos)
         self.error = None           # why the whole job failed
         self.error_logged = False   # whether that reason is already in the log
         self.last_file = None       # the last file saved or already there
+        self.partial_files = []     # after a pause: what to resume, or remove
 
+        # An earlier, paused job's partial files. A stream that finished then
+        # gets no "downloading" event now, so it's only known from there.
+        self._earlier_files = set(partial_files)
         self._stream_index = 0      # which stream of the current video
         self._stream_count = 1      # how many it has (video + audio = 2)
         self._entry_files = set()   # files written for the unfinished video
@@ -614,8 +644,13 @@ class DownloadJob:
         self._cancel.set()
         self.stop_processes()
 
+    def pause(self):
+        self._pause.set()
+        self.stop_processes()
+
     def stop_processes(self):
-        """Stops the ffmpeg this job is running, if any (after a cancel)."""
+        """Stops the ffmpeg this job is running, if any (after a cancel or
+        pause)."""
         # The outputs are noted before the kill, so the worker waking up from
         # it always finds them in _remove_partial_files.
         with self._lock:
@@ -635,12 +670,20 @@ class DownloadJob:
             # playlist starts thousands).
             self._processes = [(p, out) for p, out in self._processes if p.poll() is None]
             self._processes.append((proc, output))
-        if self.canceled:   # canceled just before it started
+        if self.stopping:   # canceled or paused just before it started
             self.stop_processes()
 
     @property
     def canceled(self):
         return self._cancel.is_set()
+
+    @property
+    def paused(self):
+        return self._pause.is_set() and not self.canceled
+
+    @property
+    def stopping(self):
+        return self._cancel.is_set() or self._pause.is_set()
 
     def options(self):
         """The yt-dlp options for this download."""
@@ -660,7 +703,7 @@ class DownloadJob:
             # Like the yt-dlp CLI: skip unavailable entries instead of stopping.
             "ignoreerrors": "only_download",
             "logger": _YdlLogger(self._entry_failed, self._entry_warning,
-                                 self._check_canceled),
+                                 self._check_stop),
             # "auto" colors the ERROR: prefix when started from a terminal.
             "color": {"stdout": "never", "stderr": "never"},
         }
@@ -684,11 +727,12 @@ class DownloadJob:
                                        when="after_move")
                 if self.whole_playlist:
                     ydl.download([self.url])
-                elif not self._download_unless_declined(ydl):
+                elif not self._download_unless_declined(ydl) and not self.stopping:
+                    # (A question cut short by Cancel or Pause isn't a No.)
                     self.outcome = "declined"
                     return self.outcome
         except Exception as exc:
-            if not self.canceled:
+            if not self.stopping:
                 self.outcome, self.error = "failed", str(exc)
                 return self.outcome
         finally:
@@ -699,6 +743,10 @@ class DownloadJob:
             self.removed = self._remove_partial_files()
             self.outcome = "canceled"
             return self.outcome
+        if self.paused:
+            self._keep_partial_files()
+            self.outcome = "paused"
+            return self.outcome
         if self.skipped and not (self.saved or self.already):
             # Nothing worked, e.g. a single private video: that's a failure,
             # and its reason is already in the log.
@@ -708,11 +756,12 @@ class DownloadJob:
         return self.outcome
 
     # Raising this is how yt-dlp lets a caller stop a download. It leaves the
-    # .part file behind, which _remove_partial_files() then deletes. Runs in
-    # the progress hook, before each video, and for each of yt-dlp's status
+    # .part file behind, which _remove_partial_files() then deletes after a
+    # cancel, and a resumed download continues after a pause. Runs in the
+    # progress hook, before each video, and for each of yt-dlp's status
     # messages (see _YdlLogger).
-    def _check_canceled(self):
-        if self.canceled:
+    def _check_stop(self):
+        if self.stopping:
             raise yt_dlp.utils.DownloadCancelled()
 
     # With "whole playlist" off, ask before downloading a playlist, channel
@@ -736,7 +785,7 @@ class DownloadJob:
     # Merged formats download video and audio as separate streams, and the
     # progress hook's info_dict doesn't list them, so count them here.
     def _video_starting(self, info):
-        self._check_canceled()   # also stops a playlist between two videos
+        self._check_stop()   # also stops a playlist between two videos
         self._stream_index = 0
         self._stream_count = len(info.get("requested_formats") or ()) or 1
         self._entry_files = set()
@@ -747,7 +796,7 @@ class DownloadJob:
             # get a "downloading" event, so canceling can't remove them.
             self._entry_files.update(
                 p for p in (d.get("tmpfilename"), d.get("filename")) if p)
-        self._check_canceled()
+        self._check_stop()
         streams = self._stream_count
         entry = d.get("info_dict") or {}
         index, count = entry.get("playlist_index"), entry.get("n_entries")
@@ -777,6 +826,10 @@ class DownloadJob:
         path = info.get("filepath", "")
         self.last_file = path
         if info.get("__real_download"):
+            # The paused video is the first one this run downloads (those
+            # before it are already there), so its earlier files are done
+            # with: the final file may even be one of them.
+            self._earlier_files.clear()
             self.saved += 1
             self.on_log(f"✔ Saved: {path}")
         else:
@@ -784,7 +837,7 @@ class DownloadJob:
             self.on_log(f"• Already downloaded: {path}")
 
     def _entry_failed(self, msg):
-        if self.canceled:   # e.g. the ffmpeg that cancel() stopped
+        if self.stopping:   # e.g. the ffmpeg that cancel() or pause() stopped
             return
         msg = msg.removeprefix("ERROR: ")
         self.skipped.append(msg)
@@ -795,31 +848,32 @@ class DownloadJob:
             return   # the window says so once, at startup
         self.on_log(f"⚠ {msg.removeprefix('WARNING: ')}")
 
-    # After a cancel: removes what this run wrote for the unfinished video
-    # (its .part file, fragments, any stream that finished but wasn't merged
-    # yet, and the file a stopped ffmpeg was writing). Videos that finished
-    # are kept.
+    # After a cancel: removes what this run (or the paused one it resumes)
+    # wrote for the unfinished video (its .part file, fragments, any stream
+    # that finished but wasn't merged yet, and the file a stopped ffmpeg was
+    # writing). Videos that finished are kept.
     def _remove_partial_files(self):
         with self._lock:
             killed = list(self._killed_outputs)
-        files = [p for path in {*self._entry_files, *killed}
-                 for p in [path, path + ".ytdl", *glob.glob(glob.escape(path) + "-Frag*")]
-                 if os.path.exists(p)]
-        stuck = [p for p in files if not _remove(p)]
-        if stuck:
-            # On Windows a file can't be removed while open, and yt-dlp's
-            # fragment downloader leaves its file to be closed by the garbage
-            # collector after a cancel.
-            gc.collect()
-            stuck = [p for p in stuck if not _remove(p)]
-        for p in stuck:
-            self.on_log(f"⚠ Couldn't remove the partial file {p}")
-        return len(files) - len(stuck)
+        return remove_partial_files({*self._entry_files, *self._earlier_files, *killed},
+                                    self.on_log)
+
+    # After a pause: keeps what a resumed download continues (the .part file,
+    # fragments, finished streams), but not a stopped ffmpeg's output. That
+    # is never continued, and a half-converted MP3 has the final name, which
+    # a resumed download would take for a finished one.
+    def _keep_partial_files(self):
+        with self._lock:
+            killed = list(self._killed_outputs)
+        self.removed = remove_partial_files(killed, self.on_log)
+        self.partial_files = sorted({*self._entry_files, *self._earlier_files})
 
     def summary(self):
         """How it went, for the status line, e.g. "Done: 2 saved, 1 skipped"."""
         if self.outcome == "canceled":
-            return _canceled_summary(self.saved, self.removed)
+            return canceled_summary(self.saved, self.removed)
+        if self.outcome == "paused":
+            return "Download paused" + (f" ({self.saved} saved)" if self.saved else "") + "."
         if self.outcome == "declined":
             return "Playlist not downloaded."
         if self.outcome == "failed":
