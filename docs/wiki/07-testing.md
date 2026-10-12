@@ -16,7 +16,7 @@
 
 </details>
 
-The tests use the standard library `unittest`, and nothing touches the internet: most downloads run against a fake yt-dlp, and `test_real_yt_dlp.py` runs the real one against a local server. There are 222 tests in seven files. The window's tests open real Qt windows, but on Qt's "offscreen" platform: `test_window.py` and `test_app.py` set `QT_QPA_PLATFORM=offscreen` before importing Qt (unless it's already set), so no display is needed and nothing shows up on screen. GitHub Actions runs them on every push to `main` and every pull request, together with a ruff lint check.
+The tests use the standard library `unittest`, and nothing touches the internet: most downloads run against a fake yt-dlp, and `test_real_yt_dlp.py` runs the real one against a local server. There are 223 tests in seven files. The window's tests open real Qt windows, but on Qt's "offscreen" platform: `test_window.py` and `test_app.py` set `QT_QPA_PLATFORM=offscreen` before importing Qt (unless it's already set), so no display is needed and nothing shows up on screen. GitHub Actions runs them on every push to `main` and every pull request, together with a ruff lint check.
 
 ```
 python -m unittest discover -s tests -v
@@ -26,7 +26,7 @@ python -m unittest discover -s tests -v
 |---|---|---|---|
 | `test_engine.py` | 75 | `download_engine.py` on its own: formats, ffmpeg and JavaScript runtime lookup, the update check, yt-dlp version and loading, preview helpers and thumbnail sizes, the logger, `DownloadJob` | Nothing (some tests use real yt-dlp or Pillow and skip without them) |
 | `test_real_yt_dlp.py` | 3 | The engine with the real yt-dlp, downloading from a local HTTP server: a download then "Already downloaded", an MP3 converted only once, Cancel removing the `.part` file | yt-dlp; ffmpeg for the MP3 test |
-| `test_window.py` | 101 | The real window driven with a fake yt-dlp: the Downloads list and its saved copy, the queue, several downloads at once, Cancel, Pause and Resume, drag and drop, the keyboard and right-click menu, closing, playlists, lookups, settings and themes; worker threads must never touch Qt or show a dialog | PySide6 |
+| `test_window.py` | 102 | The real window driven with a fake yt-dlp: the Downloads list and its saved copy, the queue, several downloads at once, Cancel, Pause and Resume, drag and drop, the keyboard and right-click menu, closing, playlists, lookups, settings and themes; worker threads must never touch Qt or show a dialog | PySide6 |
 | `test_app.py` | 17 | Settings file, the saved list's file (next to it, capped, bad files ignored), Show in folder (`reveal_in_file_manager`), ffmpeg help text, the update check's once-a-day limit and its setting, `split_links`, what the .exe does differently (no pip install, the `--self-check` report) | PySide6 |
 | `test_requirements.py` | 10 | The yt-dlp pin in `requirements.txt` is exact (`yt-dlp[default]==…`) and is what the in-app installer uses; the `default` extra brings yt-dlp-ejs; every requirement is pinned; Dependabot watches the file | PySide6 (it imports the window module) |
 | `test_build_exe.py` | 12 | `packaging/build_exe.py`: checksum-checked downloads and unpacking, the Windows version information it embeds, the `--check` verdict on the .exe's self-check (including Qt's SVG support), and `THIRD-PARTY-LICENSES.txt` (the bundled packages match what `requirements.txt` installs; Qt and PySide6 get the LGPL and GPL texts, not their packages' commercial-license file; no Tcl/Tk) | Nothing |

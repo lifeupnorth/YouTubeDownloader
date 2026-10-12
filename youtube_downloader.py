@@ -1482,6 +1482,13 @@ class YouTubeDownloader(QMainWindow):
         elif solver is None:
             self._log(js_solver_help(), show=True)
 
+    # A runtime a download found after startup found none: kept, so later
+    # downloads and lookups don't look again. Startup already explained
+    # what was missing, so nothing more is logged.
+    def _js_runtime_installed(self, runtime):
+        if self._js_runtime is None:
+            self._js_runtime = runtime
+
     # ── Adding links ────────────────────────────────────────────────────────
 
     # Download clicked (or Enter): the links in the box.
@@ -1682,6 +1689,8 @@ class YouTubeDownloader(QMainWindow):
         try:
             if js_runtime is None:   # installed since startup?
                 js_runtime = engine.find_js_runtime()
+                if js_runtime:
+                    self._post(self._js_runtime_installed, js_runtime)
             job = engine.DownloadJob(
                 row.url, fmt=row.fmt, folder=row.folder, ffmpeg=ffmpeg,
                 whole_playlist=row.whole_playlist,
