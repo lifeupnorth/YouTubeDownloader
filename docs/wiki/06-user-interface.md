@@ -48,7 +48,7 @@ Sources: [youtube_downloader.py:30-44](https://github.com/lifeupnorth/YouTubeDow
 | Whole playlist (`whole_playlist`) | | A switch, off by default and never remembered. Read for each link when it's added to the list |
 | Download (`dl_btn`) | `_start_download` | Red, with a download arrow drawn by `download_icon` (a "⬇" character comes out as a color emoji on Windows). Adds the links to the list. It stays a Download button while downloads run, so more links can be added at any time |
 | Count (`count_lbl`) | the model's `rowsInserted`, `rowsRemoved` and `dataChanged` → `_update_counts` | "3 · 1 completed" next to the Downloads heading; empty while the list is |
-| Clear finished | `_clear_finished` | Removes every finished row (Completed, Failed, Canceled, Not downloaded) from the list; the files stay |
+| Clear finished | `_clear_finished` | Removes every finished row (Completed, Failed, Canceled, Not downloaded, Nothing found) from the list and the saved list; the files stay |
 | Downloads list (`view`) | `RowDelegate.action` → `_row_action` | See [The Downloads list](#the-downloads-list) |
 | Log (`log_box`) | `_log` | A read-only `QPlainTextEdit`, 130 px high, hidden until the Log chip is checked |
 | Status line (`status_lbl`) | `_set_status` | Text and color; wraps |
@@ -100,6 +100,14 @@ The action icons are drawn by `draw_icon` in the theme's colors, with a round ba
 
 The same actions work from the keyboard. The list takes the focus (Tab reaches it, and a click selects a row), the arrow keys move between rows, and `DownloadsView.keyPressEvent` runs the selected row's action for Esc, Enter or Delete (`ACTION_KEYS`; with Ctrl, Alt or Shift held they do nothing). Tabbing into the list selects its first row, so the keys always have one to act on; Tab itself leaves the list (`setTabKeyNavigation(False)`). The selected row is filled with the `button` color while the list has the focus, and like a row under the mouse otherwise. A right-click opens a menu (`row_menu`) with all three actions and their keys, the ones the row doesn't have grayed out, and a double-click on a row (not on its icons) shows its file. Each of these emits the view's own `action(row, name)`, which `_row_action` runs like a click on an icon.
 
+### Kept between runs
+
+The list is saved in `downloads.json`, next to the settings file (`history_path`), and comes back when the app starts (`_load_history`): the newest 200 rows (`HISTORY_LIMIT`), in their order. For each row it keeps what the list shows (`row_entry`): the link, format, folder, Whole playlist setting, title, details, state, message and file, and the thumbnail as a small JPEG (`thumb_jpeg`, a few KB, base64 in the JSON). Each save writes the model's rows, so a removed row, or the rows Clear finished removes, leave the saved list too. It's saved a second after the list last changed (`_history_changed` restarts the single-shot `_history_timer`), so a burst of changes, such as many lookups finishing at once, is one write, and right away when the window closes.
+
+Thumbnails are cached rather than looked up again: a restored row shows its thumbnail at once, also offline, and the app doesn't contact YouTube for links nobody entered in this run (see the README's privacy policy). The lookup's worker already has the Pillow image, so it encodes it there (`engine.encode_thumbnail`), and `restored_row` decodes it with Pillow too (`engine.decode_thumbnail`), so it doesn't depend on Qt's JPEG plugin being bundled. Without Pillow there are no thumbnails to keep.
+
+`restored_row` checks each entry and leaves out one it can't use (no link, an unknown format, no folder); a damaged thumbnail only leaves its row without one. Restored rows are marked `restored`: they aren't looked up or downloaded again, and the status line's summary doesn't count them. A row that was waiting or downloading when the app closed comes back Canceled, with "Stopped when the app closed" (`INTERRUPTED`): closing during a download cancels it and removes its partial file anyway, after a crash nothing is running either, and a download starting again by itself would be a surprise.
+
 ## Drag and drop
 
 The window takes drops (`setAcceptDrops`); the URL and folder boxes don't (`setAcceptDrops(False)`), so a drop on them does the same as anywhere else. `dropped(mime)` reads what's dragged: the `http`/`https` links among its URLs (or, without any, the links in its text, through `split_links`), and the first local folder. Anything else is refused.
@@ -110,7 +118,7 @@ While something is dragged over the window, `dragEnterEvent` shows an overlay (`
 
 ## Looking links up
 
-As soon as Download adds a row, `_start_download` starts `_look_up` for it on a worker, with the thumbnail size in device pixels (`_thumb_pixels`, read on the main thread, since workers mustn't touch widgets) and the JavaScript runtime found at startup. A semaphore (`_lookup_slots`) lets three lookups run at a time; the others wait their turn. A lookup whose row was canceled meanwhile, or that gets its turn while the window closes, does nothing. Otherwise it posts `_looked_up(row, None)`, which shows the row as "Looking up…" if it's still waiting, and calls `engine.preview_link`. That asks yt-dlp for the link's details without downloading (`process=False`, following `url` results, not paging through playlist entries), formats them with `describe_info`, and fetches the smallest thumbnail at least as wide as asked (`thumbnail_url(info, max(160, width))`), shrunk to fit (`fetch_thumbnail`). The thumbnail needs Pillow; without it rows show titles only. The worker turns the Pillow image into a `QImage` (`to_qimage`; a `QPixmap` may only be made on the main thread), and `_looked_up` sets the row's title, details and thumbnail.
+As soon as Download adds a row, `_start_download` starts `_look_up` for it on a worker, with the thumbnail size in device pixels (`_thumb_pixels`, read on the main thread, since workers mustn't touch widgets) and the JavaScript runtime found at startup. A semaphore (`_lookup_slots`) lets three lookups run at a time; the others wait their turn. A lookup whose row was canceled meanwhile, or that gets its turn while the window closes, does nothing. Otherwise it posts `_looked_up(row, None)`, which shows the row as "Looking up…" if it's still waiting, and calls `engine.preview_link`. That asks yt-dlp for the link's details without downloading (`process=False`, following `url` results, not paging through playlist entries), formats them with `describe_info`, and fetches the smallest thumbnail at least as wide as asked (`thumbnail_url(info, max(160, width))`), shrunk to fit (`fetch_thumbnail`). The thumbnail needs Pillow; without it rows show titles only. The worker turns the Pillow image into a `QImage` (`to_qimage`; a `QPixmap` may only be made on the main thread) and into the small JPEG the saved list keeps (`engine.encode_thumbnail`), and `_looked_up` sets the row's title, details and thumbnail.
 
 A row's lookup and its download are independent: the download can start before the lookup is done, and the title then appears while it runs. The row's `cancel_event` stops both. A canceled lookup stops at yt-dlp's next status message (the `check` of `_YdlLogger` raises yt-dlp's `DownloadCancelled`) or the thumbnail's next 64 KB chunk, `preview_link` returns `None`, and nothing is posted. Closing the window sets every row's event.
 
@@ -132,7 +140,7 @@ Worker threads reach them only through `_post` (see [Architecture and Threading]
 | `SUCCESS` | `#2ba640` | `#107c41` | "✔ All downloads complete.", "✔ Done: 2 completed, 1 canceled.", yt-dlp installed |
 | `ERROR` | `#ff4e45` | `#cc0000` | "✘ Nothing downloaded: 1 failed.", a failed install |
 
-When the last waiting row has finished, `_queue_finished` sets one of those summaries, counted over the finished rows still in the list, and calls `QApplication.alert`, which flashes the taskbar button if the window isn't in front.
+When the last waiting row has finished, `_queue_finished` sets one of those summaries, counted over the finished rows still in the list (not those restored from an earlier run), and calls `QApplication.alert`, which flashes the taskbar button if the window isn't in front.
 
 ## Themes
 

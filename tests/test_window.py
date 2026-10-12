@@ -136,6 +136,9 @@ class WindowTest(unittest.TestCase):
             QApplication.processEvents()
             time.sleep(0.005)
         window._closing = True
+        # Not saved later, into the next test's settings folder: deleteLater
+        # doesn't delete the window (and its timers) without an event loop.
+        window._history_timer.stop()
         window.hide()
         window.deleteLater()
         QApplication.processEvents()
@@ -1039,6 +1042,98 @@ class WindowTest(unittest.TestCase):
         self.assertTrue(window.update_switch.isChecked())
         window.update_switch.setChecked(False)
         self.assertIs(ytd.load_settings()["check_updates"], False)
+
+    # ── The saved list ──
+
+    def shown(self, rows):
+        return [(r.url, r.fmt, r.folder, r.whole_playlist, r.title, r.details, r.state,
+                 r.message, r.file) for r in rows]
+
+    def test_the_list_comes_back_at_the_next_start(self):
+        self.app.whole_playlist.setChecked(True)
+        with tempfile.TemporaryDirectory() as tmp:
+            class FailsOnB(make_fake_ydl(streams=1, files_dir=tmp)):
+                def download(self, urls):
+                    if urls == ["https://e.com/b"]:
+                        raise RuntimeError("no such video")
+                    super().download(urls)
+
+            self.app.path.setText(tmp)
+            self.run_download(FailsOnB, "https://e.com/a https://e.com/b")
+            self.assertTrue(self.app._history_timer.isActive(), "a save is due")
+            self.wait(lambda: os.path.exists(ytd.history_path()), what="the list to be saved")
+            lookups = engine.preview_link.call_count
+            again = self.new_window()
+            self.assertEqual(self.shown(again.model.rows), self.shown(self.rows()))
+            self.assertEqual([r.state for r in again.model.rows], ["done", "failed"])
+            self.assertEqual(again.model.rows[1].message, "no such video")
+            self.assertTrue(all(r.restored for r in again.model.rows))
+            self.wait(lambda: again._active_workers == 0)
+            self.assertEqual(engine.preview_link.call_count, lookups,
+                             "restored rows were looked up again")
+            self.assertIsNone(again._running, "a restored row started downloading")
+            with mock.patch.object(ytd, "reveal_in_file_manager") as reveal:
+                again._row_action(again.model.rows[0], "folder")
+            reveal.assert_called_once_with(os.path.join(tmp, "v0.mp4"))
+
+    def test_removing_rows_removes_them_from_the_saved_list(self):
+        self.app._history_timer.setInterval(10)
+        first, second, third = self.add_rows("done", "failed", "waiting")
+        self.app._row_action(second, "remove")
+        self.wait(lambda: not self.app._history_timer.isActive())
+        self.assertEqual([e["url"] for e in ytd.load_history()], [first.url, third.url])
+        self.app._clear_finished()
+        self.wait(lambda: not self.app._history_timer.isActive())
+        self.assertEqual([e["url"] for e in ytd.load_history()], [third.url])
+
+    def test_rows_that_hadnt_finished_come_back_canceled(self):
+        rows = self.add_rows("waiting", "looking", "downloading", "processing", "done")
+        rows[2].message = "1.0 MB/s · ETA 0:07"
+        self.app.close()   # saves it at once
+        self.assertTrue(os.path.exists(ytd.history_path()))
+        restored = self.new_window().model.rows
+        self.assertEqual([(r.state, r.message) for r in restored],
+                         [("canceled", ytd.INTERRUPTED)] * 4 + [("done", "")])
+        self.assertEqual(ytd.row_actions(restored[0]), ["remove"])
+
+    def test_the_saved_list_keeps_the_newest_rows(self):
+        self.add_rows(*["done"] * (ytd.HISTORY_LIMIT + 3))
+        self.app._save_history()
+        self.assertEqual(len(self.rows()), ytd.HISTORY_LIMIT + 3, "this run's list is whole")
+        restored = self.new_window().model.rows
+        self.assertEqual([r.url for r in restored], [r.url for r in self.rows()[3:]])
+
+    def test_bad_saved_entries_are_left_out(self):
+        good = {"url": VIDEO, "fmt": "720p", "folder": "f", "state": "done"}
+        ytd.save_history([
+            "not a dict", {**good, "url": ""}, {**good, "fmt": "bogus"},
+            {**good, "folder": None}, {"url": VIDEO},
+            {**good, "title": 5, "file": 7, "thumb": "not base64!", "state": "bogus"},
+            good])
+        restored = self.new_window().model.rows
+        self.assertEqual(self.shown(restored),
+                         [(VIDEO, "720p", "f", False, "", "", "canceled", ytd.INTERRUPTED,
+                           None), (VIDEO, "720p", "f", False, "", "", "done", "", None)])
+        self.assertEqual([(r.thumb, r.thumb_jpeg) for r in restored], [(None, None)] * 2)
+
+    @unittest.skipIf(engine.Image is None, "Pillow not installed")
+    def test_thumbnails_come_back_without_a_lookup(self):
+        image = engine.Image.new("RGB", engine.THUMB_SIZE, "red")
+        row = self.look_up(VIDEO, lambda url: {"title": "T", "duration": 5}, thumbnail=image)
+        self.assertIsNotNone(row.thumb_jpeg)
+        self.app._save_history()
+        restored, = self.new_window().model.rows
+        self.assertEqual((restored.thumb.width(), restored.thumb.height()), engine.THUMB_SIZE)
+        self.assertEqual(restored.thumb_jpeg, row.thumb_jpeg, "encoded again")
+        self.assertEqual(restored.state, "canceled", "it never downloaded")
+
+    def test_restored_rows_arent_in_the_summary(self):
+        self.add_rows("failed", "canceled")
+        for row in self.rows():
+            row.restored = True
+        self.run_download(make_fake_ydl(streams=1))
+        self.assertEqual(self.statuses[-1], "✔ All downloads complete.")
+        self.assertEqual(self.app.count_lbl.text(), "3 · 1 completed")
 
     # ── Themes ──
 

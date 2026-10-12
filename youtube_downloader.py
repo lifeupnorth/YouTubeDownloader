@@ -9,6 +9,7 @@ Requirements: pip install -r requirements.txt
 
 from __future__ import annotations
 
+import base64
 import ctypes
 import json
 import os
@@ -172,25 +173,53 @@ def settings_path():
     return os.path.join(base, "YT Downloader", "settings.json")
 
 
-def load_settings():
+def _read_json(path):
     try:
-        with open(settings_path(), encoding="utf-8") as f:
+        with open(path, encoding="utf-8") as f:
             data = json.load(f)
     except (OSError, ValueError):   # missing, unreadable or not JSON
         return {}
     return data if isinstance(data, dict) else {}
 
 
-def save_settings(data):
-    path = settings_path()
+def _write_json(path, data, indent=2):
     try:
         os.makedirs(os.path.dirname(path), exist_ok=True)
         # Write a temporary file first so a crash can't leave half a file.
         with open(path + ".tmp", "w", encoding="utf-8") as f:
-            json.dump(data, f, indent=2)
+            json.dump(data, f, indent=indent)
         os.replace(path + ".tmp", path)
     except OSError:
-        pass   # not being able to remember settings isn't worth an error
+        pass   # not being able to remember something isn't worth an error
+
+
+def load_settings():
+    return _read_json(settings_path())
+
+
+def save_settings(data):
+    _write_json(settings_path(), data)
+
+
+# The Downloads list is kept between runs, newest rows last, up to this many.
+HISTORY_LIMIT = 200
+
+
+def history_path():
+    """Where the Downloads list is kept between runs: next to the settings."""
+    return os.path.join(os.path.dirname(settings_path()), "downloads.json")
+
+
+def load_history():
+    """The saved list's entries (dicts, checked by restored_row)."""
+    entries = _read_json(history_path()).get("downloads")
+    return entries if isinstance(entries, list) else []
+
+
+def save_history(entries):
+    # On one line: with thumbnails it's up to a few MB, written often.
+    _write_json(history_path(), {"version": 1, "downloads": entries[-HISTORY_LIMIT:]},
+                indent=None)
 
 
 UPDATE_CHECK_INTERVAL = 24 * 60 * 60   # seconds
@@ -359,10 +388,12 @@ class Row:
     title: str = ""
     details: str = ""        # length · channel, or how a playlist went
     thumb: QPixmap | None = None
+    thumb_jpeg: bytes | None = None   # the thumbnail as the saved list keeps it
     state: str = "waiting"
     pct: float = 0
     message: str = ""        # speed and ETA, or why it failed
     file: str | None = None  # the last file it saved (or found already there)
+    restored: bool = False   # from the list saved by an earlier run
     log: list[str] = field(default_factory=list)
     cancel_event: threading.Event = field(default_factory=threading.Event)
     job: engine.DownloadJob | None = None
@@ -375,6 +406,57 @@ class Row:
     @property
     def quality_label(self):
         return dict((value, label) for label, value in QUALITIES).get(self.fmt, "—")
+
+
+# What a row that hadn't finished when the app closed says when it's back.
+INTERRUPTED = "Stopped when the app closed"
+
+
+def row_entry(row):
+    """What the saved list keeps of a row (see restored_row)."""
+    entry = {"url": row.url, "fmt": row.fmt, "folder": row.folder,
+             "whole_playlist": row.whole_playlist, "title": row.title,
+             "details": row.details, "state": row.state, "message": row.message,
+             "file": row.file}
+    if row.thumb_jpeg:
+        entry["thumb"] = base64.b64encode(row.thumb_jpeg).decode("ascii")
+    return entry
+
+
+def restored_row(entry):
+    """The Row for an entry of the saved list, or None if it isn't one.
+
+    A row that was waiting or downloading when the app closed comes back
+    Canceled: closing during a download cancels it (removing its partial
+    file), and after a crash nothing is running anymore either. Its
+    thumbnail comes from the saved list, so restoring needs no network.
+    """
+    if not isinstance(entry, dict):
+        return None
+    url, fmt, folder = entry.get("url"), entry.get("fmt"), entry.get("folder")
+    if not (isinstance(url, str) and url and fmt in FORMAT_VALUES
+            and isinstance(folder, str)):
+        return None
+
+    def text(key):
+        value = entry.get(key)
+        return value if isinstance(value, str) else ""
+
+    row = Row(url, fmt, folder, entry.get("whole_playlist") is True,
+              title=text("title"), details=text("details"), message=text("message"),
+              file=text("file") or None, restored=True)
+    if entry.get("state") in FINISHED:
+        row.state = entry["state"]
+    else:
+        row.state, row.message = "canceled", INTERRUPTED
+    try:
+        row.thumb_jpeg = base64.b64decode(text("thumb"), validate=True) or None
+    except ValueError:   # damaged: the row just has no thumbnail
+        pass
+    image = engine.decode_thumbnail(row.thumb_jpeg)
+    if image is not None:
+        row.thumb = QPixmap.fromImage(to_qimage(image))
+    return row
 
 
 # How the finished rows are counted in the summary, in this order.
@@ -946,6 +1028,11 @@ class YouTubeDownloader(QMainWindow):
             lambda _scheme: self.apply_theme())
         # A download's newest progress is shown 10 times a second.
         self._progress_timer = QTimer(self, interval=100, timeout=self._show_progress)
+        # The list is saved a moment after it changes: one write for a burst
+        # of changes (e.g. many links looked up at once), and on closing.
+        self._history_timer = QTimer(self, interval=1000, singleShot=True,
+                                     timeout=self._save_history)
+        self._load_history()
         self._fit_window()
 
         if not engine.YT_DLP_AVAILABLE:
@@ -1385,6 +1472,7 @@ class YouTubeDownloader(QMainWindow):
             self._start_worker(self._look_up, row, thumb, self._js_runtime)
             added += 1
         self.view.scrollToBottom()
+        self._history_changed()
         if added:
             self._run_next()
         else:
@@ -1455,14 +1543,15 @@ class YouTubeDownloader(QMainWindow):
                                          js_runtime, thumb)
         if result is not None:   # None: canceled
             text, image, found = result
-            self._post(self._looked_up, row, (text, image and to_qimage(image), found))
+            self._post(self._looked_up, row, (text, image and to_qimage(image), found,
+                                              engine.encode_thumbnail(image)))
 
     def _looked_up(self, row, result):
         if result is None:
             if row.state == "waiting":
                 row.state = "looking"
         else:
-            text, image, found = result
+            text, image, found, jpeg = result
             if row.state == "looking":
                 row.state = "waiting"
             if found:
@@ -1471,7 +1560,8 @@ class YouTubeDownloader(QMainWindow):
             elif not row.title:
                 row.details = text
             if image is not None:
-                row.thumb = QPixmap.fromImage(image)
+                row.thumb, row.thumb_jpeg = QPixmap.fromImage(image), jpeg
+            self._history_changed()
         self.model.changed(row)
 
     # ── Downloading, one link at a time ─────────────────────────────────────
@@ -1570,14 +1660,16 @@ class YouTubeDownloader(QMainWindow):
                     row.details = summary
                 self._log("✔ Done!" if summary == "Download complete!" else f"✔ {summary}")
         self.model.changed(row)
+        self._history_changed()
         if self._close_when_stopped:   # the user is closing the app
             self.close()
             return
         self._run_next()
 
-    # Says how the downloads went, once the last one has finished.
+    # Says how the downloads went, once the last one has finished. Rows from
+    # an earlier run aren't counted: they aren't this run's downloads.
     def _queue_finished(self):
-        finished = [r for r in self.model.rows if r.state in FINISHED]
+        finished = [r for r in self.model.rows if r.state in FINISHED and not r.restored]
         if not finished:
             return
         self._set_status(*queue_summary([r.state for r in finished]))
@@ -1617,6 +1709,7 @@ class YouTubeDownloader(QMainWindow):
             self._open_folder(row)
         elif action == "remove" and row.state in FINISHED:
             self.model.remove(row)
+            self._history_changed()
 
     # yt-dlp stops at its next progress update or status message (also while
     # it reads a playlist), and a running ffmpeg conversion or merge is
@@ -1631,6 +1724,7 @@ class YouTubeDownloader(QMainWindow):
             row.message = "Canceling…"
         else:   # still waiting: nothing to stop
             row.state, row.message = "canceled", ""
+            self._history_changed()
         self.model.changed(row)
 
     def _open_folder(self, row):
@@ -1647,6 +1741,24 @@ class YouTubeDownloader(QMainWindow):
     def _clear_finished(self):
         for row in [r for r in self.model.rows if r.state in FINISHED]:
             self.model.remove(row)
+        self._history_changed()
+
+    # ── The saved list ──────────────────────────────────────────────────────
+
+    # The rows of the last run come back as they ended (see restored_row).
+    def _load_history(self):
+        for entry in load_history()[-HISTORY_LIMIT:]:
+            row = restored_row(entry)
+            if row is not None:
+                self.model.add(row)
+        self.view.scrollToBottom()
+
+    def _history_changed(self):
+        self._history_timer.start()   # restarts it if it's already counting down
+
+    def _save_history(self):
+        self._history_timer.stop()
+        save_history([row_entry(row) for row in self.model.rows])
 
     # ── Closing ─────────────────────────────────────────────────────────────
 
@@ -1674,6 +1786,7 @@ class YouTubeDownloader(QMainWindow):
             row.cancel_event.set()   # stops lookups, and questions waiting
         self._progress_timer.stop()
         self._save_settings()
+        self._save_history()
         event.accept()
 
     def changeEvent(self, event):

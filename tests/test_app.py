@@ -53,6 +53,20 @@ class SettingsFileTest(unittest.TestCase):
             self.assertEqual(REAL_SETTINGS_PATH(), os.path.join(
                 "cfg", "YT Downloader", "settings.json"))
 
+    def test_the_downloads_list_is_kept_next_to_the_settings(self):
+        self.assertEqual(ytd.history_path(),
+                         os.path.join(os.path.dirname(self.path), "downloads.json"))
+        self.assertEqual(ytd.load_history(), [])   # no file yet
+        entries = [{"url": f"https://e.com/{n}"} for n in range(ytd.HISTORY_LIMIT + 5)]
+        ytd.save_history(entries)
+        self.assertEqual(ytd.load_history(), entries[5:], "the newest are kept")
+        with open(ytd.history_path(), encoding="utf-8") as f:
+            self.assertEqual(json.load(f)["version"], 1)
+        for content in ("not json", "[1, 2]", '{"downloads": 5}'):
+            with open(ytd.history_path(), "w", encoding="utf-8") as f:
+                f.write(content)
+            self.assertEqual(ytd.load_history(), [], content)
+
     def test_saved_formats_are_the_engines(self):
         for value in ytd.FORMAT_VALUES:
             self.assertTrue(engine.format_opts(value), value)

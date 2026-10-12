@@ -79,6 +79,8 @@ There are no environment variables, and the only command-line option is for a ch
 
 It's saved when a download starts, when the app closes, when a theme is chosen and when the update switch is clicked, through a temporary file so a crash can't leave half of it; keys it doesn't set are kept. A missing folder, an unknown format or theme, or a broken file falls back to the defaults. **Whole playlist** is never remembered, so it always starts off.
 
+The Downloads list is kept in `downloads.json` in the same folder: the last 200 rows, with their thumbnails. See [User Interface](06-user-interface.md#kept-between-runs).
+
 Sources: [youtube_downloader.py:62-94](https://github.com/lifeupnorth/YouTubeDownloader/blob/b369bd269cac691e2563e27391dbd3702c986e50/youtube_downloader.py#L62-L94), [youtube_downloader.py:242-248](https://github.com/lifeupnorth/YouTubeDownloader/blob/b369bd269cac691e2563e27391dbd3702c986e50/youtube_downloader.py#L242-L248), [youtube_downloader.py:421-438](https://github.com/lifeupnorth/YouTubeDownloader/blob/b369bd269cac691e2563e27391dbd3702c986e50/youtube_downloader.py#L421-L438), [youtube_downloader.py:1027-1034](https://github.com/lifeupnorth/YouTubeDownloader/blob/b369bd269cac691e2563e27391dbd3702c986e50/youtube_downloader.py#L1027-L1034)
 
 ## Running the tests and the lint check

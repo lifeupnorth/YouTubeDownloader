@@ -158,7 +158,7 @@ Each job ends with an outcome (`done`, `failed`, `declined` or `canceled`), coun
 | `canceled` | Canceled | `✘ Download canceled (…)` |
 | `None` (`_run_row` crashed) | Failed, with "An unexpected error (see the log)", or Canceled if the row was canceled | The error, from `_worker_crashed` |
 
-When no row is left waiting, `_queue_finished` sums up the finished rows still in the list in the status line (`queue_summary`), and flashes the taskbar button (`QApplication.alert`) if the window isn't in front. There's no dialog for success or failure. The summary counts each outcome, in the order completed, failed, canceled, not downloaded, empty, leaving out those with none:
+When no row is left waiting, `_queue_finished` sums up the finished rows still in the list, except those restored from an earlier run, in the status line (`queue_summary`), and flashes the taskbar button (`QApplication.alert`) if the window isn't in front. There's no dialog for success or failure. The summary counts each outcome, in the order completed, failed, canceled, not downloaded, empty, leaving out those with none:
 
 | Finished rows | Status line |
 |---|---|
@@ -176,6 +176,6 @@ Sources: [download_engine.py:619-633](https://github.com/lifeupnorth/YouTubeDown
 - Closing the window during a download asks first; Yes cancels it, the waiting rows and the lookups, and the window closes once the download has stopped and its partial files are removed. Closing again while it stops, or a crash, leaves the partial file.
 - An ffmpeg that is a `.bat`/`.cmd` wrapper runs under `cmd.exe /C`, so Cancel stops only `cmd.exe`.
 - A row's output folder is what **Save to** said when the link was added (default `~/Downloads`); yt-dlp creates missing folders.
-- The Downloads list isn't saved: it starts empty each time the app starts.
+- The Downloads list is saved, up to 200 rows (see [User Interface](06-user-interface.md#kept-between-runs)). A row that was waiting or downloading when the app closed comes back Canceled; it doesn't start again by itself.
 
 Sources: [youtube_downloader.py:183](https://github.com/lifeupnorth/YouTubeDownloader/blob/b369bd269cac691e2563e27391dbd3702c986e50/youtube_downloader.py#L183), [youtube_downloader.py:616-643](https://github.com/lifeupnorth/YouTubeDownloader/blob/b369bd269cac691e2563e27391dbd3702c986e50/youtube_downloader.py#L616-L643), [download_engine.py:554-560](https://github.com/lifeupnorth/YouTubeDownloader/blob/b369bd269cac691e2563e27391dbd3702c986e50/download_engine.py#L554-L560)

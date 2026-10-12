@@ -125,7 +125,11 @@ The status line at the bottom sums up when the list is done. Click **Log** next
 to it to see the details; it opens by itself when there's something to read,
 e.g. when ffmpeg is missing.
 
-The app remembers the folder, format and theme you used last time.
+The app remembers the folder, format and theme you used last time. It keeps
+the Downloads list too (the last 200 rows, with their thumbnails), so your
+downloads are still listed the next time you start it. Rows that hadn't
+finished when it closed come back as Canceled. **Remove from the list** and
+**Clear finished** take rows out of the saved list as well.
 
 **Theme** (top right) switches between a light and a dark look, both in
 YouTube's colors. **System**, the default, follows your system's light or dark
@@ -190,7 +194,8 @@ ask it to, with one exception, the update check:
 - Run from source without yt-dlp, the app can install it with pip (from PyPI)
   if you agree.
 
-The bundled ffmpeg and deno run on your computer only: ffmpeg converts and
+The settings and the Downloads list are saved on your computer only. The
+bundled ffmpeg and deno run on your computer only: ffmpeg converts and
 merges files, and deno runs yt-dlp's solver for YouTube's JavaScript challenges.
 
 ## Disclaimer
