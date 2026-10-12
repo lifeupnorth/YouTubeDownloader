@@ -45,6 +45,21 @@ yt-dlp's other bundled dependencies (its "default" extra)
   pycryptodomex  https://github.com/Legrandin/pycryptodome
                  BSD 2-Clause and public domain parts
 
+Qt and PySide6 (Qt for Python)
+  The window is built with Qt 6.12 through PySide6 6.12 (its "Essentials"
+  package, with shiboken6), https://www.qt.io/qt-for-python. They're used
+  under the GNU Lesser General Public License version 3 (LGPLv3); its text,
+  and the GPLv3 text it builds on, are in THIRD-PARTY-LICENSES.txt.
+  Sources: https://code.qt.io/cgit/pyside/pyside-setup.git (PySide6 and
+  shiboken6) and https://code.qt.io (Qt), or https://download.qt.io.
+  Qt includes third-party code (FreeType, HarfBuzz, PCRE2, zlib, libpng,
+  libjpeg and others) under their own licenses, listed at
+  https://doc.qt.io/qt-6/licenses-used-in-qt.html.
+  The Qt and PySide6 libraries aren't modified. The LGPL lets you use the
+  app with your own build of them: the app's source and the script that
+  builds the .exe (packaging/build_exe.py) are in the source repository, so
+  the .exe can be rebuilt with another Qt or PySide6.
+
 Pillow
   https://python-pillow.github.io/
   MIT-CMU license. Pillow includes libjpeg-turbo, libpng, zlib, FreeType,
@@ -55,9 +70,9 @@ Python
   The Python 3.14 runtime, under the PSF License Agreement
   (https://docs.python.org/3/license.html). It includes OpenSSL (Apache
   License 2.0), libffi, expat, zlib, libmpdec, mimalloc and other software
-  under their own licenses, SQLite (public domain), Tcl/Tk (a BSD-style
-  license), and the Microsoft Visual C++ runtime (VCRUNTIME140.dll), which
-  Microsoft permits redistributing with programs built with it.
+  under their own licenses, SQLite (public domain), and the Microsoft
+  Visual C++ runtime (VCRUNTIME140.dll), which Microsoft permits
+  redistributing with programs built with it.
 
 PyInstaller (used to build the .exe)
   https://pyinstaller.org/ — GPL with an exception that allows distributing

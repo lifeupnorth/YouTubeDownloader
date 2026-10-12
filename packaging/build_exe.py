@@ -1,8 +1,9 @@
 """Builds the one-file Windows app, dist/YT-Downloader.exe.
 
-The .exe bundles Python, the app, yt-dlp with its "default" extras (minus
-mutagen) and Pillow (the versions pinned in requirements.txt), ffmpeg and deno (the JavaScript runtime yt-dlp uses for
-YouTube), so users don't need to install anything.
+The .exe bundles Python, the app, Qt (PySide6), yt-dlp with its "default"
+extras (minus mutagen) and Pillow (the versions pinned in requirements.txt),
+ffmpeg and deno (the JavaScript runtime yt-dlp uses for YouTube), so users
+don't need to install anything.
 Run it on Windows, from the repository's root folder:
 
     pip install -r requirements.txt
@@ -50,19 +51,25 @@ DENO_URL = f"https://github.com/denoland/deno/releases/download/v{DENO_VERSION}/
 DENO_SHA256 = "a0c3101b4158d1dfb7d6a78a7bf0f3de80c96bb423c152beec8beb22786f2238"
 
 # The Python packages bundled into the .exe: requirements.txt's (yt-dlp with
-# its "default" extras but without mutagen, Pillow), what they need, and
-# PyInstaller's bootloader. Their license files go into
+# its "default" extras but without mutagen, PySide6, Pillow), what they need,
+# and PyInstaller's bootloader. Their license files go into
 # THIRD-PARTY-LICENSES.txt; tests/test_build_exe.py checks this list against
 # what's installed.
 BUNDLED_PACKAGES = (
     "yt-dlp", "yt-dlp-ejs", "requests", "urllib3", "charset-normalizer", "idna",
-    "certifi", "websockets", "brotli", "pycryptodomex", "pillow", "pyinstaller",
+    "certifi", "websockets", "brotli", "pycryptodomex", "pyside6-essentials",
+    "shiboken6", "pillow", "pyinstaller",
 )
+# Qt and PySide6 are used under the GNU LGPL v3, but their packages only ship
+# the Qt commercial license's text (LicenseRef-Qt-Commercial.txt), so the LGPL
+# and the GPL it builds on are vendored (from gnu.org) and go in instead.
+QT_PACKAGES = ("pyside6-essentials", "shiboken6")
+LGPL = os.path.join(HERE, "LGPL-3.0.txt")
+GPL = os.path.join(HERE, "GPL-3.0.txt")
 # CPython's licenses for the software built into Python (OpenSSL, libffi,
 # expat, zlib, ...), for the Python version the .exe is built with.
 PYTHON_LICENSES = os.path.join(HERE, "PYTHON-LICENSES.rst")
 PYTHON_LICENSES_VERSION = (3, 14)
-TCLTK_LICENSE = os.path.join(HERE, "TCLTK-LICENSE.txt")
 
 
 def sha256(path):
@@ -187,11 +194,17 @@ def third_party_licenses(path):
     with open(PYTHON_LICENSES, encoding="utf-8") as f:
         add("Software incorporated in Python: OpenSSL, libffi, expat, zlib, libmpdec, "
             "mimalloc, ... (CPython's Doc/license.rst)", f.read())
-    # Vendored: Python builds don't all ship Tcl's license.terms.
-    with open(TCLTK_LICENSE, encoding="utf-8") as f:
-        add("Tcl/Tk", f.read())
     add("SQLite", "SQLite is in the public domain: https://sqlite.org/copyright.html")
+    qt = ", ".join(f"{importlib.metadata.distribution(name).metadata['Name']} "
+                   f"{importlib.metadata.version(name)}" for name in QT_PACKAGES)
+    for title, text_file in (
+            (f"Qt and PySide6 ({qt}): GNU Lesser General Public License v3", LGPL),
+            ("The GNU General Public License v3, which the LGPL v3 builds on", GPL)):
+        with open(text_file, encoding="utf-8") as f:
+            add(title, f.read())
     for name in BUNDLED_PACKAGES:
+        if name in QT_PACKAGES:
+            continue   # their license is the LGPL above
         dist = importlib.metadata.distribution(name)
         files = dist.metadata.get_all("License-File") or []
         texts = [(file, _license_text(dist, file)) for file in files]
@@ -246,8 +259,10 @@ def build():
         "--add-data", f"{deno_license}{sep}.",
         "--add-data", f"{version_file}{sep}.",
         # yt-dlp[default] installs mutagen (GPL) to embed thumbnails and
-        # metadata, which the app doesn't do; keep it out of the .exe.
+        # metadata, which the app doesn't do; keep it out of the .exe. The
+        # window is Qt, so Tk isn't needed either.
         "--exclude-module", "mutagen",
+        "--exclude-module", "tkinter",
         os.path.join(ROOT, "youtube_downloader.py"),
     ])
     # The notices and licenses also go next to the .exe for users.
@@ -290,6 +305,8 @@ def check():
         problems.append(f"the version is {result.get('app_version')}, not {version}")
     if not result.get("thumbnails"):
         problems.append("Pillow (thumbnails) is missing")
+    if not result.get("svg_images"):
+        problems.append("Qt's SVG support (the switches and arrows) wasn't bundled")
     if result.get("window") != "YT Downloader":
         problems.append(f"the window didn't open: {result.get('window')}")
     info = product_info(exe)

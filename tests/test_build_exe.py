@@ -84,7 +84,7 @@ def good_report(**changes):
         "ffmpeg_version": f"ffmpeg version {build_exe.FFMPEG_VERSION}-essentials_build",
         "deno_bundled": True, "js_runtime_version": f"deno {build_exe.DENO_VERSION} (stable)",
         "js_solver": "0.8.0", "yt_dlp_extras_missing": [],
-        "thumbnails": True, "window": "YT Downloader",
+        "thumbnails": True, "svg_images": True, "window": "YT Downloader",
     }
     report.update(changes)
     return report
@@ -129,6 +129,7 @@ class CheckTest(unittest.TestCase):
             "js_solver": (None, "yt-dlp-ejs"),
             "yt_dlp_extras_missing": (["websockets"], "yt-dlp's extras weren't all bundled"),
             "thumbnails": (False, "Pillow (thumbnails) is missing"),
+            "svg_images": (False, "Qt's SVG support"),
             "window": ("failed: no display", "the window didn't open"),
         }
         for key, (value, message) in cases.items():
@@ -185,15 +186,15 @@ def _normalize(name):
 
 class ThirdPartyLicensesTest(unittest.TestCase):
     def test_bundled_packages_are_what_requirements_install(self):
-        # What yt-dlp[default] and Pillow need, all the way down, without
-        # mutagen (kept out of the .exe); plus PyInstaller's bootloader.
+        # What yt-dlp[default], PySide6 and Pillow need, all the way down,
+        # without mutagen (kept out of the .exe); plus PyInstaller's bootloader.
         import importlib.metadata
         try:
             from packaging.requirements import Requirement
         except ImportError:
             from pip._vendor.packaging.requirements import Requirement
         try:
-            todo = [("yt-dlp", "default"), ("pillow", "")]
+            todo = [("yt-dlp", "default"), ("pyside6-essentials", ""), ("pillow", "")]
             found = set()
             while todo:
                 name, extra = todo.pop()
@@ -223,9 +224,15 @@ class ThirdPartyLicensesTest(unittest.TestCase):
             build_exe.third_party_licenses(path)
             with open(path, encoding="utf-8") as f:
                 text = f.read()
-        for heading in ("OpenSSL", "Tcl/Tk", "Software incorporated in Python"):
+        for heading in ("OpenSSL", "Software incorporated in Python",
+                        "Qt and PySide6 (PySide6_Essentials 6.", "GNU LESSER GENERAL PUBLIC",
+                        "The GNU General Public License v3"):
             self.assertIn(heading, text)
+        self.assertNotIn("Tcl/Tk", text)
+        self.assertNotIn("Qt Commercial", text, "the Qt packages' own license file")
         for name in build_exe.BUNDLED_PACKAGES:
+            if name in build_exe.QT_PACKAGES:
+                continue
             dist = importlib.metadata.distribution(name)
             self.assertIn(f"{dist.metadata['Name']} {dist.version}: ", text)
 

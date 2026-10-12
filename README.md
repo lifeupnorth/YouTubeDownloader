@@ -3,9 +3,10 @@ A small app to download YouTube videos written in Python.
 
 ## Requirements
 
-- **Python 3.10 or newer**, with Tkinter. The python.org installers for Windows and macOS include it; on Linux you may need a separate package, e.g. `sudo apt install python3-tk`.
+- **Python 3.10 or newer**.
+- **PySide6** (Qt for Python), for the window: `PySide6-Essentials`, pinned in `requirements.txt`.
 - **yt-dlp** with its recommended extras (`yt-dlp[default]`), pinned to a tested version in `requirements.txt`. The extras include **yt-dlp-ejs**, the solver for YouTube's JavaScript challenges.
-- **Pillow** (optional, also in `requirements.txt`), for thumbnails in the link preview and the rounded buttons. Without it buttons are square and previews show text only.
+- **Pillow** (optional, also in `requirements.txt`), for thumbnails in the Downloads list. Without it the list shows titles only.
 - **ffmpeg**, used to merge video and audio and to convert to MP3/M4A.
 - **A JavaScript runtime** for YouTube: deno (yt-dlp's default; `winget install DenoLand.Deno`), node or bun, which runs yt-dlp-ejs. Without it some formats may be missing. The .exe includes deno.
 
@@ -44,8 +45,8 @@ start downloading right after. The header shows which yt-dlp version is in use.
 
 ## Windows app (one file)
 
-`YT-Downloader.exe` is the whole app in one file: Python, yt-dlp, Pillow and
-ffmpeg are built in, so there's nothing else to install. Each
+`YT-Downloader.exe` is the whole app in one file: Python, Qt, yt-dlp, Pillow,
+ffmpeg and deno are built in, so there's nothing else to install. Each
 [release](https://github.com/lifeupnorth/YouTubeDownloader/releases) will have
 it attached, and the "Windows app" GitHub Actions workflow builds it for every
 pull request and on demand. A new yt-dlp version (merged into
@@ -75,9 +76,9 @@ GPL "essentials" build) and deno, and checks them against pinned checksums (a
 weekly workflow opens an issue when either has a newer release); its license and
 the other third-party notices are in `packaging/THIRD-PARTY-NOTICES.txt`. The
 build also writes `THIRD-PARTY-LICENSES.txt`, the full license texts of
-everything else it bundles (Python and the libraries built into it, Tcl/Tk,
-and each Python package); all of them go into the .exe, next to it and into
-each release.
+everything else it bundles (Python and the libraries built into it, Qt and
+PySide6 under the LGPL v3, and each Python package); all of them go into the
+.exe, next to it and into each release.
 
 Releases are signed through SignPath Foundation, which signs open-source
 projects for free (see [Code signing policy](#code-signing-policy)). Until the
@@ -95,37 +96,47 @@ SignPath project and policy aren't named `YouTubeDownloader` and
 
 ## Use
 
-1. Paste a link into **YouTube URLs**, or click **Paste**. A preview with the
-   thumbnail, title and length appears under it. **Paste** adds to the links
-   already there, one per line, and keeps only the links from copied text;
-   `https://` can be left out (`youtu.be/...` works).
-2. Pick a **Format**: Best quality, 1080p, 720p or 480p (MP4 video), or MP3 or
-   M4A (audio only).
+1. Paste a link into **YouTube URLs**, or click **Paste**. For several videos,
+   put several links in the box, separated by spaces. **Paste** adds to the
+   links already there and keeps only the links from copied text; `https://`
+   can be left out (`youtu.be/...` works).
+2. Pick a **Format**: MP4 video, or MP3 or M4A (audio only). For video, pick a
+   **Quality**: Best quality, 1080p, 720p or 480p.
 3. Choose where to save under **Save to** (default: your Downloads folder). If
    the last folder used isn't there (e.g. on an unplugged drive), the app saves
    to Downloads for now but remembers it.
-4. Click **Download**, or press Enter. Progress and saved files show in the status line and the log.
-5. When it's done, click **Open folder** to see the file.
+4. Click **Download**, or press Enter. Each link becomes a row in the
+   **Downloads** list, with its thumbnail, title and length, its own progress
+   bar and its status. The rows download one at a time, and you can add more
+   links while they do. If one link fails, the others still download, and the
+   row says why.
+5. Each row has icons on the right: **Cancel** while it waits or downloads,
+   then **Show in folder** and **Remove from the list** (which never deletes
+   the file). **Clear finished** removes all finished rows.
+6. The same actions work from the keyboard on the selected row (arrow keys or
+   a click select one): **Esc** cancels, **Enter** shows the file in its folder,
+   and **Delete** removes the row. Right-click a row for a menu with all
+   three, or double-click it to show its file.
+
+The status line at the bottom sums up when the list is done. Click **Log** next
+to it to see the details; it opens by itself when there's something to read,
+e.g. when ffmpeg is missing.
 
 The app remembers the folder, format and theme you used last time.
 
 **Theme** (top right) switches between a light and a dark look, both in
-YouTube's colors. **System**, the default, follows the light or dark setting
-of Windows, macOS or GNOME, and changes along with it on Windows and macOS.
-
-To download several videos in a row, put one link per line (Shift+Enter adds
-a line, and pasting several links puts each on its own line). If one link
-fails, the others still download, and the summary says how many worked.
+YouTube's colors. **System**, the default, follows your system's light or dark
+setting and changes along with it.
 
 A link to a video opened from a playlist downloads just that video. Switch on
 **Whole playlist** to download the whole list instead. For a playlist or
 channel link, the app asks before downloading all its videos, and saves them
 to a folder named after the playlist.
 
-While a download runs, the button turns into **Cancel**. Canceling stops within
-moments in most cases, also while ffmpeg converts or merges a video or while a big playlist is
-being read. It removes the partial file of the video in progress, keeps the
-ones that finished, and skips any links still waiting.
+Canceling stops within moments in most cases, also while ffmpeg converts or
+merges a video or while a big playlist is being read. It removes the partial
+file of the video in progress and keeps the ones that finished; the other
+links still download.
 
 ## Run the tests
 
@@ -134,9 +145,8 @@ yt-dlp the tests that need it are skipped):
 ```
 python -m unittest discover -s tests -v
 ```
-The window tests open real Tk windows, so they need a display; on a Linux
-server run them with `xvfb-run -a python -m unittest discover -s tests -v`.
-The real yt-dlp tests download from a local server, so they need no internet;
+The window tests open real Qt windows on Qt's "offscreen" platform, so they
+need no display and nothing shows up on screen. The real yt-dlp tests download from a local server, so they need no internet;
 the MP3 one needs ffmpeg and is skipped without it.
 
 Check the code style (the rules are in `ruff.toml`):
@@ -167,7 +177,7 @@ Team roles:
 
 This program doesn't send information to other networked systems unless you
 ask it to, with one exception, the update check:
-- Downloads and link previews contact YouTube (or the site of a link you
+- Downloads and link lookups (title and thumbnail) contact YouTube (or the site of a link you
   enter), through yt-dlp, only for the links you enter.
 - The release .exe asks GitHub (api.github.com) for the latest release at most
   once a day. The request carries nothing about you or your downloads beyond

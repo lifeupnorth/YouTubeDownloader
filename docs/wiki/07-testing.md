@@ -5,7 +5,7 @@
 
 - [tests/test_engine.py](https://github.com/lifeupnorth/YouTubeDownloader/blob/b369bd269cac691e2563e27391dbd3702c986e50/tests/test_engine.py)
 - [tests/test_real_yt_dlp.py](https://github.com/lifeupnorth/YouTubeDownloader/blob/b369bd269cac691e2563e27391dbd3702c986e50/tests/test_real_yt_dlp.py)
-- [tests/test_thread_safety.py](https://github.com/lifeupnorth/YouTubeDownloader/blob/b369bd269cac691e2563e27391dbd3702c986e50/tests/test_thread_safety.py)
+- `tests/test_window.py` (added after that commit)
 - [tests/test_app.py](https://github.com/lifeupnorth/YouTubeDownloader/blob/b369bd269cac691e2563e27391dbd3702c986e50/tests/test_app.py)
 - [tests/test_requirements.py](https://github.com/lifeupnorth/YouTubeDownloader/blob/b369bd269cac691e2563e27391dbd3702c986e50/tests/test_requirements.py)
 - [tests/test_build_exe.py](https://github.com/lifeupnorth/YouTubeDownloader/blob/b369bd269cac691e2563e27391dbd3702c986e50/tests/test_build_exe.py)
@@ -16,7 +16,7 @@
 
 </details>
 
-The tests use the standard library `unittest`, and nothing touches the internet: most downloads run against a fake yt-dlp, and `test_real_yt_dlp.py` runs the real one against a local server. There are 180 tests in seven files. The engine's tests need no display; the window's tests open real Tk windows. GitHub Actions runs them on every push to `main` and every pull request, together with a ruff lint check.
+The tests use the standard library `unittest`, and nothing touches the internet: most downloads run against a fake yt-dlp, and `test_real_yt_dlp.py` runs the real one against a local server. There are 179 tests in seven files. The window's tests open real Qt windows, but on Qt's "offscreen" platform: `test_window.py` and `test_app.py` set `QT_QPA_PLATFORM=offscreen` before importing Qt (unless it's already set), so no display is needed and nothing shows up on screen. GitHub Actions runs them on every push to `main` and every pull request, together with a ruff lint check.
 
 ```
 python -m unittest discover -s tests -v
@@ -24,15 +24,15 @@ python -m unittest discover -s tests -v
 
 | File | Tests | What it covers | Needs |
 |---|---|---|---|
-| `test_engine.py` | 75 | `download_engine.py` on its own: formats, ffmpeg and JavaScript runtime lookup, the update check, yt-dlp version and loading, preview helpers, the logger, `DownloadJob`, `DownloadQueue` | Nothing (some tests use real yt-dlp or Pillow and skip without them) |
+| `test_engine.py` | 64 | `download_engine.py` on its own: formats, ffmpeg and JavaScript runtime lookup, the update check, yt-dlp version and loading, preview helpers and thumbnail sizes, the logger, `DownloadJob` | Nothing (some tests use real yt-dlp or Pillow and skip without them) |
 | `test_real_yt_dlp.py` | 3 | The engine with the real yt-dlp, downloading from a local HTTP server: a download then "Already downloaded", an MP3 converted only once, Cancel removing the `.part` file | yt-dlp; ffmpeg for the MP3 test |
-| `test_thread_safety.py` | 58 | The real window driven through simulated downloads; worker threads must never call Tk | A display |
-| `test_app.py` | 18 | Settings file, Open folder, ffmpeg help text and checks in the window, the update check's once-a-day limit and its setting, what the .exe does differently (no pip install, the `--self-check` report) | A display for the window checks |
-| `test_requirements.py` | 10 | The yt-dlp pin in `requirements.txt` is exact (`yt-dlp[default]==…`) and is what the in-app installer uses; the `default` extra brings yt-dlp-ejs; every requirement is pinned; Dependabot watches the file | Tkinter (it imports the window) |
-| `test_build_exe.py` | 12 | `packaging/build_exe.py`: checksum-checked downloads and unpacking, the Windows version information it embeds, and the `--check` verdict on the .exe's self-check | Nothing |
+| `test_window.py` | 70 | The real window driven with a fake yt-dlp: the Downloads list, the queue, Cancel, the keyboard and right-click menu, closing, playlists, lookups, settings and themes; worker threads must never touch Qt or show a dialog | PySide6 |
+| `test_app.py` | 16 | Settings file, Show in folder (`reveal_in_file_manager`), ffmpeg help text, the update check's once-a-day limit and its setting, `split_links`, what the .exe does differently (no pip install, the `--self-check` report) | PySide6 |
+| `test_requirements.py` | 10 | The yt-dlp pin in `requirements.txt` is exact (`yt-dlp[default]==…`) and is what the in-app installer uses; the `default` extra brings yt-dlp-ejs; every requirement is pinned; Dependabot watches the file | PySide6 (it imports the window module) |
+| `test_build_exe.py` | 12 | `packaging/build_exe.py`: checksum-checked downloads and unpacking, the Windows version information it embeds, the `--check` verdict on the .exe's self-check (including Qt's SVG support), and `THIRD-PARTY-LICENSES.txt` (the bundled packages match what `requirements.txt` installs; Qt and PySide6 get the LGPL and GPL texts, not their packages' commercial-license file; no Tcl/Tk) | Nothing |
 | `test_check_pins.py` | 4 | `packaging/check_pins.py` with GitHub's API faked: newer ffmpeg and deno releases, version comparison, an issue opened only once | Nothing |
 
-Sources: [README.md:113-131](https://github.com/lifeupnorth/YouTubeDownloader/blob/b369bd269cac691e2563e27391dbd3702c986e50/README.md#L113-L131), [tests/test_engine.py:1-4](https://github.com/lifeupnorth/YouTubeDownloader/blob/b369bd269cac691e2563e27391dbd3702c986e50/tests/test_engine.py#L1-L4), [tests/test_real_yt_dlp.py:1-10](https://github.com/lifeupnorth/YouTubeDownloader/blob/b369bd269cac691e2563e27391dbd3702c986e50/tests/test_real_yt_dlp.py#L1-L10), [tests/test_thread_safety.py:1-4](https://github.com/lifeupnorth/YouTubeDownloader/blob/b369bd269cac691e2563e27391dbd3702c986e50/tests/test_thread_safety.py#L1-L4)
+Sources: [README.md:113-131](https://github.com/lifeupnorth/YouTubeDownloader/blob/b369bd269cac691e2563e27391dbd3702c986e50/README.md#L113-L131), [tests/test_engine.py:1-4](https://github.com/lifeupnorth/YouTubeDownloader/blob/b369bd269cac691e2563e27391dbd3702c986e50/tests/test_engine.py#L1-L4), [tests/test_real_yt_dlp.py:1-10](https://github.com/lifeupnorth/YouTubeDownloader/blob/b369bd269cac691e2563e27391dbd3702c986e50/tests/test_real_yt_dlp.py#L1-L10)
 
 ## The fake yt-dlp (`tests/fakes.py`)
 
@@ -62,32 +62,35 @@ Sources: [tests/fakes.py:8-124](https://github.com/lifeupnorth/YouTubeDownloader
 | `UpdateCheckTest` | Version comparison, the app's version only in the .exe, the notice when a newer release is out, never from source, no notice without a network or on an unexpected answer |
 | `FindFfmpegTest` | The bundled ffmpeg only in the .exe, `PATH` first, registry fallback on Windows only, not found, `%VAR%` expansion of the real registry `Path` (Windows); the JavaScript runtime lookup: the bundled deno first, too-old versions skipped, yt-dlp's version check |
 | `YtDlpVersionTest` | Version comparison, the pin, loading yt-dlp after an install and its failure case |
-| `HelpersTest` | `format_eta`, `describe_info`, `thumbnail_url`, `fetch_thumbnail` (only from the web, shrunk, stopped when canceled), the logger's warning/error split |
+| `HelpersTest` | `format_eta`, `describe_info`, `thumbnail_url` (the smallest at least as wide as asked), `fetch_thumbnail` (only from the web, shrunk to `THUMB_SIZE` or a size asked for, stopped when canceled), the logger's warning/error split |
 | `ErrorColorTest` | Error text has no ANSI codes; "Deprecated Feature" notices, including a real one from yt-dlp, aren't errors |
-| `DownloadJobTest` | A single video, options, progress per stream and per playlist video, skipped/failed/already downloaded, playlist confirmation, `url` results followed at most three times, the JavaScript runtime option and its hidden warning, Cancel (with real files in a temp folder, while a playlist is being read, and stopping an ffmpeg without removing files from an earlier run), which ffmpeg outputs count as new, warnings, previews and a canceled preview |
-| `DownloadQueueTest` | Links in order with "Link n/N", a failed link doesn't stop the rest, an unavailable video counts once, all failed, declined playlists, Cancel skips the remaining links and stops the running link's ffmpeg, a cancel after the last link finished, a crashing link is a failed link, no outcome before it runs |
+| `DownloadJobTest` | A single video, options, progress per stream and per playlist video, skipped/failed/already downloaded, playlist confirmation, `url` results followed at most three times, the JavaScript runtime option and its hidden warning, Cancel (with real files in a temp folder, while a playlist is being read, and stopping an ffmpeg without removing files from an earlier run), which ffmpeg outputs count as new, warnings, previews (a thumbnail as big as the window asks for) and a canceled preview |
 | `RealYtDlpTest` | In `test_real_yt_dlp.py`: the real yt-dlp downloading from `127.0.0.1` (its generic extractor treats it as a direct link): a download then "Already downloaded", an MP3 converted once and then found (needs ffmpeg), Cancel removing the `.part` file |
 
 `make_job` builds a `DownloadJob` whose callbacks record into `job.progress` and `job.log`, so the tests check exactly what the window would receive. The ffmpeg-stopping tests run a slow Python process through yt-dlp's real `Popen`, so they need yt-dlp.
 
 Sources: [tests/test_engine.py:85-420](https://github.com/lifeupnorth/YouTubeDownloader/blob/b369bd269cac691e2563e27391dbd3702c986e50/tests/test_engine.py#L85-L420), [tests/test_engine.py:422-898](https://github.com/lifeupnorth/YouTubeDownloader/blob/b369bd269cac691e2563e27391dbd3702c986e50/tests/test_engine.py#L422-L898), [tests/test_real_yt_dlp.py:45-127](https://github.com/lifeupnorth/YouTubeDownloader/blob/b369bd269cac691e2563e27391dbd3702c986e50/tests/test_real_yt_dlp.py#L45-L127)
 
-## Window tests (`test_thread_safety.py`)
+## Window tests (`test_window.py`)
 
-These check the app's central rule: **worker threads never call Tk**. `setUp` records any call from a non-main thread at three levels: the Tk methods in `GUARDED`, the Tcl interpreter itself (`GuardedTcl`, which every widget, variable and image goes through), and the dialogs (`GuardedDialogs`, which also wraps a mock a test puts in a dialog's place). After every test, a cleanup asserts there were no such calls, no exceptions on any thread, and no worker crashes (unless the test sets `expect_crash`). `run_download` puts the fake in place of the engine's `yt_dlp`, starts `_start_download`, and runs `mainloop()`; it fails the test if the download hasn't finished after 10 seconds; `_download_finished` and the patched dialogs end the loop. Settings go to a temporary file, never the real one.
+These check the window's behavior and its central rule: **worker threads never touch Qt**. `setUp` wraps the window's main-thread-only methods (`GUARDED`: `_log`, `_set_status`, `_looked_up`, `_download_finished`, `_show_progress`, `_run_next`, and the model's `add`, `changed` and `remove`) and records any call from another thread. The dialogs are `QMessageBox`'s static functions (`question`, `critical`, `warning`, `information`), patched so they answer at once (questions with the test's `answer`), record their titles and texts, and count a call from a worker as a violation too. After every test, a cleanup asserts there were no such calls and no exceptions on any thread (`threading.excepthook`). The engine's lookups go through `fake_preview`, which makes a title from the link without yt-dlp; ffmpeg, the JavaScript runtime and the update check are patched, and settings go to a temporary file, never the real one.
+
+`run_download` puts the fake in place of the engine's `yt_dlp`, types the links into the URL box, calls `_start_download`, and processes Qt's events until the window is idle (nothing running, no workers, no unfinished rows); `wait` fails the test after 10 seconds. `cancel_at` clicks a row's Cancel at an exact point of the fake download and waits on the download thread until the main thread has.
 
 | Area | Tests |
 |---|---|
-| Downloads | Success (progress never goes backwards, ≤ 99 until done, then 100; the log shows the final file); failure dialog; a single video's error reported once; whole playlist; skipped and already-downloaded entries; a playlist where nothing was saved fails |
-| Several links | One per line, repeats dropped, the box grows to 4 lines; Enter downloads; a queue of three; a failed link doesn't stop the rest |
-| Playlist question | A single video doesn't ask; a playlist asks; declining downloads nothing; `url` results are followed first; Yes doesn't tick the box; a dialog that fails counts as No instead of hanging |
-| Cancel and closing | Only the unfinished video's files are removed; canceling between playlist videos; downloading again after a cancel; closing during a download asks first, Yes cancels and closes, No keeps going; a download that finished while the question was open; closing with the error dialog open |
-| Preview | Video, `url` results to a playlist, bad link, an older link's late answer is dropped, a newer link cancels the older lookup, closing cancels it, No to the close question keeps it, thumbnail |
-| Crashes | A crashed download still ends (button back, error in the log); a crashing worker still finishes; errors in Tk callbacks reach the log |
-| Settings, version, install | Folder and format remembered, saved on close, bad settings ignored; version in the header and the mismatch note; install with and without a restart; Download during an install doesn't install again; the update notice is logged |
-| Polish | Placeholder isn't a URL, Paste, warnings in the log, the status wraps, Open folder, Shift+Tab, the JavaScript runtime is looked up on a worker |
+| Downloading | Success (progress never goes backwards, ≤ 99 until done; the row's title, file and state; the summary and the count; the progress timer stops; no dialog); failure; a single video's error reported once; whole playlist; an empty playlist finds nothing; skipped and already-downloaded entries; a playlist where nothing was saved fails; a queue of links, one at a time; a failed link doesn't stop the rest; the summary counts every outcome; only a running or finished download fills its bar; a link already waiting isn't added again; audio has no quality; yt-dlp's warnings reach the log |
+| Cancel | Only the unfinished video's files are removed; canceling between playlist videos; canceling a waiting link; downloading again after a cancel; progress after Cancel keeps "Canceling…"; no playlist question after a cancel |
+| Closing | Closing during a download asks first, Yes cancels and closes, No keeps going; a download that finished while the question was open; settings saved on close |
+| Links and lookups | Paste adds links and leaves out other words; pasted lines go in one line; words that aren't links are left out; no link and a relative folder are refused; Enter downloads; lookups of a video, of `url` results to a playlist and of a bad link; the thumbnail, asked for at the screen's pixel ratio; closing cancels the lookups |
+| Playlists | A single video doesn't ask; a playlist asks; a dialog that fails doesn't hang; `url` results are followed before asking |
+| Row actions | Show in folder and Remove; a missing folder is reported; which icons each state has; a running row can't be removed and Clear finished keeps it; the list paints every state (offscreen) |
+| Keyboard, menu, double-click | Esc, Enter (and the keypad's), Delete and Backspace act on the selected row, only when the row has that action and without Ctrl; the arrow keys move and tabbing in selects a row; the right-click menu grays out what the row can't do; a double-click shows the file, but not on the icons; the tooltips name the keys |
+| Crashes | A crashed download fails its row and opens the log; a crashing worker still finishes; errors in calls on the main thread reach the log |
+| yt-dlp, ffmpeg, JavaScript runtime | The runtime is looked up on a worker; a missing one is explained; missing ffmpeg warns and blocks Download; coming back to the window finds it; the version in the header and the mismatch note; install with and without a restart; Download during an install doesn't install again; the update notice is logged |
+| Settings and themes | Folder and format remembered; bad saved settings fall back to the defaults; an unavailable saved folder is kept; the update switch only in a release, and saved; System by default; choosing a theme repaints and is saved; a saved theme is used at startup |
 
-Each test builds and destroys its own window. If a destroyed window's objects were garbage-collected on a worker thread, each `Variable.__del__` would block for about a second against the dead Tcl interpreter, so `setUp` collects garbage on the main thread first.
+Each test builds its own window and closes it in a cleanup: it cancels the rows, waits for the workers, then hides the window and deletes it with `deleteLater`. `setUp` collects garbage on the main thread first, so objects of an earlier test's window aren't collected on a worker thread.
 
 Sources: [tests/test_thread_safety.py:25-90](https://github.com/lifeupnorth/YouTubeDownloader/blob/b369bd269cac691e2563e27391dbd3702c986e50/tests/test_thread_safety.py#L25-L90), [tests/test_thread_safety.py:93-131](https://github.com/lifeupnorth/YouTubeDownloader/blob/b369bd269cac691e2563e27391dbd3702c986e50/tests/test_thread_safety.py#L93-L131), [tests/test_thread_safety.py:213-236](https://github.com/lifeupnorth/YouTubeDownloader/blob/b369bd269cac691e2563e27391dbd3702c986e50/tests/test_thread_safety.py#L213-L236)
 
@@ -95,14 +98,14 @@ Sources: [tests/test_thread_safety.py:25-90](https://github.com/lifeupnorth/YouT
 
 `.github/workflows/tests.yml` runs on every push to `main` and every pull request, with read-only permissions:
 
-- **Tests** on Windows and Ubuntu, each with Python 3.10 (the oldest the pinned yt-dlp supports) and 3.14. On Ubuntu it installs `xvfb` and `ffmpeg` (for the real yt-dlp MP3 test, which skips where ffmpeg is missing) and runs under a virtual display (`xvfb-run`). Each job runs the suite twice: normally, and with yt-dlp blocked, so the tests that need it must skip rather than fail.
+- **Tests** on Windows and Ubuntu, each with Python 3.10 (the oldest the pinned yt-dlp supports) and 3.14, with `QT_QPA_PLATFORM=offscreen` set for the job. On Ubuntu it installs the libraries Qt's GUI module links to (`libegl1`, `libgl1`, `libxkbcommon0`, `libfontconfig1`, `libdbus-1-3`) and `ffmpeg` (for the real yt-dlp MP3 test, which skips where ffmpeg is missing); no virtual display is needed. Each job runs the suite twice: normally, and with yt-dlp blocked, so the tests that need it must skip rather than fail.
 - **Lint**: `ruff check .` with the rules in `ruff.toml` (ruff is pinned in `requirements-dev.txt`); findings show up on the PR's lines.
 
 Other workflows check what the unit tests can't. **Windows app** (`build-exe.yml`) builds the .exe on every pull request and push to `main` and checks it with `build_exe.py --check`; it also makes the releases. **Bundled programs** (`pins.yml`) runs `packaging/check_pins.py` every Monday and opens an issue when ffmpeg or deno, which the .exe bundles and Dependabot can't see, has a newer release.
 
 Dependabot keeps the pins current, and its PRs run the same checks:
 
-- `requirements.txt` (`yt-dlp[default]` and Pillow) and `requirements-dev.txt` (ruff): daily, since a new yt-dlp is often the fix for a YouTube change.
+- `requirements.txt` (`yt-dlp[default]`, PySide6-Essentials and Pillow) and `requirements-dev.txt` (ruff): daily, since a new yt-dlp is often the fix for a YouTube change.
 - `packaging/requirements-build.txt` (PyInstaller and its dependencies, pinned with their hashes): weekly.
 - The GitHub Actions, which the workflows pin by commit SHA: weekly.
 
