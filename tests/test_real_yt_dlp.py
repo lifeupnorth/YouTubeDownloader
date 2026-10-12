@@ -27,6 +27,7 @@ FFMPEG = engine.find_ffmpeg() if engine.YT_DLP_AVAILABLE else None
 
 class _Handler(http.server.SimpleHTTPRequestHandler):
     slow = False   # send slowly, so a test can cancel halfway
+    stopping = None   # an Event: the test is over, stop sending
 
     def log_message(self, *args):   # keep the test output clean
         pass
@@ -34,12 +35,19 @@ class _Handler(http.server.SimpleHTTPRequestHandler):
     def copyfile(self, source, outputfile):
         if not self.slow:
             return super().copyfile(source, outputfile)
-        while chunk := source.read(16 * 1024):
+        while (chunk := source.read(16 * 1024)) and not self.stopping.is_set():
             try:
                 outputfile.write(chunk)
             except OSError:   # the download was canceled
                 return
             time.sleep(0.02)
+
+
+class _Server(http.server.ThreadingHTTPServer):
+    # Closing waits for the requests still being answered: on Windows the
+    # temporary folder can't be deleted while one has a served file open.
+    daemon_threads = False
+    block_on_close = True
 
 
 @unittest.skipUnless(engine.YT_DLP_AVAILABLE, "needs yt-dlp")
@@ -50,13 +58,16 @@ class RealYtDlpTest(unittest.TestCase):
         self.served = os.path.join(root.name, "served")
         self.folder = os.path.join(root.name, "downloads")
         os.makedirs(self.served)
-        handler = type("Handler", (_Handler,), {})
+        handler = type("Handler", (_Handler,), {"stopping": threading.Event()})
         self.handler = handler
-        self.server = http.server.ThreadingHTTPServer(
+        self.server = _Server(
             ("127.0.0.1", 0), functools.partial(handler, directory=self.served))
         threading.Thread(target=self.server.serve_forever, daemon=True).start()
+        # Run in reverse: stop sending, stop serving, wait for the requests
+        # still running (server_close), then delete the folder.
         self.addCleanup(self.server.server_close)
         self.addCleanup(self.server.shutdown)
+        self.addCleanup(handler.stopping.set)
 
     def serve(self, name, data):
         with open(os.path.join(self.served, name), "wb") as f:

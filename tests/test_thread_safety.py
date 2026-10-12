@@ -564,6 +564,28 @@ class ThreadSafetyTest(unittest.TestCase):
         self.assertEqual(self.dialogs, [], "a partial success has no error pop-up")
         self.assertEqual(str(self.app.status_lbl.cget("fg")), ytd.WARNING)
 
+    def test_layout_scales_on_a_high_dpi_screen(self):
+        # At 192 DPI (200%) the pixel sizes double; fonts scale by themselves.
+        with mock.patch.object(ytd.YouTubeDownloader, "winfo_fpixels", return_value=192.0):
+            big = ytd.YouTubeDownloader(update_check=False)
+        try:
+            self.assertEqual(big.scale, 2.0)
+            for app, factor in ((self.app, 1), (big, 2)):
+                thumb = app.preview_img.master
+                card = app.dl_btn.master
+                self.assertEqual((int(thumb.cget("width")), int(thumb.cget("height"))),
+                                 (96 * factor, 54 * factor))
+                self.assertEqual(int(str(card.cget("padx"))), 28 * factor)
+                self.assertEqual(int(card.grid_info()["padx"]), 20 * factor)
+                self.assertEqual(app._px(100), 100 * factor)
+            # Sizes in characters aren't pixels: the URL box stays 1 wide.
+            self.assertEqual(int(big.url_entry.cget("width")), 1)
+        finally:
+            big.destroy()
+
+    def test_nearly_96_dpi_isnt_scaled(self):
+        self.assertEqual(self.app.scale, 1.0)   # Tk reports e.g. 96.08
+
     def test_status_wraps_at_the_window_width(self):
         widths = []
         for size in ("900x600", "620x600"):
@@ -648,7 +670,7 @@ class ThreadSafetyTest(unittest.TestCase):
             if text == "new":
                 new_shown.set()
 
-        def preview_link(url, whole_playlist, cancel_event, js_runtime=None):
+        def preview_link(url, whole_playlist, cancel_event, js_runtime=None, thumb_size=None):
             if url.endswith("old"):
                 new_shown.wait(5)   # ignores cancel_event on purpose
                 return "old", None, True
@@ -670,7 +692,7 @@ class ThreadSafetyTest(unittest.TestCase):
     def test_newer_link_cancels_the_older_lookup(self):
         events = {}
 
-        def preview_link(url, whole_playlist, cancel_event, js_runtime=None):
+        def preview_link(url, whole_playlist, cancel_event, js_runtime=None, thumb_size=None):
             events[url] = cancel_event
             if url.endswith("old") and cancel_event.wait(5):
                 return None
@@ -699,7 +721,7 @@ class ThreadSafetyTest(unittest.TestCase):
     def test_answering_no_to_close_keeps_the_lookup(self):
         started, release = threading.Event(), threading.Event()
 
-        def preview_link(url, whole_playlist, cancel_event, js_runtime=None):
+        def preview_link(url, whole_playlist, cancel_event, js_runtime=None, thumb_size=None):
             started.set()
             release.wait(5)
             return None if cancel_event.is_set() else ("T", None, True)

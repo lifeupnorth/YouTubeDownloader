@@ -7,6 +7,7 @@ which doesn't use Tk.
 Requirements: pip install -r requirements.txt
 """
 
+import ctypes
 import json
 import os
 import queue
@@ -101,11 +102,27 @@ PREVIEW_HINT = "Paste a link to see its title and length here."
 TITLE_BAR = 40
 
 
+def enable_dpi_awareness():
+    """Asks Windows to let the app draw at the screen's real resolution. By
+    default Windows draws it at 96 DPI and stretches the result on a scaled
+    display (e.g. 150%), which blurs the text. Must run before the first
+    window opens. "System aware": on a second monitor with another scale,
+    Windows still stretches it there, but it never comes out the wrong size."""
+    if sys.platform != "win32":
+        return
+    try:
+        ctypes.windll.shcore.SetProcessDpiAwareness(1)   # Windows 8.1 and later
+    except (AttributeError, OSError):
+        try:
+            ctypes.windll.user32.SetProcessDPIAware()
+        except (AttributeError, OSError):
+            pass
+
+
 def work_area(widget):
     """(left, top, width, height) of the screen without the taskbar."""
     if sys.platform == "win32":
         try:
-            import ctypes
             from ctypes import wintypes
             rect = wintypes.RECT()
             SPI_GETWORKAREA = 0x30
@@ -200,6 +217,11 @@ class YouTubeDownloader(tk.Tk):
         super().__init__()
         self.title("YT Downloader")
         self.configure(bg=BG)
+        # How much bigger than 96 DPI the screen is, when the app is DPI aware
+        # (1.0 otherwise: Windows then reports 96 DPI and stretches the window).
+        # (Tk reports e.g. 96.08 for 96: a difference that small isn't scaling.)
+        scale = self.winfo_fpixels("1i") / 96
+        self.scale = scale if scale > 1.05 else 1.0
 
         # State
         self._default_folder = os.path.normpath(os.path.expanduser("~/Downloads"))
@@ -231,6 +253,8 @@ class YouTubeDownloader(tk.Tk):
         self._apply_saved_settings()
 
         self._build_ui()
+        if self.scale != 1.0:
+            self._scale_layout(self)
         self._fit_window()
         self.protocol("WM_DELETE_WINDOW", self._on_close)
 
@@ -333,7 +357,7 @@ class YouTubeDownloader(tk.Tk):
                                     justify="left", anchor="nw", wraplength=400)
         self.preview_lbl.grid(row=0, column=1, sticky="new", padx=(12, 0))
         self.preview_lbl.bind("<Configure>", lambda e: self.preview_lbl.config(
-            wraplength=max(e.width - 4, 100)))
+            wraplength=max(e.width - self._px(4), self._px(100))))
         row += 1
 
         # Format
@@ -423,7 +447,7 @@ class YouTubeDownloader(tk.Tk):
         self.open_btn.grid_remove()   # shown once a download has saved a file
         # Wrap long messages at the label's current width, not a fixed one.
         self.status_lbl.bind("<Configure>", lambda e: self.status_lbl.config(
-            wraplength=max(e.width - 4, 100)))
+            wraplength=max(e.width - self._px(4), self._px(100))))
         row += 1
 
         # ── Log box ──
@@ -482,13 +506,52 @@ class YouTubeDownloader(tk.Tk):
         log_height = self.log_box.winfo_reqheight()
         line = log_height // int(self.log_box.cget("height"))
         left, top, area_width, area_height = work_area(self)
-        width = min(max(680, needed), area_width)
-        height = min(wanted, area_height - TITLE_BAR)
-        self.minsize(min(max(580, needed), width),
+        title_bar = self._px(TITLE_BAR)
+        width = min(max(self._px(680), needed), area_width)
+        height = min(wanted, area_height - title_bar)
+        self.minsize(min(max(self._px(580), needed), width),
                      min(wanted - log_height + 3 * line, height))
         x = left + (area_width - width) // 2
-        y = top + max(0, (area_height - TITLE_BAR - height) // 2)
+        y = top + max(0, (area_height - title_bar - height) // 2)
         self.geometry(f"{width}x{height}+{x}+{y}")
+
+    # ── High-DPI screens ────────────────────────────────────────────────────
+
+    def _px(self, pixels):
+        """pixels at 96 DPI, on this screen."""
+        return round(pixels * self.scale)
+
+    # The layout's pixel sizes (padding, borders, the thumbnail box, wrap
+    # widths, the progress bar's length) are written for 96 DPI; on a
+    # high-DPI screen they're scaled once, after the window is built, so it
+    # keeps its proportions. Fonts scale by themselves (they're in points),
+    # and so do sizes in characters (e.g. a Text's width and height).
+    _PIXEL_OPTIONS = ("padx", "pady", "bd", "highlightthickness", "wraplength")
+    _GRID_OPTIONS = ("padx", "pady", "ipadx", "ipady")
+
+    def _scale_layout(self, widget):
+        for name in self._PIXEL_OPTIONS:
+            try:
+                value = int(str(widget.cget(name)))
+            except (tk.TclError, ValueError):   # not this widget's option, or not pixels
+                continue
+            if value:
+                widget.configure({name: self._px(value)})
+        sizes = (("width", "height") if isinstance(widget, tk.Frame)
+                 else ("length",) if isinstance(widget, ttk.Progressbar) else ())
+        for name in sizes:
+            value = int(str(widget.cget(name)))
+            if value:
+                widget.configure({name: self._px(value)})
+        if widget.winfo_manager() == "grid":
+            info = widget.grid_info()   # e.g. padx 20, or pady (0, 6)
+            widget.grid_configure(**{
+                name: tuple(self._px(int(v)) for v in (
+                    info[name] if isinstance(info[name], (tuple, list))
+                    else str(info[name]).split()))
+                for name in self._GRID_OPTIONS if name in info})
+        for child in widget.winfo_children():
+            self._scale_layout(child)
 
     # ── Helpers ─────────────────────────────────────────────────────────────
 
@@ -896,7 +959,8 @@ class YouTubeDownloader(tk.Tk):
 
     # Runs on a worker thread.
     def _preview_thread(self, url, whole_playlist, token, more, cancel, js_runtime=None):
-        result = engine.preview_link(url, whole_playlist, cancel, js_runtime)
+        thumb = tuple(self._px(n) for n in engine.THUMB_SIZE)
+        result = engine.preview_link(url, whole_playlist, cancel, js_runtime, thumb)
         if result is None:   # a newer link replaced this one
             return
         text, image, found = result
@@ -1077,5 +1141,6 @@ if __name__ == "__main__":
     if len(sys.argv) == 3 and sys.argv[1] == "--self-check":
         self_check(sys.argv[2])
     else:
+        enable_dpi_awareness()
         app = YouTubeDownloader()
         app.mainloop()

@@ -270,5 +270,27 @@ class SplitLinksTest(unittest.TestCase):
                 self.assertEqual(ytd.split_links(text), expected)
 
 
+class DpiAwarenessTest(unittest.TestCase):
+    def test_asks_windows_for_system_dpi_awareness(self):
+        with mock.patch.object(ytd.sys, "platform", "win32"), \
+                mock.patch.object(ytd, "ctypes") as ctypes:
+            ytd.enable_dpi_awareness()
+        ctypes.windll.shcore.SetProcessDpiAwareness.assert_called_once_with(1)
+
+    def test_older_windows_falls_back(self):
+        # Windows 7 has no shcore.dll.
+        with mock.patch.object(ytd.sys, "platform", "win32"), \
+                mock.patch.object(ytd, "ctypes") as ctypes:
+            ctypes.windll.shcore.SetProcessDpiAwareness.side_effect = OSError("no shcore")
+            ytd.enable_dpi_awareness()
+        ctypes.windll.user32.SetProcessDPIAware.assert_called_once_with()
+
+    def test_nothing_elsewhere(self):
+        with mock.patch.object(ytd.sys, "platform", "linux"), \
+                mock.patch.object(ytd, "ctypes") as ctypes:
+            ytd.enable_dpi_awareness()
+        self.assertEqual(ctypes.mock_calls, [])
+
+
 if __name__ == "__main__":
     unittest.main()
