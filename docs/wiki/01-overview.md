@@ -109,10 +109,10 @@ Sources: [requirements.txt:6-18](https://github.com/lifeupnorth/YouTubeDownloade
 
 | Path | Lines | Contents |
 |---|---|---|
-| `youtube_downloader.py` | 2140 | The window (Qt): UI, the Downloads list (kept between runs), themes, settings, dialogs, worker plumbing, update check, entry point with `--self-check` |
+| `youtube_downloader.py` | 2149 | The window (Qt): UI, the Downloads list (kept between runs), themes, settings, dialogs, worker plumbing, update check, entry point with `--self-check` |
 | `download_engine.py` | 897 | Downloading without Qt: yt-dlp, ffmpeg and the JavaScript runtime, formats, link lookups, the release check, `DownloadJob` |
 | `tests/test_engine.py` | 1038 | The engine with a fake yt-dlp; needs no display |
-| `tests/test_window.py` | 1495 | The real window driven with a fake yt-dlp, on Qt's offscreen platform; fails on any main-thread-only call or dialog from a worker thread |
+| `tests/test_window.py` | 1509 | The real window driven with a fake yt-dlp, on Qt's offscreen platform; fails on any main-thread-only call or dialog from a worker thread |
 | `tests/test_app.py` | 232 | Settings and saved-list files, Show in folder, ffmpeg help, the update check, `split_links`, the .exe's self-check report |
 | `tests/test_real_yt_dlp.py` | 142 | The engine with the real yt-dlp, offline, against a local web server (the MP3 test needs ffmpeg) |
 | `tests/test_requirements.py` | 93 | The yt-dlp pin is exact, brings yt-dlp-ejs, and is what the installer uses |

@@ -46,6 +46,7 @@ GUARDED = [
     (ytd.YouTubeDownloader, "_log"), (ytd.YouTubeDownloader, "_set_status"),
     (ytd.YouTubeDownloader, "_looked_up"), (ytd.YouTubeDownloader, "_download_finished"),
     (ytd.YouTubeDownloader, "_show_progress"), (ytd.YouTubeDownloader, "_run_next"),
+    (ytd.YouTubeDownloader, "_js_runtime_installed"),
     (ytd.DownloadsModel, "add"), (ytd.DownloadsModel, "changed"),
     (ytd.DownloadsModel, "remove"),
 ]
@@ -1100,6 +1101,19 @@ class WindowTest(unittest.TestCase):
             self.wait(lambda: window._active_workers == 0)
         self.assertIn("No JavaScript runtime found", window.log_box.toPlainText())
         self.assertTrue(window.log_btn.isChecked())
+
+    def test_js_runtime_installed_since_startup_is_kept(self):
+        with mock.patch.object(engine, "find_js_runtime", return_value=None) as find:
+            self.app = self.new_window()
+            self.wait(lambda: self.app._active_workers == 0)
+            find.return_value = ("deno", "/bin/deno")
+            self.run_download(make_fake_ydl(streams=1))
+            self.assertEqual(self.app._js_runtime, ("deno", "/bin/deno"))
+            calls = find.call_count
+            self.run_download(make_fake_ydl(streams=1), text=VIDEO + "2")
+            self.assertEqual(find.call_count, calls, "looked again after it was found")
+        self.assertEqual(self.states(), ["done", "done"])
+        self.assertEqual(self.log().count("No JavaScript runtime found"), 1)
 
     def test_missing_ffmpeg_warns_and_blocks_download(self):
         with mock.patch.object(engine, "find_ffmpeg", return_value=None):
