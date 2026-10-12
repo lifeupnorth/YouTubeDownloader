@@ -8,10 +8,8 @@
 - [youtube_downloader.py](https://github.com/lifeupnorth/YouTubeDownloader/blob/b369bd269cac691e2563e27391dbd3702c986e50/youtube_downloader.py)
 - [download_engine.py](https://github.com/lifeupnorth/YouTubeDownloader/blob/b369bd269cac691e2563e27391dbd3702c986e50/download_engine.py)
 - [packaging/build_exe.py](https://github.com/lifeupnorth/YouTubeDownloader/blob/b369bd269cac691e2563e27391dbd3702c986e50/packaging/build_exe.py)
-- [packaging/smoke_test.py](https://github.com/lifeupnorth/YouTubeDownloader/blob/b369bd269cac691e2563e27391dbd3702c986e50/packaging/smoke_test.py)
 - [packaging/check_pins.py](https://github.com/lifeupnorth/YouTubeDownloader/blob/b369bd269cac691e2563e27391dbd3702c986e50/packaging/check_pins.py)
 - [.github/workflows/build-exe.yml](https://github.com/lifeupnorth/YouTubeDownloader/blob/b369bd269cac691e2563e27391dbd3702c986e50/.github/workflows/build-exe.yml)
-- [.github/workflows/smoke.yml](https://github.com/lifeupnorth/YouTubeDownloader/blob/b369bd269cac691e2563e27391dbd3702c986e50/.github/workflows/smoke.yml)
 - [.github/workflows/pins.yml](https://github.com/lifeupnorth/YouTubeDownloader/blob/b369bd269cac691e2563e27391dbd3702c986e50/.github/workflows/pins.yml)
 
 </details>
@@ -68,13 +66,9 @@ Releases are signed through SignPath Foundation, which signs open-source project
 
 Sources: [Code signing policy](../../README.md#code-signing-policy), `.github/workflows/build-exe.yml` (the steps after "Build the .exe"), `packaging/build_exe.py` (`version_resource`, `product_info`)
 
-The nightly "Smoke test" workflow (`.github/workflows/smoke.yml`, also runnable by hand, and run on pull requests that change it) downloads one short video for real, as MP4 and as MP3: from source on Linux, and with a freshly built .exe on Windows. `packaging/smoke_test.py` runs the app with `--smoke-download <url> <format> <folder> <report.json>`, which does the download through `engine.DownloadJob` without opening the window, with the JavaScript runtime the window would use (the bundled deno in the .exe; the Linux job installs deno with `denoland/setup-deno`), and writes the outcome, the saved file and the log. A download counts as passed when it ends with `done` and the file has the right extension and isn't tiny. Each one gets a second try, since a single network hiccup shouldn't fail the night. YouTube often blocks GitHub's runners ("Sign in to confirm you're not a bot"). When that check is the only reason downloads failed, the run passes with a warning, since it says nothing about the app; any other failure fails it. Setting the `SMOKE_URL` variable to another short video is a way to rule out a problem with one video.
-
-Sources: [.github/workflows/smoke.yml:1-82](https://github.com/lifeupnorth/YouTubeDownloader/blob/b369bd269cac691e2563e27391dbd3702c986e50/.github/workflows/smoke.yml#L1-L82), [packaging/smoke_test.py:18-101](https://github.com/lifeupnorth/YouTubeDownloader/blob/b369bd269cac691e2563e27391dbd3702c986e50/packaging/smoke_test.py#L18-L101), [youtube_downloader.py:1001-1024](https://github.com/lifeupnorth/YouTubeDownloader/blob/b369bd269cac691e2563e27391dbd3702c986e50/youtube_downloader.py#L1001-L1024)
-
 ## Settings
 
-There are no environment variables, and the only command-line options are for checks: `--self-check REPORT` (what the build contains) and `--smoke-download URL FORMAT FOLDER REPORT` (one download without the window, used by the smoke test). The last **Save To** folder and **Format** are remembered in a small JSON file, and in a release .exe also the **Check for updates at startup** box in the header (`check_updates`) and when it last checked (`last_update_check`):
+There are no environment variables, and the only command-line option is for a check: `--self-check REPORT` (what the build contains). The last **Save To** folder and **Format** are remembered in a small JSON file, and in a release .exe also the **Check for updates at startup** box in the header (`check_updates`) and when it last checked (`last_update_check`):
 
 | System | File |
 |---|---|
@@ -94,6 +88,6 @@ pip install -r requirements-dev.txt
 ruff check .
 ```
 
-The engine tests need nothing but Python; the window tests need a display (they open real Tk windows). Tests that need yt-dlp, Pillow or ffmpeg skip when they're missing. `tests/test_real_yt_dlp.py` runs the real yt-dlp against a local server, so it needs no internet. `python packaging/smoke_test.py` (add `--exe dist/YT-Downloader.exe` for the .exe) runs the smoke test locally, with a real download. See [Testing](07-testing.md).
+The engine tests need nothing but Python; the window tests need a display (they open real Tk windows). Tests that need yt-dlp, Pillow or ffmpeg skip when they're missing. `tests/test_real_yt_dlp.py` runs the real yt-dlp against a local server, so it needs no internet. See [Testing](07-testing.md).
 
-Sources: [README.md:113-131](https://github.com/lifeupnorth/YouTubeDownloader/blob/b369bd269cac691e2563e27391dbd3702c986e50/README.md#L113-L131), [tests/test_real_yt_dlp.py:1-9](https://github.com/lifeupnorth/YouTubeDownloader/blob/b369bd269cac691e2563e27391dbd3702c986e50/tests/test_real_yt_dlp.py#L1-L9), [packaging/smoke_test.py:1-11](https://github.com/lifeupnorth/YouTubeDownloader/blob/b369bd269cac691e2563e27391dbd3702c986e50/packaging/smoke_test.py#L1-L11)
+Sources: [README.md:113-131](https://github.com/lifeupnorth/YouTubeDownloader/blob/b369bd269cac691e2563e27391dbd3702c986e50/README.md#L113-L131), [tests/test_real_yt_dlp.py:1-9](https://github.com/lifeupnorth/YouTubeDownloader/blob/b369bd269cac691e2563e27391dbd3702c986e50/tests/test_real_yt_dlp.py#L1-L9)

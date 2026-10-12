@@ -36,8 +36,7 @@
         "packaging/check_pins.py",
         "packaging/requirements-build.txt",
         ".github/workflows/build-exe.yml",
-        ".github/workflows/pins.yml",
-        ".github/workflows/smoke.yml"
+        ".github/workflows/pins.yml"
       ]
     },
     {
@@ -93,9 +92,6 @@
         "tests/test_real_yt_dlp.py",
         "tests/test_build_exe.py",
         "tests/test_check_pins.py",
-        "tests/test_smoke.py",
-        "packaging/smoke_test.py",
-        ".github/workflows/smoke.yml",
         ".github/dependabot.yml"
       ]
     },
