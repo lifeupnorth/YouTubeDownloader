@@ -3,16 +3,16 @@
 <details>
 <summary>Relevant source files</summary>
 
-- [tests/test_engine.py](https://github.com/lifeupnorth/YouTubeDownloader/blob/47e016f109accff408446b290ced9684d980c667/tests/test_engine.py)
-- [tests/test_real_yt_dlp.py](https://github.com/lifeupnorth/YouTubeDownloader/blob/47e016f109accff408446b290ced9684d980c667/tests/test_real_yt_dlp.py)
-- [tests/test_window.py](https://github.com/lifeupnorth/YouTubeDownloader/blob/47e016f109accff408446b290ced9684d980c667/tests/test_window.py)
-- [tests/test_app.py](https://github.com/lifeupnorth/YouTubeDownloader/blob/47e016f109accff408446b290ced9684d980c667/tests/test_app.py)
-- [tests/test_requirements.py](https://github.com/lifeupnorth/YouTubeDownloader/blob/47e016f109accff408446b290ced9684d980c667/tests/test_requirements.py)
-- [tests/test_build_exe.py](https://github.com/lifeupnorth/YouTubeDownloader/blob/47e016f109accff408446b290ced9684d980c667/tests/test_build_exe.py)
-- [tests/test_check_pins.py](https://github.com/lifeupnorth/YouTubeDownloader/blob/47e016f109accff408446b290ced9684d980c667/tests/test_check_pins.py)
-- [tests/fakes.py](https://github.com/lifeupnorth/YouTubeDownloader/blob/47e016f109accff408446b290ced9684d980c667/tests/fakes.py)
-- [.github/workflows/tests.yml](https://github.com/lifeupnorth/YouTubeDownloader/blob/47e016f109accff408446b290ced9684d980c667/.github/workflows/tests.yml)
-- [.github/dependabot.yml](https://github.com/lifeupnorth/YouTubeDownloader/blob/47e016f109accff408446b290ced9684d980c667/.github/dependabot.yml)
+- [tests/test_engine.py](https://github.com/lifeupnorth/YouTubeDownloader/blob/b00d4d39f0bbdb66f9610548ccf49a57481e4f08/tests/test_engine.py)
+- [tests/test_real_yt_dlp.py](https://github.com/lifeupnorth/YouTubeDownloader/blob/b00d4d39f0bbdb66f9610548ccf49a57481e4f08/tests/test_real_yt_dlp.py)
+- [tests/test_window.py](https://github.com/lifeupnorth/YouTubeDownloader/blob/b00d4d39f0bbdb66f9610548ccf49a57481e4f08/tests/test_window.py)
+- [tests/test_app.py](https://github.com/lifeupnorth/YouTubeDownloader/blob/b00d4d39f0bbdb66f9610548ccf49a57481e4f08/tests/test_app.py)
+- [tests/test_requirements.py](https://github.com/lifeupnorth/YouTubeDownloader/blob/b00d4d39f0bbdb66f9610548ccf49a57481e4f08/tests/test_requirements.py)
+- [tests/test_build_exe.py](https://github.com/lifeupnorth/YouTubeDownloader/blob/b00d4d39f0bbdb66f9610548ccf49a57481e4f08/tests/test_build_exe.py)
+- [tests/test_check_pins.py](https://github.com/lifeupnorth/YouTubeDownloader/blob/b00d4d39f0bbdb66f9610548ccf49a57481e4f08/tests/test_check_pins.py)
+- [tests/fakes.py](https://github.com/lifeupnorth/YouTubeDownloader/blob/b00d4d39f0bbdb66f9610548ccf49a57481e4f08/tests/fakes.py)
+- [.github/workflows/tests.yml](https://github.com/lifeupnorth/YouTubeDownloader/blob/b00d4d39f0bbdb66f9610548ccf49a57481e4f08/.github/workflows/tests.yml)
+- [.github/dependabot.yml](https://github.com/lifeupnorth/YouTubeDownloader/blob/b00d4d39f0bbdb66f9610548ccf49a57481e4f08/.github/dependabot.yml)
 
 </details>
 
@@ -32,7 +32,7 @@ python -m unittest discover -s tests -v
 | `test_build_exe.py` | 15 | `packaging/build_exe.py`: checksum-checked downloads and unpacking, the Windows version information it embeds, the icon (each size drawn for itself, and found in the .exe), the `--check` verdict on the .exe's self-check (including Qt's SVG support), and `THIRD-PARTY-LICENSES.txt` (the bundled packages match what `requirements.txt` installs; Qt and PySide6 get the LGPL and GPL texts, not their packages' commercial-license file; no Tcl/Tk) | Nothing |
 | `test_check_pins.py` | 4 | `packaging/check_pins.py` with GitHub's API faked: newer ffmpeg and deno releases, version comparison, an issue opened only once | Nothing |
 
-Sources: [README.md:157-175](https://github.com/lifeupnorth/YouTubeDownloader/blob/47e016f109accff408446b290ced9684d980c667/README.md#L157-L175), [tests/test_engine.py:1-4](https://github.com/lifeupnorth/YouTubeDownloader/blob/47e016f109accff408446b290ced9684d980c667/tests/test_engine.py#L1-L4), [tests/test_real_yt_dlp.py:1-10](https://github.com/lifeupnorth/YouTubeDownloader/blob/47e016f109accff408446b290ced9684d980c667/tests/test_real_yt_dlp.py#L1-L10), [tests/test_window.py:1-9](https://github.com/lifeupnorth/YouTubeDownloader/blob/47e016f109accff408446b290ced9684d980c667/tests/test_window.py#L1-L9), [tests/test_window.py:21](https://github.com/lifeupnorth/YouTubeDownloader/blob/47e016f109accff408446b290ced9684d980c667/tests/test_window.py#L21), [tests/test_app.py:15](https://github.com/lifeupnorth/YouTubeDownloader/blob/47e016f109accff408446b290ced9684d980c667/tests/test_app.py#L15)
+Sources: [README.md:157-175](https://github.com/lifeupnorth/YouTubeDownloader/blob/b00d4d39f0bbdb66f9610548ccf49a57481e4f08/README.md#L157-L175), [tests/test_engine.py:1-4](https://github.com/lifeupnorth/YouTubeDownloader/blob/b00d4d39f0bbdb66f9610548ccf49a57481e4f08/tests/test_engine.py#L1-L4), [tests/test_real_yt_dlp.py:1-10](https://github.com/lifeupnorth/YouTubeDownloader/blob/b00d4d39f0bbdb66f9610548ccf49a57481e4f08/tests/test_real_yt_dlp.py#L1-L10), [tests/test_window.py:1-9](https://github.com/lifeupnorth/YouTubeDownloader/blob/b00d4d39f0bbdb66f9610548ccf49a57481e4f08/tests/test_window.py#L1-L9), [tests/test_window.py:21](https://github.com/lifeupnorth/YouTubeDownloader/blob/b00d4d39f0bbdb66f9610548ccf49a57481e4f08/tests/test_window.py#L21), [tests/test_app.py:15](https://github.com/lifeupnorth/YouTubeDownloader/blob/b00d4d39f0bbdb66f9610548ccf49a57481e4f08/tests/test_app.py#L15)
 
 ## The fake yt-dlp (`tests/fakes.py`)
 
@@ -53,7 +53,7 @@ Sources: [README.md:157-175](https://github.com/lifeupnorth/YouTubeDownloader/bl
 | `warn` | A yt-dlp warning |
 | `delay` | Seconds between progress events (default 0) |
 
-Sources: [tests/fakes.py:8-9](https://github.com/lifeupnorth/YouTubeDownloader/blob/47e016f109accff408446b290ced9684d980c667/tests/fakes.py#L8-L9), [tests/fakes.py:12-142](https://github.com/lifeupnorth/YouTubeDownloader/blob/47e016f109accff408446b290ced9684d980c667/tests/fakes.py#L12-L142), [tests/fakes.py:145-150](https://github.com/lifeupnorth/YouTubeDownloader/blob/47e016f109accff408446b290ced9684d980c667/tests/fakes.py#L145-L150)
+Sources: [tests/fakes.py:8-9](https://github.com/lifeupnorth/YouTubeDownloader/blob/b00d4d39f0bbdb66f9610548ccf49a57481e4f08/tests/fakes.py#L8-L9), [tests/fakes.py:12-142](https://github.com/lifeupnorth/YouTubeDownloader/blob/b00d4d39f0bbdb66f9610548ccf49a57481e4f08/tests/fakes.py#L12-L142), [tests/fakes.py:145-150](https://github.com/lifeupnorth/YouTubeDownloader/blob/b00d4d39f0bbdb66f9610548ccf49a57481e4f08/tests/fakes.py#L145-L150)
 
 ## Engine tests (`test_engine.py`, `test_real_yt_dlp.py`)
 
@@ -70,7 +70,7 @@ Sources: [tests/fakes.py:8-9](https://github.com/lifeupnorth/YouTubeDownloader/b
 
 `make_job` builds a `DownloadJob` whose callbacks record into `job.progress` and `job.log`, so the tests check exactly what the window would receive. The ffmpeg-stopping tests run a slow Python process through yt-dlp's real `Popen`, so they need yt-dlp.
 
-Sources: [tests/test_engine.py:86-420](https://github.com/lifeupnorth/YouTubeDownloader/blob/47e016f109accff408446b290ced9684d980c667/tests/test_engine.py#L86-L420), [tests/test_engine.py:423-461](https://github.com/lifeupnorth/YouTubeDownloader/blob/47e016f109accff408446b290ced9684d980c667/tests/test_engine.py#L423-L461), [tests/test_engine.py:474-484](https://github.com/lifeupnorth/YouTubeDownloader/blob/47e016f109accff408446b290ced9684d980c667/tests/test_engine.py#L474-L484), [tests/test_engine.py:487-1034](https://github.com/lifeupnorth/YouTubeDownloader/blob/47e016f109accff408446b290ced9684d980c667/tests/test_engine.py#L487-L1034), [tests/test_real_yt_dlp.py:53-138](https://github.com/lifeupnorth/YouTubeDownloader/blob/47e016f109accff408446b290ced9684d980c667/tests/test_real_yt_dlp.py#L53-L138)
+Sources: [tests/test_engine.py:86-420](https://github.com/lifeupnorth/YouTubeDownloader/blob/b00d4d39f0bbdb66f9610548ccf49a57481e4f08/tests/test_engine.py#L86-L420), [tests/test_engine.py:423-461](https://github.com/lifeupnorth/YouTubeDownloader/blob/b00d4d39f0bbdb66f9610548ccf49a57481e4f08/tests/test_engine.py#L423-L461), [tests/test_engine.py:474-484](https://github.com/lifeupnorth/YouTubeDownloader/blob/b00d4d39f0bbdb66f9610548ccf49a57481e4f08/tests/test_engine.py#L474-L484), [tests/test_engine.py:487-1034](https://github.com/lifeupnorth/YouTubeDownloader/blob/b00d4d39f0bbdb66f9610548ccf49a57481e4f08/tests/test_engine.py#L487-L1034), [tests/test_real_yt_dlp.py:53-138](https://github.com/lifeupnorth/YouTubeDownloader/blob/b00d4d39f0bbdb66f9610548ccf49a57481e4f08/tests/test_real_yt_dlp.py#L53-L138)
 
 ## Window tests (`test_window.py`)
 
@@ -97,7 +97,7 @@ These check the window's behavior and its central rule: **worker threads never t
 
 Each test builds its own window and closes it in a cleanup: it cancels the rows, waits for the workers, stops the saved list's timer (so it can't write into the next test's settings folder), then hides the window and deletes it with `deleteLater`. `setUp` collects garbage on the main thread first, so objects of an earlier test's window aren't collected on a worker thread.
 
-Sources: [tests/test_window.py:43-57](https://github.com/lifeupnorth/YouTubeDownloader/blob/47e016f109accff408446b290ced9684d980c667/tests/test_window.py#L43-L57), [tests/test_window.py:60-151](https://github.com/lifeupnorth/YouTubeDownloader/blob/47e016f109accff408446b290ced9684d980c667/tests/test_window.py#L60-L151), [tests/test_window.py:155-201](https://github.com/lifeupnorth/YouTubeDownloader/blob/47e016f109accff408446b290ced9684d980c667/tests/test_window.py#L155-L201), [tests/test_window.py:1227-1229](https://github.com/lifeupnorth/YouTubeDownloader/blob/47e016f109accff408446b290ced9684d980c667/tests/test_window.py#L1227-L1229)
+Sources: [tests/test_window.py:43-58](https://github.com/lifeupnorth/YouTubeDownloader/blob/b00d4d39f0bbdb66f9610548ccf49a57481e4f08/tests/test_window.py#L43-L58), [tests/test_window.py:61-152](https://github.com/lifeupnorth/YouTubeDownloader/blob/b00d4d39f0bbdb66f9610548ccf49a57481e4f08/tests/test_window.py#L61-L152), [tests/test_window.py:156-202](https://github.com/lifeupnorth/YouTubeDownloader/blob/b00d4d39f0bbdb66f9610548ccf49a57481e4f08/tests/test_window.py#L156-L202), [tests/test_window.py:1251-1253](https://github.com/lifeupnorth/YouTubeDownloader/blob/b00d4d39f0bbdb66f9610548ccf49a57481e4f08/tests/test_window.py#L1251-L1253)
 
 ## CI
 
@@ -114,4 +114,4 @@ Dependabot keeps the pins current, and its PRs run the same checks:
 - `packaging/requirements-build.txt` (PyInstaller and its dependencies, pinned with their hashes): weekly.
 - The GitHub Actions, which the workflows pin by commit SHA: weekly.
 
-Sources: [.github/workflows/tests.yml](https://github.com/lifeupnorth/YouTubeDownloader/blob/47e016f109accff408446b290ced9684d980c667/.github/workflows/tests.yml), [ruff.toml](https://github.com/lifeupnorth/YouTubeDownloader/blob/47e016f109accff408446b290ced9684d980c667/ruff.toml), [.github/workflows/build-exe.yml:1-20](https://github.com/lifeupnorth/YouTubeDownloader/blob/47e016f109accff408446b290ced9684d980c667/.github/workflows/build-exe.yml#L1-L20), [.github/workflows/build-exe.yml:163-165](https://github.com/lifeupnorth/YouTubeDownloader/blob/47e016f109accff408446b290ced9684d980c667/.github/workflows/build-exe.yml#L163-L165), [.github/workflows/pins.yml](https://github.com/lifeupnorth/YouTubeDownloader/blob/47e016f109accff408446b290ced9684d980c667/.github/workflows/pins.yml), [.github/dependabot.yml](https://github.com/lifeupnorth/YouTubeDownloader/blob/47e016f109accff408446b290ced9684d980c667/.github/dependabot.yml)
+Sources: [.github/workflows/tests.yml](https://github.com/lifeupnorth/YouTubeDownloader/blob/b00d4d39f0bbdb66f9610548ccf49a57481e4f08/.github/workflows/tests.yml), [ruff.toml](https://github.com/lifeupnorth/YouTubeDownloader/blob/b00d4d39f0bbdb66f9610548ccf49a57481e4f08/ruff.toml), [.github/workflows/build-exe.yml:1-20](https://github.com/lifeupnorth/YouTubeDownloader/blob/b00d4d39f0bbdb66f9610548ccf49a57481e4f08/.github/workflows/build-exe.yml#L1-L20), [.github/workflows/build-exe.yml:163-165](https://github.com/lifeupnorth/YouTubeDownloader/blob/b00d4d39f0bbdb66f9610548ccf49a57481e4f08/.github/workflows/build-exe.yml#L163-L165), [.github/workflows/pins.yml](https://github.com/lifeupnorth/YouTubeDownloader/blob/b00d4d39f0bbdb66f9610548ccf49a57481e4f08/.github/workflows/pins.yml), [.github/dependabot.yml](https://github.com/lifeupnorth/YouTubeDownloader/blob/b00d4d39f0bbdb66f9610548ccf49a57481e4f08/.github/dependabot.yml)
