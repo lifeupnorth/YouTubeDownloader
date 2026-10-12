@@ -572,6 +572,49 @@ class DownloadJobTest(unittest.TestCase):
         self.assertTrue(job.error_logged)
         self.assertEqual(job.log, [f"✘ [youtube] {job.url}: Video unavailable"])
 
+    @unittest.skipUnless(yt_dlp, "needs yt-dlp")
+    def test_a_percent_sign_in_the_folder_is_kept(self):
+        folder = os.path.join(tempfile.gettempdir(), "100% %(id)s")
+        opts = make_job(folder=folder, fmt="mp3").options()
+        with yt_dlp.YoutubeDL({"outtmpl": opts["outtmpl"], "quiet": True}) as ydl:
+            video = {"id": "abc", "title": "T", "ext": "mp3"}
+            entry = {**video, "playlist_title": "List", "playlist_index": 7}
+            self.assertEqual(ydl.prepare_filename(video), os.path.join(folder, "T.mp3"))
+            self.assertEqual(ydl.prepare_filename(entry),
+                             os.path.join(folder, "List", "007 - T.mp3"))
+
+    def test_an_empty_playlist_isnt_complete(self):
+        job = self.run_job(make_fake_ydl(streams=1, videos=0), whole_playlist=True)
+        self.assertEqual(job.outcome, "done")
+        self.assertEqual(job.summary(), engine.NOTHING_TO_DOWNLOAD)
+
+    def test_a_partial_file_that_cant_be_removed_is_reported(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            stuck = os.path.join(tmp, "v0.mp4.part")
+            open(stuck, "wb").close()
+            job = make_job()
+            job._entry_files = {stuck}
+            with mock.patch.object(engine, "_remove", return_value=False), \
+                    mock.patch.object(engine.gc, "collect") as collect:
+                self.assertEqual(job._remove_partial_files(), 0)
+            collect.assert_called_once()   # the retry after closing stray files
+        self.assertEqual(job.log, [f"⚠ Couldn't remove the partial file {stuck}"])
+
+    def test_finished_processes_arent_kept(self):
+        job = make_job()
+        done, running = mock.Mock(), mock.Mock()
+        done.poll.return_value, running.poll.return_value = 0, None
+        for _ in range(100):
+            job._process_started(done, None)
+        job._process_started(running, None)
+        self.assertEqual([p for p, _out in job._processes], [running])
+
+    @unittest.skipUnless(yt_dlp, "needs yt-dlp")
+    def test_ffmpeg_runs_are_tracked_in_this_yt_dlp(self):
+        # Cancel stops ffmpeg by replacing yt-dlp's Popen in these modules; if
+        # a new yt-dlp starts processes some other way, this fails.
+        self.assertEqual(engine._track_processes(), len(engine._PROCESS_MODULES))
+
     def test_url_results_are_followed_at_most_three_times(self):
         # A link that keeps redirecting must not be looked up forever.
         fake = make_fake_ydl(streams=1, probe=("url",) * 10)
@@ -888,6 +931,11 @@ class DownloadQueueTest(unittest.TestCase):
         self.assertEqual([job.outcome for job in queue.jobs], ["done", "failed", "done"])
         self.assertIn("✘ Error: Unexpected error: KeyError: 'boom'", queue.log)
         self.assertEqual(queue.summary(), "Done: 2 saved, 1 link failed")
+
+    def test_an_empty_link_is_a_problem(self):
+        queue = self.run_queue(make_fake_ydl(streams=1, videos=0), ["https://empty"])
+        self.assertEqual(queue.summary(), engine.NOTHING_TO_DOWNLOAD)
+        self.assertTrue(queue.had_problems, "shown in green as if it worked")
 
     def test_no_outcome_before_it_runs(self):
         queue = engine.DownloadQueue(["https://a"], on_progress=None, on_log=None)

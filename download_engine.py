@@ -7,6 +7,7 @@ window (youtube_downloader.py) turns those callbacks into screen updates.
 """
 
 import functools
+import gc
 import glob
 import importlib
 import importlib.util
@@ -147,17 +148,23 @@ def check_for_update():
     Asks api.github.com; None without a network. Only a release .exe checks
     (each release bundles a newer yt-dlp). From source it never does: the
     app notes a yt-dlp that doesn't match the pin in requirements.txt."""
+    try:
+        return fetch_update_notice()
+    except Exception:
+        return None
+
+
+def fetch_update_notice():
+    """Like check_for_update(), but raises when GitHub can't be asked (e.g.
+    offline), so the caller can tell that apart from "nothing newer"."""
     current = app_version()
     if current is None:   # from source, or a test build
         return None
-    try:
-        release = _get_json(LATEST_RELEASE_API)
-        latest = release.get("tag_name") or ""
-        if latest and newer_version(latest, current):
-            return (f"• YT Downloader {latest.removeprefix('v')} is out (this is "
-                    f"{current}). Download it from {release.get('html_url') or RELEASES_URL}")
-    except Exception:
-        return None
+    release = _get_json(LATEST_RELEASE_API)
+    latest = release.get("tag_name") or ""
+    if latest and newer_version(latest, current):
+        return (f"• YT Downloader {latest.removeprefix('v')} is out (this is "
+                f"{current}). Download it from {release.get('html_url') or RELEASES_URL}")
     return None
 
 
@@ -391,15 +398,23 @@ def _new_ffmpeg_output(args):
     return None if os.path.exists(path) else path
 
 
+# The yt-dlp modules that start ffmpeg through their own name for Popen.
+_PROCESS_MODULES = ("yt_dlp.postprocessor.ffmpeg", "yt_dlp.downloader.external")
+
+
 def _track_processes():
-    """Makes yt-dlp's ffmpeg runs go through _tracked_popen_class."""
+    """Makes yt-dlp's ffmpeg runs go through _tracked_popen_class. Returns
+    how many modules use it (a test notices if yt-dlp changes this)."""
     base = getattr(sys.modules.get("yt_dlp.utils"), "Popen", None)
     if base is None:
-        return
-    for name in ("yt_dlp.postprocessor.ffmpeg", "yt_dlp.downloader.external"):
+        return 0
+    tracked = _tracked_popen_class(base)
+    for name in _PROCESS_MODULES:
         module = sys.modules.get(name)
         if module is not None and getattr(module, "Popen", None) is base:
-            module.Popen = _tracked_popen_class(base)
+            module.Popen = tracked
+    return sum(getattr(sys.modules.get(name), "Popen", None) is tracked
+               for name in _PROCESS_MODULES)
 
 
 def _follow_url_results(ydl, info):
@@ -505,6 +520,27 @@ def preview_link(url, whole_playlist, cancel_event=None, js_runtime=None):
 
 # ── Downloading ──────────────────────────────────────────────────────────────
 
+NOTHING_TO_DOWNLOAD = "Nothing to download: the link has no videos."
+
+
+def _remove(path):
+    """Removes a file; False if it's still there."""
+    try:
+        os.remove(path)
+    except FileNotFoundError:
+        return True
+    except OSError:
+        return False
+    return True
+
+
+def _canceled_summary(saved, removed):
+    parts = [f"{saved} saved"] if saved else []
+    if removed:
+        parts.append(f"{removed} partial file{'s' * (removed != 1)} removed")
+    return "Download canceled" + (f" ({', '.join(parts)})" if parts else "") + "."
+
+
 class DownloadJob:
     """Downloads one link: a video, or a whole playlist or channel.
 
@@ -561,6 +597,9 @@ class DownloadJob:
 
     def _process_started(self, proc, output):
         with self._lock:
+            # Finished ones are of no use to stop_processes (a long MP3
+            # playlist starts thousands).
+            self._processes = [(p, out) for p, out in self._processes if p.poll() is None]
             self._processes.append((proc, output))
         if self.canceled:   # canceled just before it started
             self.stop_processes()
@@ -574,8 +613,10 @@ class DownloadJob:
         opts = {
             # Playlist entries go to "<playlist>/<NNN> - <title>.<ext>" (the
             # index keeps same-title videos apart); single videos to
-            # "<title>.<ext>", as an empty folder name collapses.
-            "outtmpl": os.path.join(self.folder, "%(playlist_title|)s",
+            # "<title>.<ext>", as an empty folder name collapses. A "%" in
+            # the download folder's name is doubled, or yt-dlp would read it
+            # as the start of a field.
+            "outtmpl": os.path.join(self.folder.replace("%", "%%"), "%(playlist_title|)s",
                                     "%(playlist_index&{:03d} - |)s%(title)s.%(ext)s"),
             "progress_hooks": [self._progress_hook],
             # Only affects links to a video in a playlist (watch?v=…&list=…).
@@ -725,30 +766,32 @@ class DownloadJob:
     # yet, and the file a stopped ffmpeg was writing). Videos that finished
     # are kept.
     def _remove_partial_files(self):
-        removed = 0
         with self._lock:
             killed = list(self._killed_outputs)
-        for path in {*self._entry_files, *killed}:
-            for p in [path, path + ".ytdl", *glob.glob(glob.escape(path) + "-Frag*")]:
-                try:
-                    os.remove(p)
-                    removed += 1
-                except OSError:
-                    pass
-        return removed
+        files = [p for path in {*self._entry_files, *killed}
+                 for p in [path, path + ".ytdl", *glob.glob(glob.escape(path) + "-Frag*")]
+                 if os.path.exists(p)]
+        stuck = [p for p in files if not _remove(p)]
+        if stuck:
+            # On Windows a file can't be removed while open, and yt-dlp's
+            # fragment downloader leaves its file to be closed by the garbage
+            # collector after a cancel.
+            gc.collect()
+            stuck = [p for p in stuck if not _remove(p)]
+        for p in stuck:
+            self.on_log(f"⚠ Couldn't remove the partial file {p}")
+        return len(files) - len(stuck)
 
     def summary(self):
         """How it went, for the status line, e.g. "Done: 2 saved, 1 skipped"."""
         if self.outcome == "canceled":
-            parts = [f"{self.saved} saved"] if self.saved else []
-            if self.removed:
-                parts.append(f"{self.removed} partial file"
-                             f"{'s' * (self.removed != 1)} removed")
-            return "Download canceled" + (f" ({', '.join(parts)})" if parts else "") + "."
+            return _canceled_summary(self.saved, self.removed)
         if self.outcome == "declined":
             return "Playlist not downloaded."
         if self.outcome == "failed":
             return f"Error: {self.error}"
+        if not self.skipped and self.saved + self.already == 0:
+            return NOTHING_TO_DOWNLOAD   # e.g. an empty playlist
         if not self.skipped and self.saved + self.already <= 1:
             return "Download complete!"
         parts = [f"{self.saved} saved"]
@@ -871,18 +914,16 @@ class DownloadQueue:
     @property
     def had_problems(self):
         """Something didn't work, though the outcome may still be "done"."""
-        return bool(self.skipped or self._with("failed") or self._with("declined"))
+        nothing = self.outcome == "done" and not (self.saved or self.already)
+        return bool(self.skipped or self._with("failed") or self._with("declined")
+                    or nothing)
 
     def summary(self):
         """How it went, for the status line, e.g. "Done: 3 saved, 1 link failed"."""
         if len(self.urls) == 1 and self.jobs:
             return self.jobs[0].summary()
         if self.outcome == "canceled":
-            parts = [f"{self.saved} saved"] if self.saved else []
-            if self.removed:
-                parts.append(f"{self.removed} partial file"
-                             f"{'s' * (self.removed != 1)} removed")
-            return "Download canceled" + (f" ({', '.join(parts)})" if parts else "") + "."
+            return _canceled_summary(self.saved, self.removed)
         parts = [f"{self.saved} saved"] if self.saved or self.outcome == "done" else []
         if self.already:
             parts.append(f"{self.already} already downloaded")

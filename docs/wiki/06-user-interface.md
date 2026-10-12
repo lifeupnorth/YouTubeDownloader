@@ -37,11 +37,11 @@ Sources: [youtube_downloader.py:30-44](https://github.com/lifeupnorth/YouTubeDow
 | Header label (`powered_lbl`) | `_powered_by_text` | "Powered by yt-dlp 2026.08.19", or "(not installed)"; a release .exe puts its own version first ("v1.0.3 · …"); updated after an in-app install |
 | Check for updates at startup `Checkbutton` | `update_check_var` | Only in a release .exe (`engine.app_version()`); on by default, saved as `check_updates` when clicked. While ticked, startup checks GitHub for a newer release at most once a day and says so in the log |
 | URL `Text` (`url_entry`) | `<FocusIn>`, `<FocusOut>`, `<KeyRelease>`, `<Return>`, `<Shift-Return>`, `<Tab>`, `<Shift-Tab>` | One link per line; grows from 1 to 4 lines (`_fit_url_box`). Shows a dimmed placeholder (tracked by `_placeholder_shown`) until focused. Enter starts a download, Shift+Enter adds a line, Tab moves to the next widget and Shift+Tab to the previous one. `_urls()` returns the links in order without repeats; `_url()` the first one. |
-| Paste `Button` | `_paste_url` | Replaces the box (or placeholder) with the clipboard's links, one per line; an empty clipboard is ignored |
+| Paste `Button` | `_paste_url` | Adds the clipboard's links to those in the box (or replaces the placeholder), one per line and without repeats, leaving out words that aren't links (`split_links`); a clipboard without a link only changes the status |
 | Preview (`preview_img`, `preview_lbl`) | `preview_text` | Thumbnail, title, and length or playlist size with the channel, for the first link; "+ 2 more links" when there are several |
 | Format `Radiobutton` ×6 | `format_var` | From `FORMATS`, laid out with `divmod(i, 3)` in columns 0–1 |
 | Whole playlist `Checkbutton` | `playlist_var` | In column 2 of the format grid, off by default and never remembered; changing it refreshes the preview |
-| Save To `Entry` | `download_path` | Defaults to `~/Downloads`, or the last folder used |
+| Save To `Entry` | `download_path` | Defaults to `~/Downloads`, or the last folder used; a saved folder that's missing (an unplugged drive) is kept in the settings and noted in the log. Download refuses an empty or relative path |
 | Browse `Button` | `_browse_folder` | `filedialog.askdirectory`, starting at the current folder |
 | Download `Button` (`dl_btn`) | `_start_download` | Becomes **✖ Cancel** (`_cancel_download`) while a download runs, then "Canceling…" (disabled) until it stops |
 | `ttk.Progressbar` | `progress_var` | `Red.Horizontal.TProgressbar` style on the `clam` theme |
