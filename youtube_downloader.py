@@ -10,6 +10,7 @@ Requirements: pip install -r requirements.txt
 import json
 import os
 import queue
+import re
 import subprocess
 import sys
 import threading
@@ -118,6 +119,27 @@ def work_area(widget):
     return 0, 0, widget.winfo_screenwidth(), widget.winfo_screenheight() - 40
 
 
+# A word that looks like a link without "https://": a host name and,
+# optionally, a path ("youtu.be/abc", "www.youtube.com/watch?v=abc").
+_BARE_LINK = re.compile(r"(?:[\w-]+\.)+[a-z]{2,}(?::\d+)?(?:[/?#]\S*)?", re.IGNORECASE)
+
+
+def split_links(text):
+    """(links, other words) in text, in order and without repeats. Links get
+    "https://" if they have no scheme; quotes and brackets around a word and
+    a trailing comma are dropped, so pasted prose keeps only its links."""
+    links, other = [], []
+    for word in text.split():
+        word = word.strip("\"'<>()[]").rstrip(",").strip("\"'<>()[]")
+        if word.lower().startswith(("https://", "http://")):
+            links.append(word)
+        elif _BARE_LINK.fullmatch(word):
+            links.append("https://" + word)
+        elif word:
+            other.append(word)
+    return list(dict.fromkeys(links)), list(dict.fromkeys(other))
+
+
 def reveal_in_file_manager(path):
     """Open the folder holding path, with the file selected where possible."""
     folder = os.path.dirname(path)
@@ -180,7 +202,9 @@ class YouTubeDownloader(tk.Tk):
         self.configure(bg=BG)
 
         # State
-        self.download_path = tk.StringVar(value=os.path.expanduser("~/Downloads"))
+        self._default_folder = os.path.normpath(os.path.expanduser("~/Downloads"))
+        self._unavailable_folder = None   # the saved folder, if it's missing now
+        self.download_path = tk.StringVar(value=self._default_folder)
         self.format_var    = tk.StringVar(value="mp4_best")
         self.playlist_var  = tk.BooleanVar(value=False)
         self.progress_var  = tk.DoubleVar(value=0)
@@ -220,6 +244,9 @@ class YouTubeDownloader(tk.Tk):
         if engine.YT_DLP_AVAILABLE:   # it runs "<runtime> --version": a worker's job
             self._start_worker(self._find_js_runtime_thread)
         self._note_yt_dlp_version()
+        if self._unavailable_folder:
+            self._log(f"• The saved folder {self._unavailable_folder} isn't available "
+                      f"(an unplugged drive?); saving to {self._default_folder} for now.")
         if update_check:
             self._maybe_check_for_update()
         self.bind("<FocusIn>", self._recheck_ffmpeg, add="+")
@@ -426,14 +453,20 @@ class YouTubeDownloader(tk.Tk):
             self.format_var.set(saved["format"])
         folder = saved.get("folder")
         if isinstance(folder, str) and os.path.isdir(folder):
-            self.download_path.set(folder)
+            self.download_path.set(os.path.normpath(folder))
+        elif isinstance(folder, str) and folder:
+            # Kept, not forgotten: it may be on a drive that's unplugged now.
+            self._unavailable_folder = folder
         if isinstance(saved.get("check_updates"), bool):
             self.update_check_var.set(saved["check_updates"])
 
     def _save_settings(self):
+        folder = self.download_path.get()
+        if self._unavailable_folder and folder == self._default_folder:
+            folder = self._unavailable_folder   # still the stand-in: keep the saved one
         # Keeps the other keys, e.g. when updates were last checked.
         save_settings({**load_settings(),
-                       "folder": self.download_path.get(),
+                       "folder": folder,
                        "format": self.format_var.get(),
                        "check_updates": self.update_check_var.get()})
 
@@ -460,16 +493,19 @@ class YouTubeDownloader(tk.Tk):
     # ── Helpers ─────────────────────────────────────────────────────────────
 
     # The URL box shows a dimmed example until the user types or pastes.
+    # (edit_reset: Ctrl+Z mustn't bring the placeholder back as text.)
     def _clear_placeholder(self, _e=None):
         if self._placeholder_shown:
             self._placeholder_shown = False
             self._replace_url_text("")
+            self.url_entry.edit_reset()
 
     def _restore_placeholder(self, _e=None):
         if not self._url_text().strip():
             self._replace_url_text(URL_PLACEHOLDER)
             self.url_entry.config(fg=TEXT_DIM)
             self._placeholder_shown = True
+            self.url_entry.edit_reset()
 
     def _url_text(self):
         return self.url_entry.get("1.0", "end-1c")
@@ -482,11 +518,19 @@ class YouTubeDownloader(tk.Tk):
 
     def _urls(self):
         """The links entered (one per line, or separated by spaces) in order
-        and without repeats; none while the placeholder is showing."""
+        and without repeats; none while the placeholder is showing. Words
+        that aren't links are left out (see _not_links)."""
+        return split_links(self._entered_text())[0]
+
+    def _not_links(self):
+        """The words in the box that aren't links."""
+        return split_links(self._entered_text())[1]
+
+    def _entered_text(self):
         text = self._url_text().strip()
         if self._placeholder_shown and text == URL_PLACEHOLDER:
-            return []
-        return list(dict.fromkeys(text.split()))
+            return ""
+        return text
 
     def _url(self):
         """The first link, or "" if there's none."""
@@ -514,19 +558,27 @@ class YouTubeDownloader(tk.Tk):
         event.widget.tk_focusPrev().focus()
         return "break"
 
+    # Adds the clipboard's links to those already in the box, one per line,
+    # so several links can be pasted one after the other. Other words (e.g.
+    # "Watch this:" before a link) are left out.
     def _paste_url(self):
         try:
             clip = self.clipboard_get()
         except tk.TclError:   # empty clipboard, or not text
             return
+        if not split_links(clip)[0]:
+            self._set_status("The clipboard has no link to paste.", WARNING)
+            return
+        entered = self._entered_text()   # before the placeholder flag changes
         self._placeholder_shown = False
-        self._replace_url_text("\n".join(clip.split()))   # one link per line
+        self._replace_url_text("\n".join(split_links(entered + "\n" + clip)[0]))
         self._schedule_preview(delay=100)
 
     def _browse_folder(self):
         path = filedialog.askdirectory(initialdir=self.download_path.get())
         if path:
-            self.download_path.set(path)
+            self.download_path.set(os.path.normpath(path))
+            self._unavailable_folder = None   # a deliberate choice replaces it
 
     def _log(self, msg):
         self.log_box.configure(state="normal")
@@ -598,7 +650,9 @@ class YouTubeDownloader(tk.Tk):
         progress = self._latest_progress
         if progress is not None and progress is not self._shown_progress:
             self._shown_progress = progress
-            self._set_progress(*progress)
+            # One that arrives after Cancel mustn't overwrite "Canceling…".
+            if not (self.is_running and self._queue.canceled):
+                self._set_progress(*progress)
 
         while not self._closing:
             try:
@@ -671,9 +725,18 @@ class YouTubeDownloader(tk.Tk):
             messagebox.showwarning("No URL", "Please enter a YouTube URL.")
             return
 
+        # A relative folder would save next to wherever the app was started.
+        folder = os.path.expanduser(self.download_path.get().strip())
+        if not folder or not os.path.isabs(folder):
+            messagebox.showwarning("Choose a folder",
+                                   "Please choose the folder to save to (Browse).")
+            return
+        folder = os.path.normpath(folder)
+        self.download_path.set(folder)
+
         # Tk variables are read here, on the main thread; the queue gets values.
         self._queue = engine.DownloadQueue(
-            urls, fmt=self.format_var.get(), folder=self.download_path.get(),
+            urls, fmt=self.format_var.get(), folder=folder,
             ffmpeg=ffmpeg, whole_playlist=self.playlist_var.get(),
             js_runtime=self._js_runtime,
             on_progress=self._job_progress, on_log=self._job_log,
@@ -684,6 +747,9 @@ class YouTubeDownloader(tk.Tk):
         self.progress_var.set(0)
         self._set_status("Starting download…", WARNING)
         self._log(f"▶ {urls[0]}" if len(urls) == 1 else f"▶ {len(urls)} links")
+        not_links = self._not_links()
+        if not_links:
+            self._log("• Not links, so left out: " + " ".join(not_links))
         self._latest_progress = self._shown_progress = None
         self._last_file = None
         self.open_btn.grid_remove()
@@ -721,6 +787,9 @@ class YouTubeDownloader(tk.Tk):
         # download thread stops waiting.
         def ask():
             try:
+                if self._queue is not None and self._queue.canceled:
+                    answer.append(False)   # canceled before the question showed
+                    return
                 answer.append(messagebox.askyesno(title, question))
             except Exception as exc:
                 self._log(f"✘ Couldn't ask about the playlist: {exc}")
@@ -816,7 +885,8 @@ class YouTubeDownloader(tk.Tk):
         self._preview_cancel.set()
         self._preview_cancel = threading.Event()
         if not url:
-            return self._set_preview(PREVIEW_HINT, dim=True)
+            text = "That doesn't look like a link." if self._not_links() else PREVIEW_HINT
+            return self._set_preview(text, dim=True)
         if not url.startswith(("https://", "http://")) or not engine.YT_DLP_AVAILABLE:
             return self._set_preview("No preview for this link.", dim=True)
         self._set_preview("Loading preview…", dim=True)
@@ -871,18 +941,23 @@ class YouTubeDownloader(tk.Tk):
     def _maybe_check_for_update(self):
         if engine.app_version() is None or not self.update_check_var.get():
             return
-        saved = load_settings()
-        last, now = saved.get("last_update_check"), time.time()
-        if isinstance(last, (int, float)) and 0 <= now - last < UPDATE_CHECK_INTERVAL:
+        last = load_settings().get("last_update_check")
+        if isinstance(last, (int, float)) and 0 <= time.time() - last < UPDATE_CHECK_INTERVAL:
             return
-        save_settings({**saved, "last_update_check": now})
         self._start_worker(self._update_thread)
 
     # Says once, in the log, when a newer release is out.
     def _update_thread(self):
-        self._post(self._update_checked, engine.check_for_update())
+        try:
+            notice, asked = engine.fetch_update_notice(), True
+        except Exception:   # e.g. offline: try again at the next start
+            notice, asked = None, False
+        self._post(self._update_checked, notice, asked)
 
-    def _update_checked(self, notice):
+    def _update_checked(self, notice, asked=True):
+        # Only a check that reached GitHub counts toward "once a day".
+        if asked:
+            save_settings({**load_settings(), "last_update_check": time.time()})
         if notice:
             self._log(notice)
 

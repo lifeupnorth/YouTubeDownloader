@@ -179,5 +179,56 @@ class VersionResourceTest(unittest.TestCase):
         self.assertEqual(info.ffi.fileVersionLS, 3 << 16)
 
 
+def _normalize(name):
+    return name.lower().replace("_", "-")
+
+
+class ThirdPartyLicensesTest(unittest.TestCase):
+    def test_bundled_packages_are_what_requirements_install(self):
+        # What yt-dlp[default] and Pillow need, all the way down, without
+        # mutagen (kept out of the .exe); plus PyInstaller's bootloader.
+        import importlib.metadata
+        try:
+            from packaging.requirements import Requirement
+        except ImportError:
+            from pip._vendor.packaging.requirements import Requirement
+        try:
+            todo = [("yt-dlp", "default"), ("pillow", "")]
+            found = set()
+            while todo:
+                name, extra = todo.pop()
+                if _normalize(name) in found or _normalize(name) == "mutagen":
+                    continue
+                found.add(_normalize(name))
+                for line in importlib.metadata.requires(name) or []:
+                    req = Requirement(line)
+                    if req.marker is None or req.marker.evaluate({"extra": extra}):
+                        todo.append((req.name, next(iter(req.extras), "")))
+        except importlib.metadata.PackageNotFoundError as missing:
+            self.skipTest(f"{missing} isn't installed")
+        self.assertEqual(found | {"pyinstaller"},
+                         {_normalize(name) for name in build_exe.BUNDLED_PACKAGES})
+
+    def test_every_package_is_in_the_file(self):
+        import importlib.metadata
+        for name in build_exe.BUNDLED_PACKAGES:
+            try:
+                importlib.metadata.distribution(name)
+            except importlib.metadata.PackageNotFoundError:
+                self.skipTest(f"{name} isn't installed (PyInstaller only is for builds)")
+        if sys.version_info[:2] != build_exe.PYTHON_LICENSES_VERSION:
+            self.skipTest("PYTHON-LICENSES.rst is for another Python version")
+        with tempfile.TemporaryDirectory() as tmp:
+            path = os.path.join(tmp, "licenses.txt")
+            build_exe.third_party_licenses(path)
+            with open(path, encoding="utf-8") as f:
+                text = f.read()
+        for heading in ("OpenSSL", "Tcl/Tk", "Software incorporated in Python"):
+            self.assertIn(heading, text)
+        for name in build_exe.BUNDLED_PACKAGES:
+            dist = importlib.metadata.distribution(name)
+            self.assertIn(f"{dist.metadata['Name']} {dist.version}: ", text)
+
+
 if __name__ == "__main__":
     unittest.main()

@@ -422,7 +422,7 @@ class ThreadSafetyTest(unittest.TestCase):
         self.assertEqual(self.violations, [])
 
     def test_update_notice_is_logged(self):
-        with mock.patch.object(engine, "check_for_update",
+        with mock.patch.object(engine, "fetch_update_notice",
                                return_value="• yt-dlp 2099.1.1 is out"):
             self.app._start_worker(self.app._update_thread)
             deadline = time.monotonic() + 5
@@ -458,20 +458,78 @@ class ThreadSafetyTest(unittest.TestCase):
         self.assertEqual(self.app._urls(), ["https://youtu.be/abc"])
         self.assertFalse(self.app._placeholder_shown)
 
-    def test_several_links_one_per_line(self):
-        with mock.patch.object(self.app, "clipboard_get",
-                               return_value="https://a https://b\nhttps://a\n\nhttps://c"), \
+    def paste(self, clip):
+        with mock.patch.object(self.app, "clipboard_get", return_value=clip), \
                 mock.patch.object(self.app, "_schedule_preview"):
             self.app._paste_url()
+
+    def test_several_links_one_per_line(self):
+        self.app._replace_url_text("")
+        self.paste("https://a https://b\nhttps://a\n\nhttps://c")
         # Pasted links go one per line, without repeats; the box grows.
         self.assertEqual(self.app._urls(), ["https://a", "https://b", "https://c"])
-        self.assertEqual(self.app._url_text(),
-                         "https://a\nhttps://b\nhttps://a\nhttps://c")
-        self.assertEqual(int(self.app.url_entry.cget("height")), 4)
+        self.assertEqual(self.app._url_text(), "https://a\nhttps://b\nhttps://c")
+        self.assertEqual(int(self.app.url_entry.cget("height")), 3)
         self.app._replace_url_text("https://a\nhttps://b")
         self.assertEqual(int(self.app.url_entry.cget("height")), 2)
         self.app._replace_url_text("\n".join(f"https://{n}" for n in range(9)))
         self.assertEqual(int(self.app.url_entry.cget("height")), 4, "at most 4")
+
+    def test_paste_adds_to_the_links_already_there(self):
+        self.app._replace_url_text("https://a")
+        self.paste("https://b")
+        self.paste("https://a")   # already there
+        self.assertEqual(self.app._url_text(), "https://a\nhttps://b")
+
+    def test_paste_keeps_only_the_links(self):
+        self.app._replace_url_text("")
+        self.paste('Watch this: "youtu.be/abc", and https://e.com/v!')
+        self.assertEqual(self.app._urls(), ["https://youtu.be/abc", "https://e.com/v!"])
+        before = self.app._url_text()
+        self.paste("no links here")
+        self.assertEqual(self.app._url_text(), before)
+        self.assertEqual(self.statuses[-1], "The clipboard has no link to paste.")
+
+    def test_words_that_arent_links_are_left_out(self):
+        self.app._replace_url_text("Watch https://www.youtube.com/watch?v=test now")
+        self.run_download(make_fake_ydl(streams=1))
+        self.assertIn("• Not links, so left out: Watch now", self.log())
+        self.assertEqual([job.url for job in self.app._queue.jobs],
+                         ["https://www.youtube.com/watch?v=test"])
+
+    def test_undo_doesnt_bring_back_the_placeholder(self):
+        self.app._replace_url_text("")
+        self.app._restore_placeholder()
+        self.app._clear_placeholder()
+        try:
+            self.app.url_entry.edit_undo()
+        except tkinter.TclError:   # nothing to undo
+            pass
+        self.assertEqual(self.app._url_text(), "")
+
+    def test_progress_after_cancel_doesnt_replace_canceling(self):
+        self.app.is_running = True
+        self.app._queue = mock.Mock(canceled=True)
+        try:
+            self.app._set_status("Canceling…")
+            self.app._latest_progress = (50, "Downloading… 50%", ytd.WARNING)
+            self.app._poll_ui_queue()
+            self.assertEqual(self.app.status_var.get(), "Canceling…")
+        finally:
+            self.app.is_running = False
+
+    def test_no_playlist_question_after_cancel(self):
+        self.app._queue = mock.Mock(canceled=True)
+        answers = []
+        worker = threading.Thread(
+            target=lambda: answers.append(self.app._ask_on_main("Playlist", "All of it?")))
+        worker.start()
+        deadline = time.monotonic() + 5
+        while worker.is_alive() and time.monotonic() < deadline:
+            self.app.update()
+            time.sleep(0.01)
+        self.assertEqual(answers, [False])
+        self.assertEqual(self.dialogs, [], "the question still showed")
 
     def test_enter_downloads_instead_of_adding_a_line(self):
         with mock.patch.object(self.app, "_start_download") as start:
@@ -569,7 +627,7 @@ class ThreadSafetyTest(unittest.TestCase):
         self.assertEqual(text, "Couldn't load a preview for this link.")
         self.assertEqual(str(self.app.preview_lbl.cget("fg")), ytd.TEXT_DIM)
         self.assertEqual(self.look_up("not a link", extract=extract),
-                         "No preview for this link.")
+                         "That doesn't look like a link.")
 
     def test_preview_drops_answers_for_an_older_link(self):
         def extract(url):
@@ -811,10 +869,39 @@ class ThreadSafetyTest(unittest.TestCase):
         again = ytd.YouTubeDownloader()
         try:
             self.assertEqual(again.download_path.get(),
-                             os.path.expanduser("~/Downloads"))
+                             os.path.normpath(os.path.expanduser("~/Downloads")))
             self.assertEqual(again.format_var.get(), "mp4_best")
         finally:
             again.destroy()
+
+    def test_an_unavailable_saved_folder_is_kept(self):
+        # e.g. on a USB drive that isn't plugged in this time.
+        gone = os.path.join(os.path.dirname(self.settings_file), "unplugged", "Videos")
+        with open(self.settings_file, "w", encoding="utf-8") as f:
+            json.dump({"folder": gone}, f)
+        again = ytd.YouTubeDownloader()
+        try:
+            log = again.log_box.get("1.0", "end")
+            self.assertIn(f"The saved folder {gone} isn't available", log)
+            self.assertEqual(again.download_path.get(), again._default_folder)
+            again._save_settings()
+            self.assertEqual(ytd.load_settings()["folder"], gone, "forgotten")
+            with tempfile.TemporaryDirectory() as chosen, \
+                    mock.patch.object(ytd.filedialog, "askdirectory", return_value=chosen):
+                again._browse_folder()
+                again._save_settings()
+                self.assertEqual(ytd.load_settings()["folder"], os.path.normpath(chosen))
+        finally:
+            again.destroy()
+
+    def test_a_relative_folder_is_refused(self):
+        for folder in ("", "   ", "videos"):
+            with self.subTest(folder=folder):
+                self.dialogs.clear()
+                self.app.download_path.set(folder)
+                self.app._start_download()
+                self.assertEqual(self.dialogs, ["showwarning"])
+                self.assertFalse(self.app.is_running)
 
     def test_open_folder_after_download(self):
         with tempfile.TemporaryDirectory() as tmp:

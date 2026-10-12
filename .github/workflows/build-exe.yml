@@ -172,6 +172,7 @@ jobs:
           path: |
             dist/YT-Downloader.exe
             dist/THIRD-PARTY-NOTICES.txt
+            dist/THIRD-PARTY-LICENSES.txt
             dist/FFMPEG-LICENSE.txt
             dist/DENO-LICENSE.txt
           if-no-files-found: error
@@ -199,8 +200,8 @@ jobs:
 
       - name: Write the checksums
         run: >-
-          sha256sum YT-Downloader.exe THIRD-PARTY-NOTICES.txt FFMPEG-LICENSE.txt
-          DENO-LICENSE.txt > SHA256SUMS.txt
+          sha256sum YT-Downloader.exe THIRD-PARTY-NOTICES.txt THIRD-PARTY-LICENSES.txt
+          FFMPEG-LICENSE.txt DENO-LICENSE.txt > SHA256SUMS.txt
 
       # Created as a draft with all its files, then published: with immutable
       # releases turned on, files can't be added after publishing.
@@ -211,8 +212,8 @@ jobs:
         run: |
           gh release create "$TAG" --repo "$GITHUB_REPOSITORY" --target "$GITHUB_SHA" \
             --draft --title "YT Downloader $TAG" --generate-notes \
-            YT-Downloader.exe THIRD-PARTY-NOTICES.txt FFMPEG-LICENSE.txt \
-            DENO-LICENSE.txt SHA256SUMS.txt
+            YT-Downloader.exe THIRD-PARTY-NOTICES.txt THIRD-PARTY-LICENSES.txt \
+            FFMPEG-LICENSE.txt DENO-LICENSE.txt SHA256SUMS.txt
           sha=$(sha256sum YT-Downloader.exe | cut -d' ' -f1)
           {
             echo "**YT-Downloader.exe** SHA-256: \`$sha\` (all files: SHA256SUMS.txt)."

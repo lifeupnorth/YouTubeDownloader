@@ -214,11 +214,28 @@ class UpdateCheckTest(unittest.TestCase):
 
     def test_at_most_once_a_day(self):
         self.assertEqual(self.checks(), 1)
+        ytd.YouTubeDownloader._update_checked(mock.Mock(), None, asked=True)
         self.assertEqual(self.checks(), 0)   # again the same day
         settings = ytd.load_settings()
         settings["last_update_check"] -= ytd.UPDATE_CHECK_INTERVAL + 1
         ytd.save_settings(settings)
         self.assertEqual(self.checks(), 1)
+
+    def test_an_offline_check_doesnt_count(self):
+        self.assertEqual(self.checks(), 1)
+        ytd.YouTubeDownloader._update_checked(mock.Mock(), None, asked=False)
+        self.assertNotIn("last_update_check", ytd.load_settings())
+        self.assertEqual(self.checks(), 1, "skipped for a day after being offline")
+
+    def test_update_thread_tells_offline_apart(self):
+        app = mock.Mock()
+        with mock.patch.object(engine, "fetch_update_notice", side_effect=OSError("offline")):
+            ytd.YouTubeDownloader._update_thread(app)
+        app._post.assert_called_once_with(app._update_checked, None, False)
+        app = mock.Mock()
+        with mock.patch.object(engine, "fetch_update_notice", return_value=None):
+            ytd.YouTubeDownloader._update_thread(app)
+        app._post.assert_called_once_with(app._update_checked, None, True)
 
     def test_not_when_unticked_or_from_source(self):
         self.assertEqual(self.checks(ticked=False), 0)
@@ -234,6 +251,23 @@ class UpdateCheckTest(unittest.TestCase):
         ytd.YouTubeDownloader._save_settings(app)
         self.assertEqual(ytd.load_settings(), {"last_update_check": 5, "folder": "C:/x",
                                                "format": "mp3", "check_updates": False})
+
+
+class SplitLinksTest(unittest.TestCase):
+    def test_links_and_other_words(self):
+        cases = {
+            "https://a.com/x http://b.org": (["https://a.com/x", "http://b.org"], []),
+            "youtu.be/abc www.youtube.com/watch?v=x":
+                (["https://youtu.be/abc", "https://www.youtube.com/watch?v=x"], []),
+            'Watch this: "youtu.be/abc", thanks!':
+                (["https://youtu.be/abc"], ["Watch", "this:", "thanks!"]),
+            "(https://a.com/x) https://a.com/x": (["https://a.com/x"], []),
+            "hello world": ([], ["hello", "world"]),
+            "   ": ([], []),
+        }
+        for text, expected in cases.items():
+            with self.subTest(text=text):
+                self.assertEqual(ytd.split_links(text), expected)
 
 
 if __name__ == "__main__":

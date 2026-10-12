@@ -64,7 +64,7 @@ Sources: [download_engine.py:762-809](https://github.com/lifeupnorth/YouTubeDown
 
 | Option | Value | Why |
 |---|---|---|
-| `outtmpl` | `<folder>/%(playlist_title\|)s/%(playlist_index&{:03d} - \|)s%(title)s.%(ext)s` | Playlist entries go to a folder named after the playlist, with a 3-digit index that keeps same-title videos apart. For a single video both fields are empty and the path collapses to `<folder>/<title>.<ext>`. |
+| `outtmpl` | `<folder>/%(playlist_title\|)s/%(playlist_index&{:03d} - \|)s%(title)s.%(ext)s` | Playlist entries go to a folder named after the playlist, with a 3-digit index that keeps same-title videos apart. For a single video both fields are empty and the path collapses to `<folder>/<title>.<ext>`. A `%` in the folder's name is doubled, so yt-dlp doesn't read it as a field. |
 | `progress_hooks` | `[_progress_hook]` | Progress reporting |
 | `noplaylist` | `not whole_playlist` | Only affects `watch?v=…&list=…` links: unticked means just that video |
 | `quiet`, `no_warnings` | `True`, `False` | Nothing goes to the console; warnings still reach the logger |
@@ -139,6 +139,7 @@ Each job ends with an outcome (`done`, `failed`, `declined` or `canceled`), coun
 | Situation | Summary |
 |---|---|
 | One video, no problems | `Download complete!` |
+| Nothing saved and nothing skipped (e.g. an empty playlist) | `Nothing to download: the link has no videos.` (shown as a problem) |
 | Several videos or problems | `Done: 3 saved, 1 already downloaded, 2 skipped, 1 link failed, 1 playlist not downloaded` (only the parts that apply) |
 | Nothing worked (several links) | `Nothing downloaded: 2 links failed` |
 | Failed (one link) | `Error: <reason>` |

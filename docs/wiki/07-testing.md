@@ -19,7 +19,7 @@
 
 </details>
 
-The tests use the standard library `unittest`, and nothing touches the internet: most downloads run against a fake yt-dlp, and `test_real_yt_dlp.py` runs the real one against a local server. There are 171 tests in eight files. The engine's tests need no display; the window's tests open real Tk windows. GitHub Actions runs them on every push to `main` and every pull request, together with a ruff lint check.
+The tests use the standard library `unittest`, and nothing touches the internet: most downloads run against a fake yt-dlp, and `test_real_yt_dlp.py` runs the real one against a local server. There are 190 tests in eight files. The engine's tests need no display; the window's tests open real Tk windows. GitHub Actions runs them on every push to `main` and every pull request, together with a ruff lint check.
 
 ```
 python -m unittest discover -s tests -v
@@ -27,12 +27,12 @@ python -m unittest discover -s tests -v
 
 | File | Tests | What it covers | Needs |
 |---|---|---|---|
-| `test_engine.py` | 69 | `download_engine.py` on its own: formats, ffmpeg and JavaScript runtime lookup, the update check, yt-dlp version and loading, preview helpers, the logger, `DownloadJob`, `DownloadQueue` | Nothing (some tests use real yt-dlp or Pillow and skip without them) |
+| `test_engine.py` | 75 | `download_engine.py` on its own: formats, ffmpeg and JavaScript runtime lookup, the update check, yt-dlp version and loading, preview helpers, the logger, `DownloadJob`, `DownloadQueue` | Nothing (some tests use real yt-dlp or Pillow and skip without them) |
 | `test_real_yt_dlp.py` | 3 | The engine with the real yt-dlp, downloading from a local HTTP server: a download then "Already downloaded", an MP3 converted only once, Cancel removing the `.part` file | yt-dlp; ffmpeg for the MP3 test |
-| `test_thread_safety.py` | 50 | The real window driven through simulated downloads; worker threads must never call Tk | A display |
-| `test_app.py` | 15 | Settings file, Open folder, ffmpeg help text and checks in the window, the update check's once-a-day limit and its setting, what the .exe does differently (no pip install, the `--self-check` report) | A display for the window checks |
+| `test_thread_safety.py` | 58 | The real window driven through simulated downloads; worker threads must never call Tk | A display |
+| `test_app.py` | 18 | Settings file, Open folder, ffmpeg help text and checks in the window, the update check's once-a-day limit and its setting, what the .exe does differently (no pip install, the `--self-check` report) | A display for the window checks |
 | `test_requirements.py` | 10 | The yt-dlp pin in `requirements.txt` is exact (`yt-dlp[default]==…`) and is what the in-app installer uses; the `default` extra brings yt-dlp-ejs; every requirement is pinned; Dependabot watches the file | Tkinter (it imports the window) |
-| `test_build_exe.py` | 10 | `packaging/build_exe.py`: checksum-checked downloads and unpacking, the Windows version information it embeds, and the `--check` verdict on the .exe's self-check | Nothing |
+| `test_build_exe.py` | 12 | `packaging/build_exe.py`: checksum-checked downloads and unpacking, the Windows version information it embeds, and the `--check` verdict on the .exe's self-check | Nothing |
 | `test_check_pins.py` | 4 | `packaging/check_pins.py` with GitHub's API faked: newer ffmpeg and deno releases, version comparison, an issue opened only once | Nothing |
 | `test_smoke.py` | 10 | `packaging/smoke_test.py` and `--smoke-download` with a fake job: the report, retries, timeouts, the bot check | Tkinter (it imports the window) |
 

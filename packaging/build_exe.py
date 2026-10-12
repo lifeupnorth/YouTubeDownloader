@@ -49,6 +49,21 @@ DENO_ZIP = "deno-x86_64-pc-windows-msvc.zip"
 DENO_URL = f"https://github.com/denoland/deno/releases/download/v{DENO_VERSION}/{DENO_ZIP}"
 DENO_SHA256 = "a0c3101b4158d1dfb7d6a78a7bf0f3de80c96bb423c152beec8beb22786f2238"
 
+# The Python packages bundled into the .exe: requirements.txt's (yt-dlp with
+# its "default" extras but without mutagen, Pillow), what they need, and
+# PyInstaller's bootloader. Their license files go into
+# THIRD-PARTY-LICENSES.txt; tests/test_build_exe.py checks this list against
+# what's installed.
+BUNDLED_PACKAGES = (
+    "yt-dlp", "yt-dlp-ejs", "requests", "urllib3", "charset-normalizer", "idna",
+    "certifi", "websockets", "brotli", "pycryptodomex", "pillow", "pyinstaller",
+)
+# CPython's licenses for the software built into Python (OpenSSL, libffi,
+# expat, zlib, ...), for the Python version the .exe is built with.
+PYTHON_LICENSES = os.path.join(HERE, "PYTHON-LICENSES.rst")
+PYTHON_LICENSES_VERSION = (3, 14)
+TCLTK_LICENSE = os.path.join(HERE, "TCLTK-LICENSE.txt")
+
 
 def sha256(path):
     digest = hashlib.sha256()
@@ -147,6 +162,50 @@ def product_info(exe):
     return info
 
 
+def _license_text(dist, name):
+    # Newer packages keep their license files in .dist-info/licenses/.
+    return dist.read_text(f"licenses/{name}") or dist.read_text(name)
+
+
+def third_party_licenses(path):
+    """Writes the full license texts of everything bundled into the .exe,
+    except ffmpeg and deno (their own license files go next to it)."""
+    import importlib.metadata
+
+    if sys.version_info[:2] != PYTHON_LICENSES_VERSION:
+        sys.exit(f"packaging/PYTHON-LICENSES.rst is for Python "
+                 f"{'.'.join(map(str, PYTHON_LICENSES_VERSION))}; replace it with "
+                 "Doc/license.rst from this Python's CPython tag.")
+    sections = []
+
+    def add(title, text):
+        rule = "=" * 78
+        sections.append(f"{rule}\n{title}\n{rule}\n\n{text.strip()}\n")
+
+    with open(os.path.join(sys.base_prefix, "LICENSE.txt"), encoding="utf-8") as f:
+        add(f"Python {sys.version.split()[0]} (its LICENSE.txt)", f.read())
+    with open(PYTHON_LICENSES, encoding="utf-8") as f:
+        add("Software incorporated in Python: OpenSSL, libffi, expat, zlib, libmpdec, "
+            "mimalloc, ... (CPython's Doc/license.rst)", f.read())
+    # Vendored: Python builds don't all ship Tcl's license.terms.
+    with open(TCLTK_LICENSE, encoding="utf-8") as f:
+        add("Tcl/Tk", f.read())
+    add("SQLite", "SQLite is in the public domain: https://sqlite.org/copyright.html")
+    for name in BUNDLED_PACKAGES:
+        dist = importlib.metadata.distribution(name)
+        files = dist.metadata.get_all("License-File") or []
+        texts = [(file, _license_text(dist, file)) for file in files]
+        if not files or not all(text for _file, text in texts):
+            sys.exit(f"Couldn't find the license files of {name} {dist.version}.")
+        for file, text in texts:
+            add(f"{dist.metadata['Name']} {dist.version}: {file}", text)
+    with open(path, "w", encoding="utf-8") as f:
+        f.write("Licenses of the third-party software in YT-Downloader.exe (see\n"
+                "THIRD-PARTY-NOTICES.txt for an overview; ffmpeg's and deno's licenses\n"
+                "are in FFMPEG-LICENSE.txt and DENO-LICENSE.txt).\n\n")
+        f.write("\n".join(sections))
+
+
 def build():
     if sys.platform != "win32":
         sys.exit("The .exe has to be built on Windows.")
@@ -166,6 +225,8 @@ def build():
     with open(resource_file, "w", encoding="utf-8") as f:
         f.write(version_resource(version))
     notices = os.path.join(HERE, "THIRD-PARTY-NOTICES.txt")
+    licenses = os.path.join(BUILD, "THIRD-PARTY-LICENSES.txt")
+    third_party_licenses(licenses)
     sep = os.pathsep   # PyInstaller's "source;destination" separator
     PyInstaller.__main__.run([
         "--onefile", "--windowed", "--noconfirm", "--clean",
@@ -180,6 +241,7 @@ def build():
         "--add-binary", f"{deno}{sep}.",
         "--add-data", f"{os.path.join(ROOT, 'requirements.txt')}{sep}.",
         "--add-data", f"{notices}{sep}.",
+        "--add-data", f"{licenses}{sep}.",
         "--add-data", f"{ffmpeg_license}{sep}.",
         "--add-data", f"{deno_license}{sep}.",
         "--add-data", f"{version_file}{sep}.",
@@ -189,7 +251,7 @@ def build():
         os.path.join(ROOT, "youtube_downloader.py"),
     ])
     # The notices and licenses also go next to the .exe for users.
-    for path in (notices, ffmpeg_license, deno_license):
+    for path in (notices, licenses, ffmpeg_license, deno_license):
         shutil.copy2(path, DIST)
     exe = os.path.join(DIST, f"{NAME}.exe")
     print(f"Built {exe} ({os.path.getsize(exe) / 1048576:.0f} MB)")

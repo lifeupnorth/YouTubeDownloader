@@ -73,8 +73,11 @@ python packaging/build_exe.py --check
 This writes `dist/YT-Downloader.exe`. The build downloads ffmpeg (gyan.dev's
 GPL "essentials" build) and deno, and checks them against pinned checksums (a
 weekly workflow opens an issue when either has a newer release); its license and
-the other third-party notices are in `packaging/THIRD-PARTY-NOTICES.txt` and go
-next to the .exe.
+the other third-party notices are in `packaging/THIRD-PARTY-NOTICES.txt`. The
+build also writes `THIRD-PARTY-LICENSES.txt`, the full license texts of
+everything else it bundles (Python and the libraries built into it, Tcl/Tk,
+and each Python package); all of them go into the .exe, next to it and into
+each release.
 
 Releases are signed through SignPath Foundation, which signs open-source
 projects for free (see [Code signing policy](#code-signing-policy)). Until the
@@ -93,9 +96,13 @@ SignPath project and policy aren't named `YouTubeDownloader` and
 ## Use
 
 1. Paste a link into **YouTube URLs**, or click **Paste**. A preview with the
-   thumbnail, title and length appears under it.
+   thumbnail, title and length appears under it. **Paste** adds to the links
+   already there, one per line, and keeps only the links from copied text;
+   `https://` can be left out (`youtu.be/...` works).
 2. Pick a **Format**: Best MP4, 1080p, 720p, 480p, MP3 or M4A.
-3. Choose where to save under **Save To** (default: your Downloads folder).
+3. Choose where to save under **Save To** (default: your Downloads folder). If
+   the last folder used isn't there (e.g. on an unplugged drive), the app saves
+   to Downloads for now but remembers it.
 4. Click **Download**, or press Enter. Progress and saved files show in the status line and the log.
 5. When it's done, click **Open folder** to see the file.
 
