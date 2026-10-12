@@ -1,6 +1,6 @@
 # YouTubeDownloader Wiki
 
-How the app works, with every section linked to the exact lines of code it describes. Written against commit [`b369bd2`](https://github.com/lifeupnorth/YouTubeDownloader/tree/b369bd269cac691e2563e27391dbd3702c986e50); code links point to that commit.
+How the app works, with every section linked to the exact lines of code it describes. Written against commit [`47e016f`](https://github.com/lifeupnorth/YouTubeDownloader/tree/47e016f109accff408446b290ced9684d980c667); code links point to that commit.
 
 1. [Overview](01-overview.md)
 2. [Getting Started](02-getting-started.md)
