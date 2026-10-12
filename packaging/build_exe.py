@@ -14,6 +14,7 @@ Run it on Windows, from the repository's root folder:
 GitHub Actions does the same (.github/workflows/build-exe.yml).
 """
 import hashlib
+import io
 import json
 import os
 import shutil
@@ -169,6 +170,54 @@ def product_info(exe):
     return info
 
 
+def ico_images(path):
+    """The images in a .ico file, each as the bytes the file holds."""
+    with open(path, "rb") as f:
+        data = f.read()
+    images = []
+    for i in range(int.from_bytes(data[4:6], "little")):
+        entry = data[6 + 16 * i:22 + 16 * i]
+        size, offset = (int.from_bytes(entry[8:12], "little"),
+                        int.from_bytes(entry[12:16], "little"))
+        images.append(data[offset:offset + size])
+    return images
+
+
+def has_app_icon(exe):
+    """Whether a built .exe has the app's icon. Without --icon PyInstaller
+    puts in its own, so any icon won't do; with it, PyInstaller copies the
+    .ico's images in unchanged."""
+    with tempfile.TemporaryDirectory() as tmp:
+        icon = os.path.join(tmp, "icon.ico")
+        write_icon(icon)
+        images = ico_images(icon)
+    with open(exe, "rb") as f:
+        data = f.read()
+    return all(image in data for image in images)
+
+
+def write_icon(path):
+    """The app's icon as a Windows .ico, for Explorer and the taskbar. The
+    window draws the same one (app_icon_image); each size is drawn for
+    itself, as Pillow would otherwise scale the largest down."""
+    os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")   # no window needed
+    if ROOT not in sys.path:
+        sys.path.insert(0, ROOT)
+    from PIL import Image
+    from PySide6.QtCore import QBuffer
+
+    import youtube_downloader as ytd
+    ytd.application()   # QPainter wants a QGuiApplication
+    images = []
+    for size in ytd.ICON_SIZES:
+        buffer = QBuffer()
+        buffer.open(QBuffer.ReadWrite)
+        ytd.app_icon_image(size).save(buffer, "PNG")
+        images.append(Image.open(io.BytesIO(buffer.data().data())))
+    largest = images[-1]
+    largest.save(path, sizes=[image.size for image in images], append_images=images[:-1])
+
+
 def _license_text(dist, name):
     # Newer packages keep their license files in .dist-info/licenses/.
     return dist.read_text(f"licenses/{name}") or dist.read_text(name)
@@ -237,6 +286,8 @@ def build():
     resource_file = os.path.join(BUILD, "version_resource.txt")
     with open(resource_file, "w", encoding="utf-8") as f:
         f.write(version_resource(version))
+    icon_file = os.path.join(BUILD, "icon.ico")
+    write_icon(icon_file)
     notices = os.path.join(HERE, "THIRD-PARTY-NOTICES.txt")
     licenses = os.path.join(BUILD, "THIRD-PARTY-LICENSES.txt")
     third_party_licenses(licenses)
@@ -245,6 +296,7 @@ def build():
         "--onefile", "--windowed", "--noconfirm", "--clean",
         "--name", NAME,
         "--version-file", resource_file,
+        "--icon", icon_file,
         "--distpath", DIST, "--workpath", os.path.join(BUILD, "pyinstaller"),
         "--specpath", BUILD,
         # Next to the code inside the .exe: ffmpeg and deno (download_engine
@@ -313,6 +365,8 @@ def check():
     wanted = {"ProductName": PRODUCT_NAME, "ProductVersion": version or "0.0.0"}
     if any(info.get(key) != value for key, value in wanted.items()):
         problems.append(f"the version information is {info}, not {wanted}")
+    if not has_app_icon(exe):
+        problems.append("the .exe doesn't have the app's icon")
     if problems:
         sys.exit("Self-check failed: " + "; ".join(problems))
     print("Self-check passed.")

@@ -1138,6 +1138,16 @@ class WindowTest(unittest.TestCase):
             window._recheck_ffmpeg()
             self.assertEqual(find.call_count, calls, "rechecked after it was found")
 
+    def test_window_icon_is_drawn_at_each_size(self):
+        sizes = self.app.windowIcon().availableSizes()
+        self.assertEqual(sorted(size.width() for size in sizes), list(ytd.ICON_SIZES))
+
+    def test_header_logo_is_the_icon_drawn_for_the_screen(self):
+        logo = ytd.logo_pixmap(30, 2)
+        self.assertEqual((logo.width(), logo.height(), logo.devicePixelRatio()), (60, 60, 2))
+        self.assertEqual(logo.toImage().convertToFormat(ytd.QImage.Format_ARGB32),
+                         ytd.app_icon_image(60).convertToFormat(ytd.QImage.Format_ARGB32))
+
     def test_header_shows_the_yt_dlp_version(self):
         with mock.patch.object(engine, "yt_dlp_version", return_value="2026.08.19"):
             self.assertEqual(self.app._powered_by_text(), "Powered by yt-dlp 2026.08.19")

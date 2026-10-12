@@ -93,7 +93,7 @@ def good_report(**changes):
 class CheckTest(unittest.TestCase):
     """build_exe.py --check, which decides whether a release .exe is good."""
 
-    def check(self, report, app_version="", product=None):
+    def check(self, report, app_version="", product=None, icon=True):
         def run_exe(args, **kwargs):
             with open(args[2], "w", encoding="utf-8") as f:
                 json.dump(report, f)
@@ -103,14 +103,15 @@ class CheckTest(unittest.TestCase):
             product = {"ProductName": build_exe.PRODUCT_NAME, "ProductVersion": version}
         with (mock.patch.object(build_exe.subprocess, "run", side_effect=run_exe),
               mock.patch.object(build_exe, "product_info", return_value=product),
+              mock.patch.object(build_exe, "has_app_icon", return_value=icon),
               mock.patch.dict(os.environ, {"APP_VERSION": app_version}),
               contextlib.redirect_stdout(io.StringIO()) as out):
             build_exe.check()
         return out.getvalue()
 
-    def problems(self, report, app_version="", product=None):
+    def problems(self, report, app_version="", product=None, icon=True):
         with self.assertRaises(SystemExit) as stop:
-            self.check(report, app_version, product)
+            self.check(report, app_version, product, icon)
         return str(stop.exception)
 
     def test_a_good_build_passes(self):
@@ -155,6 +156,51 @@ class CheckTest(unittest.TestCase):
                       self.problems(good_report(), app_version="v1.0.3"))
         self.assertIn("the version is 1.0.3, not None",
                       self.problems(good_report(app_version="1.0.3")))
+
+    def test_the_exe_must_have_the_apps_icon(self):
+        self.assertIn("the .exe doesn't have the app's icon",
+                      self.problems(good_report(), icon=False))
+
+
+class IconTest(unittest.TestCase):
+    """The .exe's icon: the window's, drawn at each size."""
+
+    def setUp(self):
+        tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(tmp.cleanup)
+        self.dir = tmp.name
+        self.icon = os.path.join(self.dir, "icon.ico")
+        build_exe.write_icon(self.icon)
+
+    def test_each_size_is_drawn_for_itself(self):
+        from PIL import Image
+
+        import youtube_downloader as ytd
+        ico = Image.open(self.icon)
+        self.assertEqual(sorted(ico.info["sizes"]), [(s, s) for s in ytd.ICON_SIZES])
+        for size in ytd.ICON_SIZES:
+            with self.subTest(size=size):
+                ico.size = (size, size)
+                ico.load()
+                drawn = ytd.app_icon_image(size).convertToFormat(
+                    ytd.QImage.Format_RGBA8888)
+                pixels = drawn.constBits().tobytes()
+                self.assertEqual(ico.convert("RGBA").tobytes(), pixels,
+                                 "scaled down instead of drawn")
+
+    def exe(self, contents):
+        path = os.path.join(self.dir, "app.exe")
+        with open(path, "wb") as f:
+            f.write(contents)
+        return path
+
+    def test_the_exe_must_hold_every_image_of_the_icon(self):
+        images = build_exe.ico_images(self.icon)
+        self.assertEqual(len(images), 6)
+        exe = self.exe(b"MZ" + b"...".join(images) + b"rest")
+        self.assertTrue(build_exe.has_app_icon(exe))
+        # PyInstaller's own icon, or ours with a size missing, won't do.
+        self.assertFalse(build_exe.has_app_icon(self.exe(b"MZ" + b"".join(images[1:]))))
 
 
 class VersionResourceTest(unittest.TestCase):
