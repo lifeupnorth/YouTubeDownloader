@@ -82,7 +82,7 @@
       "file": "07-testing.md",
       "sources": [
         "tests/test_engine.py",
-        "tests/test_thread_safety.py",
+        "tests/test_window.py",
         "tests/test_app.py",
         "tests/test_requirements.py",
         "tests/fakes.py",

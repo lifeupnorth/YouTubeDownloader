@@ -9,6 +9,10 @@
 # yt-dlp-ejs version itself, so bumping this line keeps the two in step.
 yt-dlp[default]==2026.8.19
 
-# Optional: thumbnails in link previews. Without it the app still works and
-# previews show text only.
+# The window. "Essentials" is Qt's core modules (widgets, not QML or 3D),
+# which keeps the .exe smaller. LGPL-3.0; see packaging/THIRD-PARTY-NOTICES.txt.
+PySide6-Essentials==6.12.0
+
+# Optional: thumbnails in the Downloads list. Without it the app still works
+# and rows show titles only.
 Pillow==12.3.0

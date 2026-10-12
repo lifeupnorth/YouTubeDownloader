@@ -1,4 +1,5 @@
-"""App-level helpers and checks: settings, ffmpeg help, Open folder.
+"""App-level helpers and checks: settings, ffmpeg help, Open folder, the
+update check, the .exe's self-check.
 
 Run with:  python -m unittest discover -s tests -v
 """
@@ -7,10 +8,11 @@ import json
 import os
 import sys
 import tempfile
-import tkinter
 import unittest
 from typing import ClassVar
 from unittest import mock
+
+os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")   # no window shows up
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 import download_engine as engine
@@ -50,6 +52,10 @@ class SettingsFileTest(unittest.TestCase):
                 mock.patch.dict(os.environ, {"XDG_CONFIG_HOME": "cfg"}):
             self.assertEqual(REAL_SETTINGS_PATH(), os.path.join(
                 "cfg", "YT Downloader", "settings.json"))
+
+    def test_saved_formats_are_the_engines(self):
+        for value in ytd.FORMAT_VALUES:
+            self.assertTrue(engine.format_opts(value), value)
 
 
 class RevealTest(unittest.TestCase):
@@ -104,10 +110,10 @@ class ExeBuildTest(unittest.TestCase):
     def test_no_pip_install_inside_the_exe(self):
         app = mock.Mock()
         with mock.patch.object(ytd.sys, "frozen", True, create=True), \
-                mock.patch.object(ytd.messagebox, "showerror") as error, \
-                mock.patch.object(ytd.messagebox, "askyesno") as ask:
+                mock.patch.object(ytd.QMessageBox, "critical") as error, \
+                mock.patch.object(ytd.QMessageBox, "question") as ask:
             ytd.YouTubeDownloader._prompt_install(app)
-        self.assertIn("missing yt-dlp", error.call_args.args[1])
+        self.assertIn("missing yt-dlp", error.call_args.args[2])
         ask.assert_not_called()
         app._install_ytdlp.assert_not_called()
 
@@ -127,73 +133,11 @@ class ExeBuildTest(unittest.TestCase):
         self.assertIsNone(result["ffmpeg_version"])
         self.assertIsNone(result["js_runtime"])
         self.assertFalse(result["deno_bundled"])
-        if not result["window"].startswith("failed"):   # no display: still reported
-            self.assertEqual(result["window"], "YT Downloader")
-
-
-class FfmpegCheckTest(unittest.TestCase):
-    def make_app(self, ffmpeg):
-        gc.collect()
-        self.find = mock.Mock(return_value=ffmpeg)
-        settings_dir = tempfile.TemporaryDirectory()
-        self.addCleanup(settings_dir.cleanup)
-        for patcher in (
-                mock.patch.object(engine, "YT_DLP_AVAILABLE", True),
-                mock.patch.object(engine, "find_ffmpeg", self.find),
-                mock.patch.object(engine, "find_js_runtime", return_value=None),
-                mock.patch.object(engine, "check_for_update", return_value=None),
-                mock.patch.object(ytd, "settings_path", return_value=os.path.join(
-                    settings_dir.name, "settings.json")),
-                mock.patch.object(ytd.messagebox, "showerror"),
-                mock.patch.object(engine, "yt_dlp", None)):
-            patcher.start()
-            self.addCleanup(patcher.stop)
-        try:
-            app = ytd.YouTubeDownloader()
-        except tkinter.TclError as exc:
-            self.skipTest(f"no display: {exc}")
-        self.addCleanup(gc.collect)
-        self.addCleanup(app.destroy)
-        app._replace_url_text("https://www.youtube.com/watch?v=test")
-        return app
-
-    def log(self, app):
-        return app.log_box.get("1.0", "end")
-
-    def test_missing_ffmpeg_warns_and_blocks_download(self):
-        app = self.make_app(None)
-        self.assertEqual(app.status_var.get(), ytd.FFMPEG_MISSING_STATUS)
-        self.assertIn(ytd.ffmpeg_help(startup=True), self.log(app))
-        app._start_download()
-        ytd.messagebox.showerror.assert_called_once_with(
-            "ffmpeg not found", ytd.ffmpeg_help())
-        self.assertFalse(app.is_running)
-
-    def test_focus_clears_warning_once_installed(self):
-        app = self.make_app(None)
-        app.event_generate("<FocusIn>")
-        self.assertEqual(app.status_var.get(), ytd.FFMPEG_MISSING_STATUS)
-        calls = self.find.call_count
-        app._recheck_ffmpeg(mock.Mock(widget=app.url_entry))
-        self.assertEqual(self.find.call_count, calls, "rechecked on child focus")
-        self.find.return_value = "/bin/ffmpeg"
-        app.event_generate("<FocusIn>")
-        self.assertEqual(app.status_var.get(), "Ready")
-        self.assertIn("ffmpeg found: /bin/ffmpeg", self.log(app))
-        calls = self.find.call_count
-        app.event_generate("<FocusIn>")
-        self.assertEqual(self.find.call_count, calls, "rechecked after found")
-
-    def test_ffmpeg_found_once_and_passed_to_ytdlp(self):
-        app = self.make_app("/bin/ffmpeg")
-        self.assertNotEqual(app.status_var.get(), ytd.FFMPEG_MISSING_STATUS)
-        self.find.reset_mock()
-        app._start_worker = mock.Mock()
-        app._start_download()
-        self.find.assert_called_once_with()
-        _target, queue = app._start_worker.call_args.args
-        self.assertEqual(queue.job_options["ffmpeg"], "/bin/ffmpeg")
-
+        self.assertEqual(result["thumbnails"], engine.Image is not None)
+        self.assertTrue(result["svg_images"])
+        self.assertEqual(result["window"], "YT Downloader")
+        self.assertFalse(os.path.exists(os.path.join(self.folder, "settings.json")),
+                         "the self-check saved settings")
 
 
 class UpdateCheckTest(unittest.TestCase):
@@ -205,9 +149,8 @@ class UpdateCheckTest(unittest.TestCase):
         patcher.start()
         self.addCleanup(patcher.stop)
 
-    def checks(self, ticked=True, version="1.0.3"):
-        app = mock.Mock()
-        app.update_check_var.get.return_value = ticked
+    def checks(self, on=True, version="1.0.3"):
+        app = mock.Mock(_check_updates=on)
         with mock.patch.object(engine, "app_version", return_value=version):
             ytd.YouTubeDownloader._maybe_check_for_update(app)
         return app._start_worker.call_count
@@ -237,18 +180,16 @@ class UpdateCheckTest(unittest.TestCase):
             ytd.YouTubeDownloader._update_thread(app)
         app._post.assert_called_once_with(app._update_checked, None, True)
 
-    def test_not_when_unticked_or_from_source(self):
-        self.assertEqual(self.checks(ticked=False), 0)
+    def test_not_when_switched_off_or_from_source(self):
+        self.assertEqual(self.checks(on=False), 0)
         self.assertEqual(self.checks(version=None), 0)
         self.assertNotIn("last_update_check", ytd.load_settings())
 
     def test_saving_keeps_the_last_check(self):
         ytd.save_settings({"last_update_check": 5})
-        app = mock.Mock()
-        app.download_path.get.return_value = "C:/x"
-        app.format_var.get.return_value = "mp3"
-        app.update_check_var.get.return_value = False
-        app.theme_var.get.return_value = "light"
+        app = mock.Mock(_unavailable_folder=None, _check_updates=False, theme_mode="light")
+        app.path.text.return_value = "C:/x"
+        app._chosen_format.return_value = "mp3"
         ytd.YouTubeDownloader._save_settings(app)
         self.assertEqual(ytd.load_settings(), {"last_update_check": 5, "folder": "C:/x",
                                                "format": "mp3", "check_updates": False,
@@ -270,169 +211,6 @@ class SplitLinksTest(unittest.TestCase):
         for text, expected in cases.items():
             with self.subTest(text=text):
                 self.assertEqual(ytd.split_links(text), expected)
-
-
-class DpiAwarenessTest(unittest.TestCase):
-    def test_asks_windows_for_system_dpi_awareness(self):
-        with mock.patch.object(ytd.sys, "platform", "win32"), \
-                mock.patch.object(ytd, "ctypes") as ctypes:
-            ytd.enable_dpi_awareness()
-        ctypes.windll.shcore.SetProcessDpiAwareness.assert_called_once_with(1)
-
-    def test_older_windows_falls_back(self):
-        # Windows 7 has no shcore.dll.
-        with mock.patch.object(ytd.sys, "platform", "win32"), \
-                mock.patch.object(ytd, "ctypes") as ctypes:
-            ctypes.windll.shcore.SetProcessDpiAwareness.side_effect = OSError("no shcore")
-            ytd.enable_dpi_awareness()
-        ctypes.windll.user32.SetProcessDPIAware.assert_called_once_with()
-
-    def test_nothing_elsewhere(self):
-        with mock.patch.object(ytd.sys, "platform", "linux"), \
-                mock.patch.object(ytd, "ctypes") as ctypes:
-            ytd.enable_dpi_awareness()
-        self.assertEqual(ctypes.mock_calls, [])
-
-
-class SystemThemeTest(unittest.TestCase):
-    def windows(self, light=None, error=None):
-        key = mock.MagicMock()
-        winreg = mock.Mock(HKEY_CURRENT_USER="HKCU",
-                           OpenKey=mock.Mock(return_value=key, side_effect=error),
-                           QueryValueEx=mock.Mock(return_value=(light, 4)))
-        with mock.patch.object(ytd.sys, "platform", "win32"), \
-                mock.patch.dict(sys.modules, {"winreg": winreg}):
-            return ytd.system_theme(None)
-
-    def test_windows_setting(self):
-        self.assertEqual(self.windows(light=1), "light")
-        self.assertEqual(self.windows(light=0), "dark")
-        self.assertIsNone(self.windows(error=OSError("no such key")))   # Windows 7
-
-    def linux(self, stdout=None, error=None):
-        done = mock.Mock(stdout=stdout)
-        with mock.patch.object(ytd.sys, "platform", "linux"), \
-                mock.patch.object(ytd.subprocess, "run", return_value=done,
-                                  side_effect=error):
-            return ytd.system_theme(None)
-
-    def test_gnome_setting(self):
-        self.assertEqual(self.linux("'prefer-dark'\n"), "dark")
-        self.assertEqual(self.linux("'prefer-light'\n"), "light")
-        self.assertEqual(self.linux("'default'\n"), "light")
-        self.assertIsNone(self.linux(""))
-        self.assertIsNone(self.linux(error=FileNotFoundError("no gsettings")))
-
-    def test_title_bar_matches_on_windows(self):
-        window = mock.Mock()
-        with mock.patch.object(ytd.sys, "platform", "win32"), \
-                mock.patch.object(ytd, "ctypes") as ctypes:
-            ytd.set_title_bar_theme(window, dark=True)
-        dwm = ctypes.windll.dwmapi.DwmSetWindowAttribute
-        self.assertEqual(dwm.call_args.args[1], 20)   # DWMWA_USE_IMMERSIVE_DARK_MODE
-        ctypes.c_int.assert_called_once_with(1)
-        with mock.patch.object(ytd.sys, "platform", "linux"), \
-                mock.patch.object(ytd, "ctypes") as ctypes:
-            ytd.set_title_bar_theme(window, dark=True)
-        self.assertEqual(ctypes.mock_calls, [])
-
-
-class ThemeTest(unittest.TestCase):
-    def make_app(self, saved=None, system="dark"):
-        gc.collect()
-        settings_dir = tempfile.TemporaryDirectory()
-        self.addCleanup(settings_dir.cleanup)
-        for patcher in (
-                mock.patch.object(engine, "YT_DLP_AVAILABLE", True),
-                mock.patch.object(engine, "find_ffmpeg", return_value="/bin/ffmpeg"),
-                mock.patch.object(engine, "find_js_runtime", return_value=None),
-                mock.patch.object(ytd, "settings_path", return_value=os.path.join(
-                    settings_dir.name, "settings.json")),
-                mock.patch.object(engine, "yt_dlp", None)):
-            patcher.start()
-            self.addCleanup(patcher.stop)
-        self.system = mock.patch.object(ytd, "system_theme", return_value=system).start()
-        self.addCleanup(mock.patch.stopall)
-        if saved is not None:
-            ytd.save_settings(saved)
-        try:
-            app = ytd.YouTubeDownloader(update_check=False)
-        except tkinter.TclError as exc:
-            self.skipTest(f"no display: {exc}")
-        self.addCleanup(gc.collect)
-        self.addCleanup(app.destroy)
-        return app
-
-    def test_follows_the_system_by_default(self):
-        app = self.make_app(system="light")
-        self.assertEqual(app.theme_var.get(), "system")
-        self.assertIs(app.colors, ytd.THEMES["light"])
-        self.assertEqual(app.cget("bg"), ytd.THEMES["light"]["bg"])
-        self.assertTrue(app.theme_chips["system"].selected)
-        # The system switches to dark while the app is open.
-        self.system.return_value = "dark"
-        app._watch_system_theme()
-        self.assertIs(app.colors, ytd.THEMES["dark"])
-        # A system that doesn't say gets the dark theme.
-        self.system.return_value = None
-        app._apply_theme()
-        self.assertIs(app.colors, ytd.THEMES["dark"])
-
-    def test_choosing_a_theme_repaints_and_is_saved(self):
-        app = self.make_app(system="dark")
-        app._set_status("Downloading…", ytd.WARNING)
-        app.theme_chips["light"].invoke()
-        light = ytd.THEMES["light"]
-        self.assertEqual(ytd.load_settings()["theme"], "light")
-        self.assertEqual(app.cget("bg"), light["bg"])
-        self.assertEqual(app.log_box.cget("bg"), light["surface"])
-        self.assertEqual(app.status_lbl.cget("fg"), light["warning"])   # same role
-        self.assertEqual(app.url_entry.cget("fg"), light["text_dim"])  # the placeholder
-        self.assertTrue(app.theme_chips["light"].selected)
-        self.assertFalse(app.theme_chips["system"].selected)
-        # A chosen theme stays when the system's changes.
-        self.system.return_value = "light"
-        app.theme_chips["dark"].invoke()
-        app._watch_system_theme()
-        self.assertIs(app.colors, ytd.THEMES["dark"])
-        self.assertEqual(app.status_lbl.cget("fg"), ytd.THEMES["dark"]["warning"])
-
-    def test_saved_theme_is_used_at_startup(self):
-        app = self.make_app(saved={"theme": "light"}, system="dark")
-        self.assertIs(app.colors, ytd.THEMES["light"])
-        app = self.make_app(saved={"theme": "purple"}, system="dark")
-        self.assertEqual(app.theme_var.get(), "system")   # not a theme: ignored
-
-    def test_format_chips(self):
-        app = self.make_app()
-        self.assertTrue(app.format_chips["mp4_best"].selected)
-        app.format_chips["mp3"].invoke()
-        self.assertEqual(app.format_var.get(), "mp3")
-        self.assertTrue(app.format_chips["mp3"].selected)
-        self.assertFalse(app.format_chips["mp4_best"].selected)
-
-    def test_pill_and_toggle_act_like_buttons(self):
-        app = self.make_app()
-        pressed = mock.Mock()
-        app.dl_btn.config(command=pressed)
-        app.dl_btn.config(state="disabled", text="Canceling…")
-        self.assertEqual(app.dl_btn.cget("text"), "Canceling…")
-        app.dl_btn.invoke()
-        pressed.assert_not_called()
-        app.dl_btn.config(state="normal")
-        app.update()   # mapped: events reach only a widget that is on screen
-        # A click counts only if the mouse is still over it when released.
-        app.dl_btn.event_generate("<ButtonRelease-1>", x=-5, y=5)
-        pressed.assert_not_called()
-        app.dl_btn.event_generate("<ButtonRelease-1>", x=5, y=5)
-        pressed.assert_called_once_with()
-
-        toggle = next(w for w in app._pills if isinstance(w, ytd.Toggle))
-        self.assertIs(toggle.variable, app.playlist_var)
-        self.assertIsNone(app._preview_after)
-        toggle.invoke()
-        self.assertTrue(app.playlist_var.get())
-        self.assertIsNotNone(app._preview_after, "the preview isn't looked up again")
 
 
 if __name__ == "__main__":

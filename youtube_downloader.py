@@ -2,43 +2,89 @@
 """
 YouTube Video Downloader — Desktop App
 
-This file is the window. The downloading itself is in download_engine.py,
-which doesn't use Tk.
+This file is the window, built with Qt (PySide6). The downloading itself is
+in download_engine.py, which doesn't use Qt.
 Requirements: pip install -r requirements.txt
 """
+
+from __future__ import annotations
 
 import ctypes
 import json
 import os
-import queue
 import re
 import subprocess
 import sys
+import tempfile
 import threading
 import time
-import tkinter as tk
 import traceback
-from tkinter import filedialog, messagebox, ttk
+from dataclasses import dataclass, field
+from typing import ClassVar
+
+# The style sheet's switches and arrows are SVG images. Qt's SVG plugin needs
+# Qt6Svg.dll, which Windows only finds once it's loaded: importing QtSvg
+# loads it (and makes PyInstaller bundle it).
+from PySide6 import QtSvg  # noqa: F401
+from PySide6.QtCore import (
+    QAbstractTableModel,
+    QEvent,
+    QModelIndex,
+    QPointF,
+    QRectF,
+    QSize,
+    Qt,
+    QTimer,
+    Signal,
+)
+from PySide6.QtGui import (
+    QColor,
+    QFont,
+    QFontMetrics,
+    QGuiApplication,
+    QIcon,
+    QImage,
+    QImageReader,
+    QPainter,
+    QPainterPath,
+    QPen,
+    QPixmap,
+)
+from PySide6.QtWidgets import (
+    QApplication,
+    QButtonGroup,
+    QCheckBox,
+    QComboBox,
+    QFileDialog,
+    QFrame,
+    QGridLayout,
+    QHBoxLayout,
+    QHeaderView,
+    QLabel,
+    QLineEdit,
+    QMainWindow,
+    QMenu,
+    QMessageBox,
+    QPlainTextEdit,
+    QPushButton,
+    QStyle,
+    QStyledItemDelegate,
+    QTableView,
+    QToolTip,
+    QVBoxLayout,
+    QWidget,
+)
 
 import download_engine as engine
 
-# Optional: Pillow draws the rounded buttons and the thumbnails in the link
-# preview (see download_engine). Without it buttons are plain rectangles and
-# previews show text only.
-try:
-    from PIL import Image, ImageDraw, ImageTk
-except ImportError:
-    Image = ImageDraw = ImageTk = None
-
-
 # ── Themes ──────────────────────────────────────────────────────────────────
-# YouTube's own colors, dark and light. Widgets get roles ("text", "field"…)
-# rather than colors, so a theme change can repaint them all (see _paint and
-# _apply_theme); status messages name a role too.
+# YouTube's own colors, dark and light. The style sheet and the drawing code
+# use roles ("text", "field"…) rather than colors, so a theme change just
+# rebuilds them (see apply_theme); status messages name a role too.
 THEMES = {
     "dark": {
         "bg":           "#0f0f0f",
-        "surface":      "#1f1f1f",   # the log, an empty thumbnail
+        "surface":      "#1f1f1f",   # the log, a row under the mouse, an empty thumbnail
         "field":        "#121212",   # text boxes
         "field_border": "#303030",
         "blue":         "#3ea6ff",   # the text box being typed in, a switch that's on
@@ -46,11 +92,11 @@ THEMES = {
         "button_hover": "#3f3f3f",
         "chip_on":      "#f1f1f1",   # the selected chip
         "chip_on_text": "#0f0f0f",
-        "accent":       "#ff0033",   # Download, the progress bar, the logo
+        "accent":       "#ff0033",   # Download, the progress bars, the logo
         "accent_hover": "#d9002b",
         "accent_text":  "#ffffff",
         "divider":      "#303030",
-        "scroll":       "#4d4d4d",   # the log's scroll bar, a switch that's off
+        "scroll":       "#4d4d4d",   # scroll bars, a switch that's off
         "text":         "#f1f1f1",
         "text_dim":     "#aaaaaa",
         "disabled":     "#717171",
@@ -82,39 +128,41 @@ THEMES = {
     },
 }
 
-# The Theme chips: (label, value of theme_var). "system" follows the OS.
+# The Theme chips: (label, saved value). "system" follows the OS.
 THEME_MODES = [("System", "system"), ("Light", "light"), ("Dark", "dark")]
 
-# Colors for the status line and the preview, as theme roles.
+# Colors for the status line, as theme roles.
 TEXT     = "text"
 TEXT_DIM = "text_dim"
 SUCCESS  = "success"
 WARNING  = "warning"
 ERROR    = "error"
 
-# Helvetica falls back to Arial on Windows, so use the system UI font there.
-UI_FONT   = "Segoe UI" if sys.platform == "win32" else "Helvetica"
-MONO_FONT = "Consolas" if sys.platform == "win32" else "Courier"
+# Segoe UI on Windows, the system font elsewhere.
+UI_FONT   = "Segoe UI" if sys.platform == "win32" else ""
+MONO_FONT = "Consolas" if sys.platform == "win32" else "monospace"
 
-URL_PLACEHOLDER = "https://www.youtube.com/watch?v=..."
+URL_PLACEHOLDER = "Paste one or more links: https://www.youtube.com/watch?v=..."
 
+FFMPEG_MISSING_STATUS = "ffmpeg not found: see the log"
 
-FFMPEG_MISSING_STATUS = "ffmpeg not found, see the log below"
+# Format and quality are two choices; quality only applies to video. The
+# value given to the engine (engine.format_opts) is the quality's for video,
+# the format's for audio.
+FORMATS = [("MP4 video", "video"), ("MP3 audio", "mp3"), ("M4A audio", "m4a")]
+QUALITIES = [("Best quality", "mp4_best"), ("1080p", "1080p"),
+             ("720p", "720p"), ("480p", "480p")]
+FORMAT_VALUES = [value for _, value in QUALITIES] + ["mp3", "m4a"]
 
-# The Format chips, in groups: (group, [(label, value for format_opts)]).
-FORMATS = [
-    ("Video (MP4)", [("Best quality", "mp4_best"),
-                     ("1080p",        "1080p"),
-                     ("720p",         "720p"),
-                     ("480p",         "480p")]),
-    ("Audio only",  [("MP3",          "mp3"),
-                     ("M4A",          "m4a")]),
-]
-FORMAT_VALUES = [value for _, chips in FORMATS for _, value in chips]
+# Heights at 96 DPI (Qt scales them); a pill's corner radius in the style
+# sheet is half its height, since Qt draws a square corner when it's more.
+SEARCH, PILL, PRIMARY, CHIP = 40, 36, 44, 30
+THUMB = QSize(*engine.THUMB_SIZE)   # a thumbnail in the list
+ROW_HEIGHT = 92
 
 
 def settings_path():
-    """Where the last folder and format are remembered between runs."""
+    """Where the last folder, format and theme are remembered between runs."""
     if sys.platform == "win32":
         base = os.environ.get("APPDATA") or os.path.expanduser("~")
     elif sys.platform == "darwin":
@@ -146,139 +194,6 @@ def save_settings(data):
 
 
 UPDATE_CHECK_INTERVAL = 24 * 60 * 60   # seconds
-
-
-PREVIEW_HINT = "Paste a link to see its title and length here."
-
-# Room for the window's title bar and frame, which Tk's sizes don't include.
-TITLE_BAR = 40
-
-
-def enable_dpi_awareness():
-    """Asks Windows to let the app draw at the screen's real resolution. By
-    default Windows draws it at 96 DPI and stretches the result on a scaled
-    display (e.g. 150%), which blurs the text. Must run before the first
-    window opens. "System aware": on a second monitor with another scale,
-    Windows still stretches it there, but it never comes out the wrong size."""
-    if sys.platform != "win32":
-        return
-    try:
-        ctypes.windll.shcore.SetProcessDpiAwareness(1)   # Windows 8.1 and later
-    except (AttributeError, OSError):
-        try:
-            ctypes.windll.user32.SetProcessDPIAware()
-        except (AttributeError, OSError):
-            pass
-
-
-def work_area(widget):
-    """(left, top, width, height) of the screen without the taskbar."""
-    if sys.platform == "win32":
-        try:
-            from ctypes import wintypes
-            rect = wintypes.RECT()
-            SPI_GETWORKAREA = 0x30
-            if ctypes.windll.user32.SystemParametersInfoW(
-                    SPI_GETWORKAREA, 0, ctypes.byref(rect), 0):
-                return (rect.left, rect.top,
-                        rect.right - rect.left, rect.bottom - rect.top)
-        except (AttributeError, OSError):
-            pass
-    # Elsewhere, leave room for a panel or dock.
-    return 0, 0, widget.winfo_screenwidth(), widget.winfo_screenheight() - 40
-
-
-def system_theme(widget):
-    """"dark" or "light": the theme the operating system uses for apps, or
-    None if it can't tell."""
-    if sys.platform == "win32":
-        try:
-            import winreg
-            with winreg.OpenKey(winreg.HKEY_CURRENT_USER, r"Software\Microsoft\Windows"
-                                r"\CurrentVersion\Themes\Personalize") as key:
-                light = winreg.QueryValueEx(key, "AppsUseLightTheme")[0]
-        except OSError:   # e.g. Windows 7, which has no dark mode
-            return None
-        return "light" if light else "dark"
-    if sys.platform == "darwin":
-        try:
-            dark = widget.tk.call("::tk::unsupported::MacWindowStyle", "isdark", widget)
-        except tk.TclError:   # Tk before 8.6.10
-            return None
-        return "dark" if widget.tk.getboolean(dark) else "light"
-    # GNOME, and the desktops that follow its setting.
-    try:
-        scheme = subprocess.run(
-            ["gsettings", "get", "org.gnome.desktop.interface", "color-scheme"],
-            capture_output=True, text=True, timeout=2).stdout
-    except (OSError, subprocess.SubprocessError):
-        return None
-    if "dark" in scheme:
-        return "dark"
-    return "light" if "light" in scheme or "default" in scheme else None
-
-
-def set_title_bar_theme(window, dark):
-    """On Windows 10 and 11, a dark or light title bar to match the window."""
-    if sys.platform != "win32":
-        return
-    try:
-        hwnd = ctypes.windll.user32.GetParent(window.winfo_id())
-        value = ctypes.c_int(int(dark))
-        DWMWA_USE_IMMERSIVE_DARK_MODE = 20
-        ctypes.windll.dwmapi.DwmSetWindowAttribute(
-            hwnd, DWMWA_USE_IMMERSIVE_DARK_MODE, ctypes.byref(value), ctypes.sizeof(value))
-    except (AttributeError, OSError):   # older Windows: the title bar stays light
-        pass
-
-
-# Pillow draws at 4 times the size and shrinks the result, which smooths the
-# rounded edges (Tk itself can't draw them smoothly).
-SMOOTH = 4
-
-
-def rounded(image, radius):
-    """A copy of a Pillow image with its corners rounded off (transparent)."""
-    mask = Image.new("L", (image.width * SMOOTH, image.height * SMOOTH), 0)
-    ImageDraw.Draw(mask).rounded_rectangle(
-        (0, 0, mask.width - 1, mask.height - 1), radius * SMOOTH, fill=255)
-    image = image.convert("RGBA")
-    image.putalpha(mask.resize(image.size, Image.LANCZOS))
-    return image
-
-
-def pill_image(width, height, color, radius=None):
-    """A rounded rectangle; with no radius, round ends (a pill)."""
-    return rounded(Image.new("RGB", (width, height), color),
-                   height // 2 if radius is None else radius)
-
-
-def logo_image(height):
-    """The header's logo: a white play triangle on a red rounded rectangle."""
-    width = round(height * 1.4)
-    big = Image.new("RGBA", (width * SMOOTH, height * SMOOTH), (0, 0, 0, 0))
-    draw = ImageDraw.Draw(big)
-    draw.rounded_rectangle((0, 0, big.width - 1, big.height - 1),
-                           round(height * 0.28) * SMOOTH, fill=THEMES["dark"]["accent"])
-    x, y, size = big.width / 2, big.height / 2, big.height * 0.42
-    draw.polygon([(x - size * 0.38, y - size / 2), (x + size * 0.5, y),
-                  (x - size * 0.38, y + size / 2)], fill="white")
-    return big.resize((width, height), Image.LANCZOS)
-
-
-def switch_image(height, on, track, knob, gap):
-    """An on/off switch: a knob at one end of a pill-shaped track, then gap
-    transparent pixels (between it and its label)."""
-    width = round(height * 1.75)
-    big = Image.new("RGBA", ((width + gap) * SMOOTH, height * SMOOTH), (0, 0, 0, 0))
-    draw = ImageDraw.Draw(big)
-    draw.rounded_rectangle((0, 0, width * SMOOTH - 1, height * SMOOTH - 1),
-                           height * SMOOTH // 2, fill=track)
-    inset = max(2, height // 6) * SMOOTH
-    size = height * SMOOTH - 2 * inset
-    x = width * SMOOTH - inset - size if on else inset
-    draw.ellipse((x, inset, x + size, inset + size), fill=knob)
-    return big.resize((width + gap, height), Image.LANCZOS)
 
 
 # A word that looks like a link without "https://": a host name and,
@@ -357,744 +272,960 @@ def ffmpeg_help(startup=False):
             f"MP3/M4A, but it wasn't found.\n\n{_ffmpeg_install_hint()}\n\n{then}")
 
 
-# A Pill's colors, by kind: (fill, fill under the mouse, text) as theme roles.
-PILL_KINDS = {
-    "primary":   ("accent", "accent_hover", "accent_text"),
-    "secondary": ("button", "button_hover", "text"),
-    "selected":  ("chip_on", "chip_on", "chip_on_text"),
+def application(argv=None):
+    """The QApplication (there's one per process), set up for the app's look."""
+    app = QApplication.instance()
+    if app is None:
+        app = QApplication(argv or sys.argv[:1])
+        app.setStyle("Fusion")   # so the style sheet looks the same everywhere
+        if UI_FONT:
+            app.setFont(QFont(UI_FONT, 10))
+    return app
+
+
+# ── The Downloads list ──────────────────────────────────────────────────────
+
+# A row's state: (what the Status column says, theme role of its color).
+STATES = {
+    "waiting":     ("Waiting",        "text_dim"),
+    "looking":     ("Looking up…",    "text_dim"),
+    "downloading": ("Downloading",    "blue"),
+    "processing":  ("Processing…",    "blue"),
+    "done":        ("Completed",      "success"),
+    "failed":      ("Failed",         "error"),
+    "canceled":    ("Canceled",       "text_dim"),
+    "declined":    ("Not downloaded", "text_dim"),
+    "empty":       ("Nothing found",  "warning"),   # e.g. an empty playlist
 }
+ACTIVE = {"downloading", "processing"}
+FINISHED = {"done", "failed", "canceled", "declined", "empty"}
+
+# What can be done with a row: (what its icon's tooltip and the right-click
+# menu say, its key in the list, the Qt keys).
+ROW_ACTIONS = {
+    "cancel": ("Cancel", "Esc", (Qt.Key_Escape,)),
+    "folder": ("Show in folder", "Enter", (Qt.Key_Return, Qt.Key_Enter)),
+    "remove": ("Remove from the list (the file stays)", "Delete",
+               (Qt.Key_Delete, Qt.Key_Backspace)),   # Backspace: the Mac's Delete key
+}
+ACTION_KEYS = {key: name for name, (_, _, keys) in ROW_ACTIONS.items() for key in keys}
 
 
-class Pill(tk.Label):
-    """A YouTube-style button: its text on a rounded shape that Pillow draws
-    with smooth edges (without Pillow, a plain rectangle). Like a tk.Button
-    it has a command, invoke() and a "disabled" state, and Space or Enter
-    clicks it once Tab has moved to it.
+def row_actions(row):
+    """The actions row has now, in the order of its icons."""
+    names = []
+    if row.state not in FINISHED:
+        names.append("cancel")
+    if row.file:
+        names.append("folder")
+    if row.state in FINISHED:
+        names.append("remove")
+    return names
 
-    kind "primary" is red, "secondary" gray; a selected one is inverted, like
-    YouTube's chips (select()). radius None gives round ends. With
-    stretch=True it's as wide as its grid cell rather than its text. Sizes
-    are at 96 DPI; the pill scales them itself (app._px)."""
 
-    def __init__(self, app, master, text, command=None, *, kind="secondary",
-                 font=(UI_FONT, 10), padx=16, pady=7, radius=None, stretch=False):
-        super().__init__(master, text=text, font=font, compound="center", bd=0,
-                         highlightthickness=app._px(2), takefocus=1)
-        self.app, self.command, self.kind = app, command, kind
-        self.selected = False
-        self._pad = (app._px(padx), app._px(pady))
-        self._radius = None if radius is None else app._px(radius)
-        self._hover = False
-        self._state = "normal"   # or "disabled" (see configure)
-        self._width = None    # with stretch: the grid cell's width
-        self._image = None    # keeps the PhotoImage alive
-        self.bind("<Enter>", lambda e: self._set_hover(True))
-        self.bind("<Leave>", lambda e: self._set_hover(False))
-        self.bind("<ButtonRelease-1>", self._released)
-        self.bind("<space>", self._key)
-        self.bind("<Return>", self._key)
-        if stretch:
-            self.bind("<Configure>", self._resized)
-        app._pills.append(self)
-        self.repaint()
+@dataclass(eq=False)
+class Row:
+    """One link in the list. Only the main thread changes it, except for
+    `latest` (the download thread's newest progress) and `job`."""
+    url: str
+    fmt: str                 # for engine.format_opts, e.g. "1080p" or "mp3"
+    folder: str
+    whole_playlist: bool
+    title: str = ""
+    details: str = ""        # length · channel, or how a playlist went
+    thumb: QPixmap | None = None
+    state: str = "waiting"
+    pct: float = 0
+    message: str = ""        # speed and ETA, or why it failed
+    file: str | None = None  # the last file it saved (or found already there)
+    log: list[str] = field(default_factory=list)
+    cancel_event: threading.Event = field(default_factory=threading.Event)
+    job: engine.DownloadJob | None = None
+    latest: tuple[float, str] | None = None
 
-    # config(text=..., state=..., command=...) and cget("state") as for a
-    # tk.Button. The pill keeps its state itself: a disabled Tk label would
-    # draw its image grayed out with a coarse stipple; a pill turns gray.
-    def configure(self, cnf=None, **kw):
-        kw = {**(cnf or {}), **kw}
-        if not kw:
-            return super().configure()
-        if "command" in kw:
-            self.command = kw.pop("command")
-        repaint = {"text", "font"} & kw.keys()
-        if "state" in kw:
-            self._state = str(kw.pop("state"))
-            repaint = True
-        result = super().configure(kw) if kw else None
-        if repaint:
-            self.repaint()
-        return result
+    @property
+    def format_label(self):
+        return self.fmt.upper() if self.fmt in ("mp3", "m4a") else "MP4"
 
-    config = configure
+    @property
+    def quality_label(self):
+        return dict((value, label) for label, value in QUALITIES).get(self.fmt, "—")
 
-    def cget(self, key):
-        return self._state if key == "state" else super().cget(key)
 
-    __getitem__ = cget
+class DownloadsModel(QAbstractTableModel):
+    COLUMNS: ClassVar[list[str]] = ["Video", "Format", "Quality", "Progress", "Status", ""]
+    VIDEO, FORMAT, QUALITY, PROGRESS, STATUS, ACTIONS = range(6)
 
-    def invoke(self):
-        if self.command and self._state != "disabled":
-            return self.command()
+    def __init__(self):
+        super().__init__()
+        self.rows: list[Row] = []
+        self.colors = THEMES["dark"]
+
+    def rowCount(self, parent=QModelIndex()):  # noqa: B008  (Qt's own signature)
+        return 0 if parent.isValid() else len(self.rows)
+
+    def columnCount(self, parent=QModelIndex()):  # noqa: B008
+        return 0 if parent.isValid() else len(self.COLUMNS)
+
+    def headerData(self, section, orientation, role=Qt.DisplayRole):
+        if orientation == Qt.Horizontal and role == Qt.DisplayRole:
+            return self.COLUMNS[section]
         return None
 
-    def select(self, selected=True):
-        if selected != self.selected:
-            self.selected = selected
-            self.repaint()
+    def data(self, index, role=Qt.DisplayRole):
+        row = self.rows[index.row()]
+        col = index.column()
+        if role == Qt.UserRole:
+            return row
+        if role == Qt.DisplayRole:
+            if col == self.FORMAT:
+                return row.format_label
+            if col == self.QUALITY:
+                return row.quality_label
+            if col == self.STATUS:
+                return STATES[row.state][0]
+        if role == Qt.ForegroundRole and col == self.STATUS:
+            return QColor(self.colors[STATES[row.state][1]])
+        if role == Qt.ToolTipRole:
+            if col == self.VIDEO:
+                return row.url
+            if col == self.STATUS:   # what the log says about this link
+                return "\n".join(row.log[-8:]) or None
+        return None
 
-    def _set_hover(self, hover):
-        self._hover = hover
-        self.repaint()
+    def add(self, row):
+        self.beginInsertRows(QModelIndex(), len(self.rows), len(self.rows))
+        self.rows.append(row)
+        self.endInsertRows()
 
-    def _released(self, event):
-        # Like a button: only if the mouse is still over it.
-        if 0 <= event.x < self.winfo_width() and 0 <= event.y < self.winfo_height():
-            self.invoke()
+    def changed(self, row):
+        if row in self.rows:
+            r = self.rows.index(row)
+            self.dataChanged.emit(self.index(r, 0), self.index(r, len(self.COLUMNS) - 1))
 
-    def _key(self, _e):
-        self.invoke()
-        return "break"
-
-    def _resized(self, event):
-        width = event.width - 2 * int(str(self.cget("highlightthickness")))
-        if width > 0 and width != self._width:
-            self._width = width
-            self.repaint()
-
-    def repaint(self):
-        colors = self.app.colors
-        disabled = self._state == "disabled"
-        fill, hover, fg = PILL_KINDS["selected" if self.selected else self.kind]
-        fill = colors["button" if disabled else hover if self._hover else fill]
-        fg = colors["disabled" if disabled else fg]
-        bg = colors["bg"]
-        options = {"fg": fg, "disabledforeground": fg, "highlightbackground": bg,
-                   "highlightcolor": colors["blue"],
-                   "cursor": "arrow" if disabled else "hand2"}
-        padx, pady = self._pad
-        if ImageTk is None:
-            super().configure(bg=fill, padx=padx, pady=pady, **options)
-            return
-        font, text = self.cget("font"), self.cget("text")
-        width = self._width or int(self.tk.call("font", "measure", font, text)) + 2 * padx
-        height = int(self.tk.call("font", "metrics", font, "-linespace")) + 2 * pady
-        self._image = self.app._photo(pill_image, width, height, fill, self._radius)
-        super().configure(image=self._image, bg=bg, padx=0, pady=0, **options)
+    def remove(self, row):
+        if row in self.rows:
+            r = self.rows.index(row)
+            self.beginRemoveRows(QModelIndex(), r, r)
+            self.rows.pop(r)
+            self.endRemoveRows()
 
 
-class Toggle(Pill):
-    """A YouTube-style on/off switch, then its label, for a BooleanVar.
-    Clicking it (or Space or Enter) flips the variable, then calls command.
-    Without Pillow it's a check box character before the label."""
+class RowDelegate(QStyledItemDelegate):
+    """Draws the Video, Progress and Actions cells, and handles clicks on
+    the action icons. The other cells are plain text."""
 
-    def __init__(self, app, master, text, variable, command=None, *, font=(UI_FONT, 10)):
-        self.variable, self._label, self._changed = variable, text, command
-        super().__init__(app, master, text, self._flip, font=font)
-        variable.trace_add("write", lambda *_: self.repaint())
+    action = Signal(object, str)   # (row, "cancel" / "folder" / "remove")
 
-    def _flip(self):
-        self.variable.set(not self.variable.get())
-        if self._changed:
-            self._changed()
+    ICON = 30   # an action icon's round hover area
 
-    def repaint(self):
-        colors = self.app.colors
-        on = bool(self.variable.get())
-        options = {"bg": colors["bg"], "fg": colors["text"], "padx": 0, "pady": 0,
-                   "highlightbackground": colors["bg"], "highlightcolor": colors["blue"],
-                   "cursor": "hand2"}
-        if ImageTk is None:
-            tk.Label.configure(self, text=("☑ " if on else "☐ ") + self._label, **options)
-            return
-        height = round(int(self.tk.call("font", "metrics", self.cget("font"),
-                                         "-linespace")) * 0.8)
-        self._image = self.app._photo(switch_image, height, on,
-                                      colors["blue" if on else "scroll"],
-                                      "white", self.app._px(8))
-        tk.Label.configure(self, image=self._image, compound="left", **options)
+    def __init__(self, view, model):
+        super().__init__(view)
+        self.view, self.model = view, model
+        self._hover = None   # (row, action) under the mouse
+
+    # Which icons a row has, and where.
+    def icons(self, rect, row):
+        size = self.ICON
+        y = rect.center().y() - size / 2
+        return [(name, QRectF(rect.left() + 8 + i * (size + 4), y, size, size))
+                for i, name in enumerate(row_actions(row))]
+
+    def paint(self, painter, option, index):
+        c = self.model.colors
+        row = index.data(Qt.UserRole)
+        painter.save()
+        rect = QRectF(option.rect)
+        # The selected row (the one the keys act on) stands out while the
+        # list has the keyboard; otherwise it looks like a row under the mouse.
+        # (Filled before antialiasing: on a scaled screen, antialiased edges
+        # would leave thin seams between the cells.)
+        selected = option.state & QStyle.State_Selected
+        if selected and self.view.hasFocus():
+            painter.fillRect(option.rect, QColor(c["button"]))
+        elif selected or option.state & QStyle.State_MouseOver:
+            painter.fillRect(option.rect, QColor(c["surface"]))
+        painter.setRenderHint(QPainter.Antialiasing)
+        painter.setRenderHint(QPainter.SmoothPixmapTransform)
+        painter.setPen(QPen(QColor(c["divider"]), 1))
+        painter.drawLine(rect.bottomLeft(), rect.bottomRight())
+
+        col = index.column()
+        if col == DownloadsModel.VIDEO:
+            self._paint_video(painter, rect, row, option.font)
+        elif col == DownloadsModel.PROGRESS:
+            self._paint_progress(painter, rect, row, option.font)
+        elif col == DownloadsModel.ACTIONS:
+            self._paint_actions(painter, rect, row)
+        else:
+            painter.setPen(index.data(Qt.ForegroundRole) or QColor(c["text"]))
+            painter.setFont(option.font)
+            painter.drawText(rect.adjusted(8, 0, -8, 0), Qt.AlignVCenter | Qt.AlignLeft,
+                             index.data(Qt.DisplayRole) or "")
+        painter.restore()
+
+    def _paint_video(self, painter, rect, row, font):
+        c = self.model.colors
+        thumb = QRectF(rect.left() + 12, rect.center().y() - THUMB.height() / 2,
+                       THUMB.width(), THUMB.height())
+        shape = QPainterPath()
+        shape.addRoundedRect(thumb, 8, 8)
+        if row.thumb is not None:
+            painter.save()
+            painter.setClipPath(shape)
+            painter.drawPixmap(thumb, row.thumb, cover(row.thumb, thumb))
+            painter.restore()
+        else:
+            painter.fillPath(shape, QColor(c["button" if row.state == "looking" else "surface"]))
+            play_icon(painter, thumb.center(), 10, QColor(c["text_dim"]))
+
+        left = thumb.right() + 14
+        width = rect.right() - left - 8
+        title_font = QFont(font)
+        title_font.setPointSizeF(font.pointSizeF() * 1.1)
+        title_font.setWeight(QFont.DemiBold)
+        metrics = QFontMetrics(title_font)
+        painter.setFont(title_font)
+        painter.setPen(QColor(c["text"]))
+        top = rect.center().y() - metrics.height() - 1
+        painter.drawText(QRectF(left, top, width, metrics.height()), Qt.AlignLeft,
+                         metrics.elidedText(row.title or row.url, Qt.ElideRight, int(width)))
+        painter.setFont(font)
+        painter.setPen(QColor(c["text_dim"]))
+        details = row.details or ("Looking up…" if row.state == "looking" else "")
+        painter.drawText(QRectF(left, rect.center().y() + 3, width, metrics.height()),
+                         Qt.AlignLeft, QFontMetrics(font).elidedText(
+                             details, Qt.ElideRight, int(width)))
+
+    def _paint_progress(self, painter, rect, row, font):
+        c = self.model.colors
+        inner = rect.adjusted(8, 0, -12, 0)
+        bar = QRectF(inner.left(), rect.center().y() - 2, inner.width() - 44, 4)
+        painter.setPen(Qt.NoPen)
+        painter.setBrush(QColor(c["button"]))
+        painter.drawRoundedRect(bar, 2, 2)
+        pct = 100 if row.state == "done" else row.pct
+        if pct > 0 and row.state != "failed":
+            done = QRectF(bar.left(), bar.top(), bar.width() * pct / 100, bar.height())
+            painter.setBrush(QColor(c["success" if row.state == "done" else "accent"]))
+            painter.drawRoundedRect(done, 2, 2)
+        small = QFont(font)
+        small.setPointSizeF(font.pointSizeF() * 0.9)
+        painter.setFont(small)
+        painter.setPen(QColor(c["text_dim"]))
+        painter.drawText(QRectF(bar.right() + 6, bar.center().y() - 10, 40, 20),
+                         Qt.AlignVCenter | Qt.AlignRight,
+                         f"{pct:.0f}%" if row.state in ACTIVE | {"done"} else "")
+        below = QRectF(inner.left(), bar.bottom() + 6, inner.width(), 18)
+        painter.setPen(QColor(c["error" if row.state == "failed" else "text_dim"]))
+        painter.drawText(below, Qt.AlignLeft | Qt.AlignTop, QFontMetrics(small).elidedText(
+            row.message, Qt.ElideRight, int(below.width())))
+
+    def _paint_actions(self, painter, rect, row):
+        c = self.model.colors
+        for name, area in self.icons(rect, row):
+            hovered = self._hover == (row, name)
+            if hovered:
+                painter.setPen(Qt.NoPen)
+                painter.setBrush(QColor(c["button_hover"]))
+                painter.drawEllipse(area)
+            color = (c["error"] if hovered and name == "remove" else
+                     c["text"] if hovered else c["text_dim"])
+            draw_icon(painter, name, area, QColor(color))
+
+    def editorEvent(self, event, model, option, index):
+        if index.column() != DownloadsModel.ACTIONS:
+            if self._hover:
+                self._hover = None
+                self.view.viewport().update()
+            return False
+        row = index.data(Qt.UserRole)
+        if event.type() in (QEvent.MouseMove, QEvent.MouseButtonRelease):
+            hit = next((name for name, area in self.icons(QRectF(option.rect), row)
+                        if area.contains(event.position())), None)
+            hover = (row, hit) if hit else None
+            if hover != self._hover:
+                self._hover = hover
+                self.view.viewport().update()
+            if event.type() == QEvent.MouseButtonRelease and hit:
+                self.action.emit(row, hit)
+                return True
+        return False
+
+    def helpEvent(self, event, view, option, index):
+        if index.column() == DownloadsModel.ACTIONS:
+            row = index.data(Qt.UserRole)
+            for name, area in self.icons(QRectF(option.rect), row):
+                if area.contains(QPointF(event.pos())):
+                    text, key, _ = ROW_ACTIONS[name]
+                    QToolTip.showText(event.globalPos(), f"{text} ({key})", view)
+                    return True
+            QToolTip.hideText()
+            return True
+        return super().helpEvent(event, view, option, index)
+
+    def sizeHint(self, option, index):
+        return QSize(super().sizeHint(option, index).width(), ROW_HEIGHT)
 
 
-class YouTubeDownloader(tk.Tk):
-    def __init__(self, *, update_check=True):
+class DownloadsView(QTableView):
+    """The table, with a hint in place of the rows while there are none.
+
+    The selected row's actions also work from the keyboard (ROW_ACTIONS'
+    keys: Esc cancels, Enter shows the file, Delete removes the row), from
+    a right-click menu, and a double-click shows the file."""
+
+    action = Signal(object, str)   # (row, "cancel" / "folder" / "remove")
+
+    def __init__(self, model):
         super().__init__()
-        self.title("YT Downloader")
-        # How much bigger than 96 DPI the screen is, when the app is DPI aware
-        # (1.0 otherwise: Windows then reports 96 DPI and stretches the window).
-        # (Tk reports e.g. 96.08 for 96: a difference that small isn't scaling.)
-        scale = self.winfo_fpixels("1i") / 96
-        self.scale = scale if scale > 1.05 else 1.0
+        self.setModel(model)
+        self.setMouseTracking(True)
+        self.setShowGrid(False)
+        self.setSelectionMode(QTableView.SingleSelection)
+        self.setSelectionBehavior(QTableView.SelectRows)
+        self.setFocusPolicy(Qt.StrongFocus)
+        self.setTabKeyNavigation(False)   # Tab leaves the list, as elsewhere
+        self.setContextMenuPolicy(Qt.CustomContextMenu)
+        self.customContextMenuRequested.connect(self._show_menu)
+        self.doubleClicked.connect(self._double_clicked)
+        self.setWordWrap(False)
+        self.verticalHeader().hide()
+        self.verticalHeader().setDefaultSectionSize(ROW_HEIGHT)
+        self.setVerticalScrollMode(QTableView.ScrollPerPixel)
+        header = self.horizontalHeader()
+        header.setHighlightSections(False)
+        header.setDefaultAlignment(Qt.AlignLeft | Qt.AlignVCenter)
+        header.setSectionResizeMode(DownloadsModel.VIDEO, QHeaderView.Stretch)
+        widths = {DownloadsModel.FORMAT: 80, DownloadsModel.QUALITY: 110,
+                  DownloadsModel.PROGRESS: 220, DownloadsModel.STATUS: 130,
+                  DownloadsModel.ACTIONS: 120}
+        for col, width in widths.items():
+            header.setSectionResizeMode(col, QHeaderView.Fixed)
+            header.resizeSection(col, width)
+
+    def current_row(self):
+        index = self.currentIndex()
+        return self.model().rows[index.row()] if index.isValid() else None
+
+    def _act(self, row, name):
+        if row is not None and name in row_actions(row):
+            self.action.emit(row, name)
+
+    def keyPressEvent(self, event):
+        name = ACTION_KEYS.get(event.key())
+        if name and not event.modifiers() & ~Qt.KeypadModifier:
+            self._act(self.current_row(), name)
+            event.accept()
+            return
+        super().keyPressEvent(event)
+
+    # Tabbing into the list selects a row, so the keys have one to act on.
+    def focusInEvent(self, event):
+        super().focusInEvent(event)
+        if not self.currentIndex().isValid() and self.model().rowCount():
+            self.setCurrentIndex(self.model().index(0, 0))
+
+    def _double_clicked(self, index):
+        if index.column() != DownloadsModel.ACTIONS:   # not a double-clicked icon
+            self._act(self.model().rows[index.row()], "folder")
+
+    def row_menu(self, row):
+        """The right-click menu: every action, with its key; the ones the row
+        doesn't have now are grayed out."""
+        menu = QMenu(self)
+        available = row_actions(row)
+        for name, (text, key, _keys) in ROW_ACTIONS.items():
+            item = menu.addAction(f"{text}\t{key}")
+            item.setEnabled(name in available)
+            item.triggered.connect(lambda _checked=False, n=name: self._act(row, n))
+        return menu
+
+    def _show_menu(self, pos):
+        index = self.indexAt(pos)
+        if not index.isValid():
+            return
+        self.setCurrentIndex(index)
+        menu = self.row_menu(self.model().rows[index.row()])
+        menu.exec(self.viewport().mapToGlobal(pos))
+        menu.deleteLater()
+
+    def paintEvent(self, event):
+        super().paintEvent(event)
+        if self.model().rowCount() == 0:
+            painter = QPainter(self.viewport())
+            painter.setPen(QColor(self.model().colors["text_dim"]))
+            painter.drawText(self.viewport().rect(), Qt.AlignCenter,
+                             "Paste a link and click Download.\n"
+                             "Your downloads show up here.")
+
+
+# ── Drawing ─────────────────────────────────────────────────────────────────
+
+def cover(pixmap, target):
+    """The part of pixmap that fills target's shape (cropped, not squeezed)."""
+    w, h = pixmap.width(), pixmap.height()
+    want = target.width() / target.height()
+    if w / h > want:
+        crop = h * want
+        return QRectF((w - crop) / 2, 0, crop, h)
+    crop = w / want
+    return QRectF(0, (h - crop) / 2, w, crop)
+
+
+def play_icon(painter, center, size, color):
+    path = QPainterPath()
+    path.moveTo(center.x() - size * 0.4, center.y() - size * 0.5)
+    path.lineTo(center.x() + size * 0.5, center.y())
+    path.lineTo(center.x() - size * 0.4, center.y() + size * 0.5)
+    path.closeSubpath()
+    painter.fillPath(path, color)
+
+
+def draw_icon(painter, name, area, color):
+    """The rows' action icons, drawn so they take the theme's colors."""
+    painter.save()
+    pen = QPen(color, 1.6)
+    pen.setCapStyle(Qt.RoundCap)
+    pen.setJoinStyle(Qt.RoundJoin)
+    painter.setPen(pen)
+    painter.setBrush(Qt.NoBrush)
+    x, y = area.center().x(), area.center().y()
+    if name == "cancel":
+        painter.drawLine(QPointF(x - 5, y - 5), QPointF(x + 5, y + 5))
+        painter.drawLine(QPointF(x - 5, y + 5), QPointF(x + 5, y - 5))
+    elif name == "folder":
+        path = QPainterPath()
+        path.moveTo(x - 8, y + 6)
+        for px, py in ((x - 8, y - 6), (x - 3, y - 6), (x - 1, y - 4),
+                       (x + 8, y - 4), (x + 8, y + 6)):
+            path.lineTo(px, py)
+        path.closeSubpath()
+        painter.drawPath(path)
+    elif name == "remove":   # a trash can
+        painter.drawLine(QPointF(x - 7, y - 5), QPointF(x + 7, y - 5))
+        painter.drawLine(QPointF(x - 2, y - 7), QPointF(x + 2, y - 7))
+        body = QPainterPath()
+        body.moveTo(x - 5.5, y - 5)
+        body.lineTo(x - 4.5, y + 7)
+        body.lineTo(x + 4.5, y + 7)
+        body.lineTo(x + 5.5, y - 5)
+        painter.drawPath(body)
+    painter.restore()
+
+
+def _pixmap(width, height, ratio):
+    pixmap = QPixmap(round(width * ratio), round(height * ratio))
+    pixmap.setDevicePixelRatio(ratio)
+    pixmap.fill(Qt.transparent)
+    return pixmap
+
+
+def logo_pixmap(height, ratio):
+    """The header's logo: a white play triangle on a red rounded rectangle."""
+    width = round(height * 1.4)
+    pixmap = _pixmap(width, height, ratio)
+    painter = QPainter(pixmap)
+    painter.setRenderHint(QPainter.Antialiasing)
+    painter.setPen(Qt.NoPen)
+    painter.setBrush(QColor(THEMES["dark"]["accent"]))
+    painter.drawRoundedRect(QRectF(0, 0, width, height), height * 0.28, height * 0.28)
+    play_icon(painter, QPointF(width / 2 + height * 0.03, height / 2), height * 0.42,
+              QColor("white"))
+    painter.end()
+    return pixmap
+
+
+def download_icon(size, ratio):
+    """A white arrow onto a line, for the Download button (a "⬇" character
+    comes out as a color emoji on Windows)."""
+    pixmap = _pixmap(size, size, ratio)
+    painter = QPainter(pixmap)
+    painter.setRenderHint(QPainter.Antialiasing)
+    pen = QPen(QColor("white"), size * 0.12)
+    pen.setCapStyle(Qt.RoundCap)
+    pen.setJoinStyle(Qt.RoundJoin)
+    painter.setPen(pen)
+    x = size / 2
+    painter.drawLine(QPointF(x, size * 0.12), QPointF(x, size * 0.68))
+    painter.drawPolyline([QPointF(x - size * 0.25, size * 0.45), QPointF(x, size * 0.7),
+                          QPointF(x + size * 0.25, size * 0.45)])
+    painter.drawLine(QPointF(size * 0.15, size * 0.88), QPointF(size * 0.85, size * 0.88))
+    painter.end()
+    return pixmap
+
+
+def to_qimage(image):
+    """A Pillow image as a QImage (a copy, so it owns its pixels). Safe on a
+    worker thread, unlike a QPixmap."""
+    image = image.convert("RGB")
+    data = image.tobytes("raw", "RGB")
+    return QImage(data, image.width, image.height, 3 * image.width,
+                  QImage.Format_RGB888).copy()
+
+
+def write_svgs(folder, c):
+    """The small images the style sheet needs (a drop-down arrow, a switch),
+    in a theme's colors. Returns {name: path}."""
+    svgs = {
+        "arrow": f'<svg xmlns="http://www.w3.org/2000/svg" width="12" height="12">'
+                 f'<path d="M2 4 L6 8 L10 4" fill="none" stroke="{c["text_dim"]}" '
+                 f'stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"/></svg>',
+        "switch_off": f'<svg xmlns="http://www.w3.org/2000/svg" width="34" height="20">'
+                      f'<rect width="34" height="20" rx="10" fill="{c["scroll"]}"/>'
+                      f'<circle cx="10" cy="10" r="7" fill="white"/></svg>',
+        "switch_on": f'<svg xmlns="http://www.w3.org/2000/svg" width="34" height="20">'
+                     f'<rect width="34" height="20" rx="10" fill="{c["blue"]}"/>'
+                     f'<circle cx="24" cy="10" r="7" fill="white"/></svg>',
+    }
+    paths = {}
+    for name, svg in svgs.items():
+        paths[name] = os.path.join(folder, f"{name}.svg").replace("\\", "/")
+        with open(paths[name], "w", encoding="utf-8") as f:
+            f.write(svg)
+    return paths
+
+
+def style_sheet(c, svg):
+    return f"""
+    QWidget {{ background: {c["bg"]}; color: {c["text"]}; }}
+    QLabel#dim {{ color: {c["text_dim"]}; }}
+    QLabel#heading {{ font-size: 11pt; font-weight: 600; }}
+    QLabel#title {{ font-size: 15pt; font-weight: 700; }}
+    QFrame#divider {{ background: {c["divider"]}; max-height: 1px; }}
+
+    QLineEdit {{ background: {c["field"]}; border: 1px solid {c["field_border"]};
+                 border-radius: 8px; padding: 0 12px; selection-background-color: {c["blue"]}; }}
+    QLineEdit:focus {{ border-color: {c["blue"]}; }}
+    /* The URL box and Paste button join up like YouTube's search box. */
+    QLineEdit#url {{ border-radius: 20px; border-top-right-radius: 0;
+                     border-bottom-right-radius: 0; padding: 0 18px; font-size: 11pt; }}
+    QPushButton#search {{ border-radius: 20px; border-top-left-radius: 0;
+                          border-bottom-left-radius: 0; border: 1px solid {c["field_border"]};
+                          border-left: none; padding: 0 22px; }}
+
+    QPushButton {{ background: {c["button"]}; border: none; border-radius: 18px;
+                   padding: 0 18px; font-weight: 500; }}
+    QPushButton:hover {{ background: {c["button_hover"]}; }}
+    QPushButton:disabled {{ color: {c["disabled"]}; }}
+    QPushButton#primary {{ background: {c["accent"]}; color: {c["accent_text"]};
+                           font-weight: 700; font-size: 11pt; padding: 0 28px;
+                           border-radius: 22px; }}
+    QPushButton#primary:hover {{ background: {c["accent_hover"]}; }}
+    QPushButton#chip {{ border-radius: 8px; padding: 0 12px; }}
+    QPushButton#chip:checked {{ background: {c["chip_on"]}; color: {c["chip_on_text"]}; }}
+
+    QComboBox {{ background: {c["field"]}; border: 1px solid {c["field_border"]};
+                 border-radius: 8px; padding: 0 12px; min-width: 110px; }}
+    QComboBox:focus, QComboBox:on {{ border-color: {c["blue"]}; }}
+    QComboBox:disabled {{ color: {c["disabled"]}; }}
+    QComboBox::drop-down {{ border: none; width: 28px; }}
+    QComboBox::down-arrow {{ image: url({svg["arrow"]}); width: 12px; height: 12px; }}
+    QComboBox QAbstractItemView {{ background: {c["surface"]}; border: 1px solid {c["divider"]};
+                                   selection-background-color: {c["button_hover"]};
+                                   selection-color: {c["text"]}; outline: 0; padding: 4px; }}
+
+    QCheckBox {{ spacing: 8px; }}
+    QCheckBox::indicator {{ width: 34px; height: 20px; }}
+    QCheckBox::indicator:unchecked {{ image: url({svg["switch_off"]}); }}
+    QCheckBox::indicator:checked {{ image: url({svg["switch_on"]}); }}
+
+    QTableView {{ border: none; }}
+    QHeaderView::section {{ background: {c["bg"]}; color: {c["text_dim"]}; border: none;
+                            border-bottom: 1px solid {c["divider"]}; padding: 8px;
+                            font-weight: 600; }}
+    QPlainTextEdit#log {{ background: {c["surface"]}; color: {c["text_dim"]}; border: none;
+                          border-radius: 8px; padding: 6px 8px; font-family: "{MONO_FONT}";
+                          font-size: 9pt; selection-background-color: {c["blue"]}; }}
+    QScrollBar:vertical {{ background: transparent; width: 10px; margin: 0; }}
+    QScrollBar::handle:vertical {{ background: {c["scroll"]}; border-radius: 4px;
+                                   min-height: 30px; margin: 2px; }}
+    QScrollBar::add-line, QScrollBar::sub-line {{ height: 0; width: 0; }}
+    QScrollBar::add-page, QScrollBar::sub-page {{ background: transparent; }}
+    QToolTip {{ background: {c["surface"]}; color: {c["text"]};
+                border: 1px solid {c["divider"]}; padding: 4px 6px; }}
+    QMenu {{ background: {c["surface"]}; border: 1px solid {c["divider"]}; padding: 4px; }}
+    QMenu::item {{ padding: 6px 16px 6px 12px; border-radius: 4px; }}
+    QMenu::item:selected {{ background: {c["button_hover"]}; }}
+    QMenu::item:disabled {{ color: {c["disabled"]}; }}
+    """
+
+
+# ── The window ──────────────────────────────────────────────────────────────
+
+class YouTubeDownloader(QMainWindow):
+    # Qt isn't thread-safe: worker threads must not touch widgets. They
+    # _post() calls, which Qt delivers on the main thread (see _call), and
+    # a download's progress goes through Row.latest (see _show_progress).
+    _call_on_main = Signal(object, tuple)
+
+    def __init__(self, *, update_check=True):
+        application()
+        super().__init__()
+        self.setWindowTitle("YT Downloader")
+        self._call_on_main.connect(self._call, Qt.QueuedConnection)
 
         # State
         self._default_folder = os.path.normpath(os.path.expanduser("~/Downloads"))
         self._unavailable_folder = None   # the saved folder, if it's missing now
-        self.download_path = tk.StringVar(value=self._default_folder)
-        self.format_var    = tk.StringVar(value="mp4_best")
-        self.playlist_var  = tk.BooleanVar(value=False)
-        self.progress_var  = tk.DoubleVar(value=0)
-        self.status_var    = tk.StringVar(value="Ready")
-        self.is_running    = False
-        self._after_id     = None
-        self._ui_queue     = queue.Queue()
-        self._active_workers = 0
-        self._closing      = False
-        self._latest_progress = None
-        self._shown_progress  = None
-        self._queue = None             # the running engine.DownloadQueue
-        self._installing = False       # the in-app yt-dlp install is running
-        self._close_when_stopped = False
-        self._placeholder_shown = False
-        self._last_file = None
-        self.preview_text  = tk.StringVar(value=PREVIEW_HINT)
-        self._preview_after = None     # pending lookup (waits for typing to pause)
-        self._preview_key   = None     # (links, whole playlist) last looked up
-        self._preview_token = 0        # newest lookup; older answers are dropped
-        self._preview_cancel = threading.Event()   # set to stop the running lookup
-        self._preview_image = None     # keeps the PhotoImage alive
-        self._preview_dim   = True     # a hint rather than a video's details
-        self._thumb_placeholder = None # the empty thumbnail (with Pillow)
-        self.update_check_var = tk.BooleanVar(value=True)
-        # Theme: "system", "light" or "dark"; see _apply_theme.
-        self.theme_var     = tk.StringVar(value="system")
-        self._painted = []             # (widget, {option: theme role})
-        self._pills   = []
-        self._fields  = []             # the text boxes' border frames
-        self._focused_fields = set()
-        self._photos  = {}             # Pill and Toggle images (see _photo)
-        self._status_role = TEXT_DIM
-        self._theme_after = None       # pending check of the system's theme
+        self._folder = self._default_folder
+        self._format = "mp4_best"
+        self.theme_mode = "system"
+        self._check_updates = True
         self._apply_saved_settings()
-        self._shown_theme = self._theme_name()
-        self.colors = THEMES[self._shown_theme]
+        self.model = DownloadsModel()
+        self._running = None              # the row downloading now
+        self._active_workers = 0
+        self._lookup_slots = threading.Semaphore(3)   # lookups at a time
+        self._closing = False
+        self._close_when_stopped = False
+        self._installing = False          # the in-app yt-dlp install is running
+        self._status_role = TEXT_DIM
+        self._requested_scheme = None
+        self._svg_dir = tempfile.TemporaryDirectory(prefix="yt-downloader-")
+        self._js_runtime = None
+        self._ffmpeg = None
 
         self._build_ui()
-        if self.scale != 1.0:
-            self._scale_layout(self)
+        self.apply_theme()
+        QGuiApplication.styleHints().colorSchemeChanged.connect(
+            lambda _scheme: self.apply_theme())
+        # A download's newest progress is shown 10 times a second.
+        self._progress_timer = QTimer(self, interval=100, timeout=self._show_progress)
         self._fit_window()
-        set_title_bar_theme(self, self._shown_theme == "dark")   # now that it exists
-        self.protocol("WM_DELETE_WINDOW", self._on_close)
-        if sys.platform in ("win32", "darwin"):   # asking is cheap there
-            self._theme_after = self.after(2000, self._watch_system_theme)
 
         if not engine.YT_DLP_AVAILABLE:
-            self.after(300, self._prompt_install)
+            QTimer.singleShot(300, self._prompt_install)
         self._ffmpeg_missing = not engine.find_ffmpeg()
         if self._ffmpeg_missing:
             self._set_status(FFMPEG_MISSING_STATUS, WARNING)
-            self._log(ffmpeg_help(startup=True))
-        self._js_runtime = None
+            self._log(ffmpeg_help(startup=True), show=True)
         if engine.YT_DLP_AVAILABLE:   # it runs "<runtime> --version": a worker's job
             self._start_worker(self._find_js_runtime_thread)
         self._note_yt_dlp_version()
         if self._unavailable_folder:
             self._log(f"• The saved folder {self._unavailable_folder} isn't available "
-                      f"(an unplugged drive?); saving to {self._default_folder} for now.")
+                      f"(an unplugged drive?); saving to {self._default_folder} for now.",
+                      show=True)
         if update_check:
             self._maybe_check_for_update()
-        self.bind("<FocusIn>", self._recheck_ffmpeg, add="+")
 
-    # ── UI Construction ─────────────────────────────────────────────────────
+    # ── UI construction ─────────────────────────────────────────────────────
 
     def _build_ui(self):
-        self.columnconfigure(0, weight=1)
-        paint = self._paint
+        root = QWidget()
+        self.setCentralWidget(root)
+        page = QVBoxLayout(root)
+        page.setContentsMargins(0, 0, 0, 0)
+        page.setSpacing(0)
 
-        # ── Header: the logo on the left, the theme on the right ──
-        hdr = paint(tk.Frame(self, padx=20, pady=10), bg="bg")
-        hdr.grid(row=0, column=0, sticky="ew")
-        hdr.columnconfigure(1, weight=1)
-
-        if ImageTk is not None:
-            self._logo = ImageTk.PhotoImage(logo_image(self._px(30)), master=self)
-            logo = paint(tk.Label(hdr, image=self._logo, bd=0), bg="bg")
-        else:
-            logo = paint(tk.Label(hdr, text="▶", font=(UI_FONT, 20, "bold")),
-                         bg="bg", fg="accent")
-        logo.grid(row=0, column=0, rowspan=2, padx=(0, 10))
-        paint(tk.Label(hdr, text="YT Downloader", font=(UI_FONT, 15, "bold")),
-              bg="bg", fg="text").grid(row=0, column=1, sticky="sw")
-        self.powered_lbl = paint(tk.Label(hdr, text=self._powered_by_text(),
-                                          font=(UI_FONT, 9)), bg="bg", fg="text_dim")
-        self.powered_lbl.grid(row=1, column=1, sticky="nw")
-
-        themes = paint(tk.Frame(hdr), bg="bg")
-        themes.grid(row=0, column=2, rowspan=2, sticky="e")
-        paint(tk.Label(themes, text="Theme", font=(UI_FONT, 9)),
-              bg="bg", fg="text_dim").grid(row=0, column=0, padx=(0, 4))
+        # Header: logo, name and versions; the theme on the right.
+        header = QHBoxLayout()
+        header.setContentsMargins(20, 12, 20, 12)
+        header.setSpacing(4)
+        ratio = self.devicePixelRatioF()
+        logo = QLabel()
+        logo.setPixmap(logo_pixmap(30, ratio))
+        self.setWindowIcon(QIcon(logo_pixmap(32, 2)))
+        header.addWidget(logo)
+        header.addSpacing(8)
+        names = QVBoxLayout()
+        names.setSpacing(0)
+        names.addWidget(QLabel("YT Downloader", objectName="title"))
+        self.powered_lbl = QLabel(self._powered_by_text(), objectName="dim")
+        names.addWidget(self.powered_lbl)
+        header.addLayout(names)
+        header.addStretch()
+        right = QVBoxLayout()
+        right.setSpacing(6)
+        chips = QHBoxLayout()
+        chips.setSpacing(4)
+        chips.addStretch()
+        chips.addWidget(QLabel("Theme", objectName="dim"))
+        chips.addSpacing(6)
+        group = QButtonGroup(self)   # one checked at a time
         self.theme_chips = {}
-        for col, (label, mode) in enumerate(THEME_MODES, 1):
-            chip = Pill(self, themes, label, lambda m=mode: self._choose_theme(m),
-                        font=(UI_FONT, 9), padx=12, pady=4, radius=8)
-            chip.grid(row=0, column=col)
+        for label, mode in THEME_MODES:
+            chip = QPushButton(label, objectName="chip", checkable=True,
+                               cursor=Qt.PointingHandCursor)
+            chip.setFixedHeight(CHIP)
+            chip.clicked.connect(lambda _checked=False, m=mode: self._choose_theme(m))
+            group.addButton(chip)
+            chips.addWidget(chip)
             self.theme_chips[mode] = chip
+        right.addLayout(chips)
+        self.update_switch = None
         if engine.app_version():   # only a release .exe checks
-            Toggle(self, hdr, "Check for updates at startup", self.update_check_var,
-                   self._save_settings, font=(UI_FONT, 8),
-                   ).grid(row=2, column=2, sticky="e", pady=(4, 0))
+            self.update_switch = QCheckBox("Check for updates at startup",
+                                           cursor=Qt.PointingHandCursor)
+            self.update_switch.setChecked(self._check_updates)
+            self.update_switch.toggled.connect(self._update_switch_toggled)
+            right.addWidget(self.update_switch, 0, Qt.AlignRight)
+        header.addLayout(right)
+        page.addLayout(header)
+        page.addWidget(QFrame(objectName="divider"))
 
-        paint(tk.Frame(self, height=1), bg="divider").grid(row=1, column=0, sticky="ew")
+        body = QVBoxLayout()
+        body.setContentsMargins(24, 16, 24, 10)
+        body.setSpacing(10)
+        page.addLayout(body, 1)
 
-        # ── The controls ──
-        body = paint(tk.Frame(self, padx=24, pady=16), bg="bg")
-        body.grid(row=2, column=0, sticky="nsew")
-        body.columnconfigure(0, weight=1)
+        # Links, in a box like YouTube's search box. Several can go in,
+        # separated by spaces; each becomes a row. Enter downloads.
+        body.addWidget(QLabel("YouTube URLs", objectName="heading"))
+        search = QHBoxLayout()
+        search.setSpacing(0)
+        self.url = QLineEdit(objectName="url", placeholderText=URL_PLACEHOLDER)
+        self.url.setFixedHeight(SEARCH)
+        self.url.returnPressed.connect(self._start_download)
+        self.url.textChanged.connect(self._one_line)
+        paste = QPushButton("Paste", objectName="search", cursor=Qt.PointingHandCursor)
+        paste.setFixedHeight(SEARCH)
+        paste.clicked.connect(self._paste_url)
+        search.addWidget(self.url, 1)
+        search.addWidget(paste)
+        body.addLayout(search)
 
-        row = 0
+        # Format, quality and folder
+        options = QGridLayout()
+        options.setHorizontalSpacing(12)
+        options.setVerticalSpacing(4)
+        self.format = QComboBox(cursor=Qt.PointingHandCursor)
+        for label, value in FORMATS:
+            self.format.addItem(label, value)
+        self.quality = QComboBox(cursor=Qt.PointingHandCursor)
+        for label, value in QUALITIES:
+            self.quality.addItem(label, value)
+        self.format.currentIndexChanged.connect(
+            lambda: self.quality.setEnabled(self.format.currentData() == "video"))
+        self._set_format(self._format)
+        self.path = QLineEdit(self._folder)
+        browse = QPushButton("Browse", cursor=Qt.PointingHandCursor)
+        browse.clicked.connect(self._browse_folder)
+        for widget in (self.format, self.quality, self.path, browse):
+            widget.setFixedHeight(PILL)
+        for col, text in enumerate(("Format", "Quality", "Save to")):
+            options.addWidget(QLabel(text, objectName="dim"), 0, col)
+        options.addWidget(self.format, 1, 0)
+        options.addWidget(self.quality, 1, 1)
+        folder_row = QHBoxLayout()
+        folder_row.setSpacing(8)
+        folder_row.addWidget(self.path, 1)
+        folder_row.addWidget(browse)
+        options.addLayout(folder_row, 1, 2)
+        options.setColumnStretch(2, 1)
+        body.addLayout(options)
 
-        # URL, in a box like YouTube's search box
-        self._heading(body, "YouTube URLs (one per line)").grid(
-            row=row, column=0, columnspan=2, sticky="w", pady=(0, 6))
-        row += 1
+        # Whole playlist, and the Download button
+        actions = QHBoxLayout()
+        self.whole_playlist = QCheckBox("Whole playlist", cursor=Qt.PointingHandCursor)
+        self.dl_btn = QPushButton(" Download", objectName="primary",
+                                  cursor=Qt.PointingHandCursor)
+        self.dl_btn.setFixedHeight(PRIMARY)
+        self.dl_btn.setIcon(QIcon(download_icon(18, 3)))
+        self.dl_btn.setIconSize(QSize(18, 18))
+        self.dl_btn.clicked.connect(self._start_download)
+        actions.addWidget(self.whole_playlist)
+        actions.addStretch()
+        actions.addWidget(self.dl_btn)
+        body.addLayout(actions)
 
-        url_frame = tk.Frame(body, highlightthickness=1)
-        url_frame.grid(row=row, column=0, sticky="ew", pady=(0, 12))
-        url_frame.columnconfigure(0, weight=1)
+        # The list
+        list_head = QHBoxLayout()
+        list_head.setContentsMargins(0, 8, 0, 0)
+        list_head.addWidget(QLabel("Downloads", objectName="heading"))
+        list_head.addSpacing(8)
+        self.count_lbl = QLabel(objectName="dim")
+        list_head.addWidget(self.count_lbl)
+        list_head.addStretch()
+        clear = QPushButton("Clear finished", cursor=Qt.PointingHandCursor)
+        clear.setFixedHeight(PILL)
+        clear.clicked.connect(self._clear_finished)
+        list_head.addWidget(clear)
+        body.addLayout(list_head)
 
-        # Several links can go in, one per line; they download in order. The
-        # box grows to 4 lines. Enter downloads, Shift+Enter adds a line.
-        # width=1: it fills the row, and the window's size comes from the
-        # other controls rather than from a default of 80 characters.
-        self.url_entry = tk.Text(url_frame, height=1, width=1, wrap="none",
-                                 font=(UI_FONT, 12), relief="flat", bd=0,
-                                 padx=12, pady=8, highlightthickness=0, undo=True)
-        self.url_entry.grid(row=0, column=0, sticky="ew")
-        self._restore_placeholder()
-        self.url_entry.bind("<FocusIn>",  self._clear_placeholder)
-        self.url_entry.bind("<FocusOut>", self._restore_placeholder)
-        self.url_entry.bind("<FocusOut>", self._schedule_preview, add="+")
-        self.url_entry.bind("<KeyRelease>", self._on_url_typed)
-        self.url_entry.bind("<Return>", self._on_url_enter)
-        self.url_entry.bind("<Shift-Return>", lambda e: None)   # a new line
-        self.url_entry.bind("<Tab>", self._focus_next)
-        self.url_entry.bind("<Shift-Tab>", self._focus_prev)
-        self._field(url_frame, self.url_entry)
+        self.view = DownloadsView(self.model)
+        self.delegate = RowDelegate(self.view, self.model)
+        self.delegate.action.connect(self._row_action)
+        self.view.action.connect(self._row_action)   # keys, menu, double-click
+        self.view.setItemDelegate(self.delegate)
+        body.addWidget(self.view, 1)
 
-        Pill(self, body, "Paste", self._paste_url, pady=9).grid(
-            row=row, column=1, sticky="n", padx=(8, 0))
-        row += 1
+        # The log: hidden until asked for, or until something needs reading.
+        self.log_box = QPlainTextEdit(objectName="log", readOnly=True)
+        self.log_box.setFixedHeight(130)
+        self.log_box.hide()
+        body.addWidget(self.log_box)
 
-        # Preview of the link, like a video in a YouTube list: thumbnail,
-        # then the title and, dimmer, the length and channel
-        preview = paint(tk.Frame(body), bg="bg")
-        preview.grid(row=row, column=0, columnspan=2, sticky="ew", pady=(0, 16))
-        preview.columnconfigure(1, weight=1)
-        preview.rowconfigure(1, weight=1)
-        # Without Pillow there's no image, so the box itself shows the shape.
-        thumb_bg = "bg" if ImageTk is not None else "surface"
-        thumb_box = paint(tk.Frame(preview, width=engine.THUMB_SIZE[0],
-                                   height=engine.THUMB_SIZE[1]), bg=thumb_bg)
-        thumb_box.grid(row=0, column=0, rowspan=2, sticky="nw")   # fixed size, image or not
-        self.preview_img = paint(tk.Label(thumb_box, bd=0), bg=thumb_bg)
-        self.preview_img.place(relx=0.5, rely=0.5, anchor="center")
-        self.preview_title = tk.StringVar()
-        self.preview_details = tk.StringVar()
-        self.preview_lbl = paint(tk.Label(preview, textvariable=self.preview_title,
-                                          justify="left", anchor="nw", wraplength=400),
-                                 bg="bg")
-        self.preview_lbl.grid(row=0, column=1, sticky="new", padx=(14, 0))
-        details = paint(tk.Label(preview, textvariable=self.preview_details,
-                                 font=(UI_FONT, 9), justify="left", anchor="nw",
-                                 wraplength=400), bg="bg", fg="text_dim")
-        details.grid(row=1, column=1, sticky="new", padx=(14, 0), pady=(2, 0))
-        for label in (self.preview_lbl, details):
-            label.bind("<Configure>", lambda e: e.widget.config(
-                wraplength=max(e.width - self._px(4), self._px(100))))
-        self._set_preview(PREVIEW_HINT, dim=True)
-        row += 1
+        # Status line, the download speed and the Log button
+        footer = QHBoxLayout()
+        self.status_lbl = QLabel("Ready")
+        self.status_lbl.setWordWrap(True)
+        self.speed_lbl = QLabel(objectName="dim")
+        self.log_btn = QPushButton("Log", objectName="chip", checkable=True,
+                                   cursor=Qt.PointingHandCursor)
+        self.log_btn.setFixedHeight(CHIP)
+        self.log_btn.toggled.connect(self.log_box.setVisible)
+        footer.addWidget(self.status_lbl, 1)
+        footer.addWidget(self.speed_lbl)
+        footer.addSpacing(8)
+        footer.addWidget(self.log_btn)
+        body.addLayout(footer)
 
-        # Format: chips, like those at the top of YouTube's home page
-        fmt_head = paint(tk.Frame(body), bg="bg")
-        fmt_head.grid(row=row, column=0, columnspan=2, sticky="ew", pady=(0, 6))
-        fmt_head.columnconfigure(0, weight=1)
-        self._heading(fmt_head, "Format").grid(row=0, column=0, sticky="w")
-        Toggle(self, fmt_head, "Whole playlist", self.playlist_var,
-               self._schedule_preview).grid(row=0, column=1, sticky="e")
-        row += 1
+        for signal in (self.model.rowsInserted, self.model.rowsRemoved,
+                       self.model.dataChanged):
+            signal.connect(self._update_counts)
+        self._update_counts()
 
-        chips = paint(tk.Frame(body), bg="bg")
-        chips.grid(row=row, column=0, columnspan=2, sticky="w", pady=(0, 14))
-        self.format_chips = {}
-        for group_row, (group, choices) in enumerate(FORMATS):
-            paint(tk.Label(chips, text=group, font=(UI_FONT, 9)), bg="bg", fg="text_dim",
-                  ).grid(row=group_row, column=0, sticky="w", padx=(0, 12))
-            line = paint(tk.Frame(chips), bg="bg")
-            line.grid(row=group_row, column=1, sticky="w", pady=1)
-            for col, (label, value) in enumerate(choices):
-                chip = Pill(self, line, label, lambda v=value: self.format_var.set(v),
-                            padx=12, pady=5, radius=8)
-                chip.grid(row=0, column=col, padx=(0, 4))
-                self.format_chips[value] = chip
-        self.format_var.trace_add("write", lambda *_: self._select_format_chip())
-        row += 1
+    def _fit_window(self):
+        # A comfortable size, but no bigger than the screen without the taskbar.
+        screen = self.screen().availableGeometry()
+        width, height = min(1060, screen.width()), min(780, screen.height() - 40)
+        self.setMinimumSize(min(820, width), min(600, height))
+        self.resize(width, height)
+        self.move(screen.center().x() - width // 2,
+                  screen.top() + max(0, (screen.height() - 40 - height) // 2))
 
-        # Output folder
-        self._heading(body, "Save to").grid(row=row, column=0, columnspan=2,
-                                            sticky="w", pady=(0, 6))
-        row += 1
+    # ── Settings ────────────────────────────────────────────────────────────
 
-        path_frame = tk.Frame(body, highlightthickness=1)
-        path_frame.grid(row=row, column=0, sticky="ew", pady=(0, 20))
-        path_frame.columnconfigure(0, weight=1)
-        path_entry = paint(tk.Entry(path_frame, textvariable=self.download_path,
-                                    font=(UI_FONT, 10), relief="flat", bd=0,
-                                    highlightthickness=0), fg="text")
-        path_entry.grid(row=0, column=0, sticky="ew", padx=10, pady=8)
-        self._field(path_frame, path_entry)
-
-        Pill(self, body, "Browse", self._browse_folder).grid(
-            row=row, column=1, sticky="n", padx=(8, 0))
-        row += 1
-
-        # Download button
-        self.dl_btn = Pill(self, body, "⬇  Download", self._start_download,
-                           kind="primary", font=(UI_FONT, 12, "bold"), pady=10,
-                           stretch=True)
-        self.dl_btn.grid(row=row, column=0, columnspan=2, sticky="ew", pady=(0, 10))
-        row += 1
-
-        # Progress bar: thin and red, like a YouTube player's (ttk's can't
-        # be made this thin)
-        self.progress = paint(tk.Frame(body, height=4), bg="button")
-        self.progress.grid(row=row, column=0, columnspan=2, sticky="ew", pady=(0, 10))
-        bar = paint(tk.Frame(self.progress), bg="accent")
-        self.progress_var.trace_add("write", lambda *_: bar.place(
-            relheight=1, relwidth=min(max(self.progress_var.get(), 0), 100) / 100))
-        row += 1
-
-        # Status label, with an "Open folder" button after a download
-        status_row = paint(tk.Frame(body), bg="bg")
-        status_row.grid(row=row, column=0, columnspan=2, sticky="ew")
-        status_row.columnconfigure(0, weight=1)
-        self.status_lbl = paint(tk.Label(status_row, textvariable=self.status_var,
-                                         font=(UI_FONT, 10), wraplength=580,
-                                         justify="left", anchor="w"), bg="bg")
-        self.status_lbl.grid(row=0, column=0, sticky="ew")
-        self.open_btn = Pill(self, status_row, "📂  Open folder", self._open_folder,
-                             font=(UI_FONT, 9), padx=12, pady=4)
-        self.open_btn.grid(row=0, column=1, sticky="ne", padx=(8, 0))
-        self.open_btn.grid_remove()   # shown once a download has saved a file
-        # Wrap long messages at the label's current width, not a fixed one.
-        self.status_lbl.bind("<Configure>", lambda e: self.status_lbl.config(
-            wraplength=max(e.width - self._px(4), self._px(100))))
-        row += 1
-
-        # ── Log box ──
-        log_frame = paint(tk.Frame(self, padx=24), bg="bg")
-        log_frame.grid(row=3, column=0, sticky="nsew", pady=(0, 16))
-        log_frame.columnconfigure(0, weight=1)
-        log_frame.rowconfigure(1, weight=1)
-        self.rowconfigure(3, weight=1)
-
-        paint(tk.Label(log_frame, text="Log", font=(UI_FONT, 9, "bold")),
-              bg="bg", fg="text_dim").grid(row=0, column=0, sticky="w", pady=(0, 4))
-
-        self.log_box = paint(tk.Text(log_frame, height=6, width=1, font=(MONO_FONT, 9),
-                                     relief="flat", bd=0, padx=10, pady=8,
-                                     highlightthickness=0, state="disabled",
-                                     wrap="word"), bg="surface", fg="text_dim")
-        self.log_box.grid(row=1, column=0, sticky="nsew")
-
-        sb = ttk.Scrollbar(log_frame, command=self.log_box.yview,
-                           style="Log.Vertical.TScrollbar")
-        sb.grid(row=1, column=1, sticky="ns", padx=(2, 0))
-        self.log_box.configure(yscrollcommand=sb.set)
-
-        self._apply_theme()
-
-    def _heading(self, master, text):
-        return self._paint(tk.Label(master, text=text, font=(UI_FONT, 11, "bold")),
-                           bg="bg", fg="text")
-
-    # Text boxes look like YouTube's search box: a thin border that turns
-    # blue while the box has the cursor.
-    def _field(self, frame, box):
-        self._paint(frame, bg="field")
-        self._paint(box, bg="field", insertbackground="text")
-        self._fields.append(frame)
-        box.bind("<FocusIn>", lambda e: self._paint_field(frame, True), add="+")
-        box.bind("<FocusOut>", lambda e: self._paint_field(frame, False), add="+")
-
-    def _paint_field(self, frame, focused):
-        if focused:
-            self._focused_fields.add(frame)
-        else:
-            self._focused_fields.discard(frame)
-        color = self.colors["blue" if focused else "field_border"]
-        frame.config(highlightbackground=color, highlightcolor=color)
-
-    def _select_format_chip(self):
-        for value, chip in self.format_chips.items():
-            chip.select(value == self.format_var.get())
-
-    # ── Themes ──────────────────────────────────────────────────────────────
-
-    def _paint(self, widget, **roles):
-        """Colors widget's options from theme roles, now and after every
-        theme change, e.g. _paint(label, bg="bg", fg="text_dim")."""
-        self._painted.append((widget, roles))
-        widget.configure({option: self.colors[role] for option, role in roles.items()})
-        return widget
-
-    def _photo(self, draw, *args):
-        """draw(*args) as a PhotoImage. They're kept: Pills and Toggles
-        draw the same few shapes again and again (e.g. on hover)."""
-        key = (draw, *args)
-        if key not in self._photos:
-            if len(self._photos) > 200:   # e.g. after much resizing
-                self._photos.clear()      # (each Pill keeps its own image)
-            self._photos[key] = ImageTk.PhotoImage(draw(*args), master=self)
-        return self._photos[key]
-
-    def _theme_name(self):
-        """The theme to show: the one chosen, or else the system's (dark,
-        the app's original look, if the system doesn't say)."""
-        mode = self.theme_var.get()
-        return mode if mode in THEMES else system_theme(self) or "dark"
-
-    def _choose_theme(self, mode):
-        self.theme_var.set(mode)
-        self._apply_theme()
-        self._save_settings()
-
-    # Repaints every widget in the theme's colors.
-    def _apply_theme(self):
-        self._shown_theme = self._theme_name()
-        self.colors = colors = THEMES[self._shown_theme]
-        self.configure(bg=colors["bg"])
-        for widget, roles in self._painted:
-            widget.configure({option: colors[role] for option, role in roles.items()})
-        for frame in self._fields:
-            self._paint_field(frame, frame in self._focused_fields)
-        for mode, chip in self.theme_chips.items():
-            chip.selected = mode == self.theme_var.get()
-        for value, chip in self.format_chips.items():
-            chip.selected = value == self.format_var.get()
-        for pill in self._pills:
-            pill.repaint()
-        placeholder = self._placeholder_shown and self._url_text() == URL_PLACEHOLDER
-        self.url_entry.config(fg=colors[TEXT_DIM if placeholder else TEXT])
-        self.status_lbl.config(fg=colors[self._status_role])
-        self._paint_preview()
-
-        style = ttk.Style(self)
-        style.theme_use("clam")
-        # The log's scroll bar: just a thumb, without arrows.
-        style.layout("Log.Vertical.TScrollbar", [("Vertical.Scrollbar.trough", {
-            "sticky": "ns", "children": [
-                ("Vertical.Scrollbar.thumb", {"expand": "1", "sticky": "nswe"})]})])
-        style.configure("Log.Vertical.TScrollbar", arrowsize=self._px(10), gripcount=0,
-                        troughcolor=colors["surface"], bordercolor=colors["surface"],
-                        background=colors["scroll"], lightcolor=colors["scroll"],
-                        darkcolor=colors["scroll"])
-        style.map("Log.Vertical.TScrollbar",
-                  background=[("active", colors["text_dim"])],
-                  lightcolor=[("active", colors["text_dim"])],
-                  darkcolor=[("active", colors["text_dim"])])
-        set_title_bar_theme(self, self._shown_theme == "dark")
-
-    # While the theme follows the system's, notice when that changes. (On
-    # Linux asking runs gsettings, too slow to repeat every few seconds; it's
-    # read at startup and when System is chosen.)
-    def _watch_system_theme(self):
-        self._theme_after = self.after(2000, self._watch_system_theme)
-        if self.theme_var.get() == "system" and self._theme_name() != self._shown_theme:
-            self._apply_theme()
-
-    def destroy(self):
-        if self._theme_after is not None:
-            self.after_cancel(self._theme_after)
-            self._theme_after = None
-        super().destroy()
-
-    # The last folder, format and theme are remembered (when a download starts,
-    # a theme is chosen, and the app closes). "Whole playlist" always starts
-    # unticked.
+    # The folder, format, theme and the update switch are remembered (when a
+    # download starts, a theme is chosen, the switch is clicked, and the app
+    # closes). "Whole playlist" always starts off.
     def _apply_saved_settings(self):
         saved = load_settings()
-        if saved.get("theme") in {mode for _, mode in THEME_MODES}:
-            self.theme_var.set(saved["theme"])
         if saved.get("format") in FORMAT_VALUES:
-            self.format_var.set(saved["format"])
+            self._format = saved["format"]
         folder = saved.get("folder")
         if isinstance(folder, str) and os.path.isdir(folder):
-            self.download_path.set(os.path.normpath(folder))
+            self._folder = os.path.normpath(folder)
         elif isinstance(folder, str) and folder:
             # Kept, not forgotten: it may be on a drive that's unplugged now.
             self._unavailable_folder = folder
         if isinstance(saved.get("check_updates"), bool):
-            self.update_check_var.set(saved["check_updates"])
+            self._check_updates = saved["check_updates"]
+        if saved.get("theme") in {mode for _, mode in THEME_MODES}:
+            self.theme_mode = saved["theme"]
 
     def _save_settings(self):
-        folder = self.download_path.get()
+        folder = self.path.text().strip()
         if self._unavailable_folder and folder == self._default_folder:
             folder = self._unavailable_folder   # still the stand-in: keep the saved one
         # Keeps the other keys, e.g. when updates were last checked.
         save_settings({**load_settings(),
                        "folder": folder,
-                       "format": self.format_var.get(),
-                       "check_updates": self.update_check_var.get(),
-                       "theme": self.theme_var.get()})
+                       "format": self._chosen_format(),
+                       "check_updates": self._check_updates,
+                       "theme": self.theme_mode})
 
-    def _fit_window(self):
-        # Open wide and tall enough to show everything, but no bigger than
-        # the screen without the taskbar, and centered on it. Only the log
-        # grows and shrinks with the window, and the minimum height keeps the
-        # controls, the status line and 2 log lines visible (plus one line for
-        # a status message that wraps). With larger text (Windows display
-        # scaling) the controls need more room than the usual 680 px.
-        self.update_idletasks()
-        needed, wanted = self.winfo_reqwidth(), self.winfo_reqheight()
-        log_height = self.log_box.winfo_reqheight()
-        line = log_height // int(self.log_box.cget("height"))
-        left, top, area_width, area_height = work_area(self)
-        title_bar = self._px(TITLE_BAR)
-        width = min(max(self._px(680), needed), area_width)
-        height = min(wanted, area_height - title_bar)
-        self.minsize(min(max(self._px(580), needed), width),
-                     min(wanted - log_height + 3 * line, height))
-        x = left + (area_width - width) // 2
-        y = top + max(0, (area_height - title_bar - height) // 2)
-        self.geometry(f"{width}x{height}+{x}+{y}")
+    def _chosen_format(self):
+        """The format as engine.format_opts names it, e.g. "720p" or "mp3"."""
+        kind = self.format.currentData()
+        return self.quality.currentData() if kind == "video" else kind
 
-    # ── High-DPI screens ────────────────────────────────────────────────────
+    def _set_format(self, value):
+        if value in ("mp3", "m4a"):
+            self.format.setCurrentIndex(self.format.findData(value))
+        else:
+            self.format.setCurrentIndex(self.format.findData("video"))
+            self.quality.setCurrentIndex(self.quality.findData(value))
 
-    def _px(self, pixels):
-        """pixels at 96 DPI, on this screen."""
-        return round(pixels * self.scale)
+    def _update_switch_toggled(self, checked):
+        self._check_updates = checked
+        self._save_settings()
 
-    # The layout's pixel sizes (padding, borders, the thumbnail box, wrap
-    # widths, the progress bar's height) are written for 96 DPI; on a
-    # high-DPI screen they're scaled once, after the window is built, so it
-    # keeps its proportions. Fonts scale by themselves (they're in points),
-    # and so do sizes in characters (e.g. a Text's width and height).
-    _PIXEL_OPTIONS = ("padx", "pady", "bd", "highlightthickness", "wraplength")
-    _GRID_OPTIONS = ("padx", "pady", "ipadx", "ipady")
+    # ── Themes ──────────────────────────────────────────────────────────────
 
-    def _scale_layout(self, widget):
-        # A Pill scales its own sizes; only its place in the grid scales here.
-        for name in () if isinstance(widget, Pill) else self._PIXEL_OPTIONS:
-            try:
-                value = int(str(widget.cget(name)))
-            except (tk.TclError, ValueError):   # not this widget's option, or not pixels
-                continue
-            if value:
-                widget.configure({name: self._px(value)})
-        sizes = ("width", "height") if isinstance(widget, tk.Frame) else ()
-        for name in sizes:
-            value = int(str(widget.cget(name)))
-            if value:
-                widget.configure({name: self._px(value)})
-        if widget.winfo_manager() == "grid":
-            info = widget.grid_info()   # e.g. padx 20, or pady (0, 6)
-            widget.grid_configure(**{
-                name: tuple(self._px(int(v)) for v in (
-                    info[name] if isinstance(info[name], (tuple, list))
-                    else str(info[name]).split()))
-                for name in self._GRID_OPTIONS if name in info})
-        for child in widget.winfo_children():
-            self._scale_layout(child)
+    def _choose_theme(self, mode):
+        self.theme_mode = mode
+        self.apply_theme()
+        self._save_settings()
+
+    def _theme_name(self):
+        """The theme shown: the one chosen, or else the system's (dark, the
+        app's original look, if the system doesn't say)."""
+        if self.theme_mode in THEMES:
+            return self.theme_mode
+        scheme = QGuiApplication.styleHints().colorScheme()
+        return "light" if scheme == Qt.ColorScheme.Light else "dark"
+
+    def apply_theme(self):
+        # Telling Qt the scheme also makes Windows draw a matching title bar;
+        # Unknown hands it back to the system.
+        wanted = {"light": Qt.ColorScheme.Light, "dark": Qt.ColorScheme.Dark}.get(
+            self.theme_mode, Qt.ColorScheme.Unknown)
+        if wanted != self._requested_scheme:
+            self._requested_scheme = wanted
+            QGuiApplication.styleHints().setColorScheme(wanted)   # may call this again
+        self.shown_theme = name = self._theme_name()
+        self.colors = self.model.colors = colors = THEMES[name]
+        self.theme_chips[self.theme_mode].setChecked(True)
+        folder = os.path.join(self._svg_dir.name, name)
+        os.makedirs(folder, exist_ok=True)
+        self.setStyleSheet(style_sheet(colors, write_svgs(folder, colors)))
+        self._paint_status()
+        self.view.viewport().update()
 
     # ── Helpers ─────────────────────────────────────────────────────────────
 
-    # The URL box shows a dimmed example until the user types or pastes.
-    # (edit_reset: Ctrl+Z mustn't bring the placeholder back as text.)
-    def _clear_placeholder(self, _e=None):
-        if self._placeholder_shown:
-            self._placeholder_shown = False
-            self._replace_url_text("")
-            self.url_entry.edit_reset()
+    # Pasted text with line breaks (several links) goes in one line.
+    def _one_line(self, text):
+        if "\n" in text or "\r" in text:
+            self.url.setText(" ".join(text.split()))
 
-    def _restore_placeholder(self, _e=None):
-        if not self._url_text().strip():
-            self._replace_url_text(URL_PLACEHOLDER)
-            self.url_entry.config(fg=self.colors[TEXT_DIM])
-            self._placeholder_shown = True
-            self.url_entry.edit_reset()
-
-    def _url_text(self):
-        return self.url_entry.get("1.0", "end-1c")
-
-    def _replace_url_text(self, text):
-        self.url_entry.delete("1.0", "end")
-        self.url_entry.insert("1.0", text)
-        self.url_entry.config(fg=self.colors[TEXT])
-        self._fit_url_box()
-
-    def _urls(self):
-        """The links entered (one per line, or separated by spaces) in order
-        and without repeats; none while the placeholder is showing. Words
-        that aren't links are left out (see _not_links)."""
-        return split_links(self._entered_text())[0]
-
-    def _not_links(self):
-        """The words in the box that aren't links."""
-        return split_links(self._entered_text())[1]
-
-    def _entered_text(self):
-        text = self._url_text().strip()
-        if self._placeholder_shown and text == URL_PLACEHOLDER:
-            return ""
-        return text
-
-    def _url(self):
-        """The first link, or "" if there's none."""
-        urls = self._urls()
-        return urls[0] if urls else ""
-
-    def _fit_url_box(self):
-        lines = int(self.url_entry.index("end-1c").split(".")[0])
-        self.url_entry.config(height=min(max(lines, 1), 4))
-
-    def _on_url_typed(self, _e=None):
-        self._fit_url_box()
-        self._schedule_preview()
-
-    def _on_url_enter(self, _e=None):
-        self._start_download()
-        return "break"   # no new line
-
-    def _focus_next(self, event):
-        event.widget.tk_focusNext().focus()
-        return "break"   # no tab character
-
-    # Without its own binding, Shift+Tab would match <Tab> and move forward.
-    def _focus_prev(self, event):
-        event.widget.tk_focusPrev().focus()
-        return "break"
-
-    # Adds the clipboard's links to those already in the box, one per line,
-    # so several links can be pasted one after the other. Other words (e.g.
-    # "Watch this:" before a link) are left out.
+    # Adds the clipboard's links to those already in the box. Other words
+    # (e.g. "Watch this:" before a link) are left out.
     def _paste_url(self):
-        try:
-            clip = self.clipboard_get()
-        except tk.TclError:   # empty clipboard, or not text
-            return
-        if not split_links(clip)[0]:
+        clip = QGuiApplication.clipboard().text()
+        links = split_links(clip)[0]
+        if not links:
             self._set_status("The clipboard has no link to paste.", WARNING)
             return
-        entered = self._entered_text()   # before the placeholder flag changes
-        self._placeholder_shown = False
-        self._replace_url_text("\n".join(split_links(entered + "\n" + clip)[0]))
-        self._schedule_preview(delay=100)
+        entered = split_links(self.url.text())[0]
+        self.url.setText(" ".join(dict.fromkeys(entered + links)))
+        self.url.setFocus()
 
     def _browse_folder(self):
-        path = filedialog.askdirectory(initialdir=self.download_path.get())
+        path = QFileDialog.getExistingDirectory(self, "Save to", self.path.text())
         if path:
-            self.download_path.set(os.path.normpath(path))
+            self.path.setText(os.path.normpath(path))
             self._unavailable_folder = None   # a deliberate choice replaces it
 
-    def _log(self, msg):
-        self.log_box.configure(state="normal")
-        self.log_box.insert("end", msg + "\n")
-        self.log_box.see("end")
-        self.log_box.configure(state="disabled")
+    def _log(self, msg, show=False):
+        self.log_box.appendPlainText(msg)
+        bar = self.log_box.verticalScrollBar()
+        bar.setValue(bar.maximum())
+        if show:   # something to read: open the log
+            self.log_btn.setChecked(True)
 
     def _set_status(self, msg, color=TEXT_DIM):   # color: a theme role
-        self.status_var.set(msg)
+        self.status_lbl.setText(msg)
         self._status_role = color
-        self.status_lbl.config(fg=self.colors[color])
+        self._paint_status()
 
-    # Tkinter is not thread-safe: worker threads must not touch widgets or
-    # Tk variables. They _post() discrete events and overwrite
-    # _latest_progress; the main thread applies both in _poll_ui_queue().
+    def _paint_status(self):
+        self.status_lbl.setStyleSheet(f"color: {self.colors[self._status_role]};")
+
+    def _update_counts(self, *_):
+        rows = self.model.rows
+        done = sum(r.state == "done" for r in rows)
+        self.count_lbl.setText(f"{len(rows)} · {done} completed" if rows else "")
+        running = next((r for r in rows if r.state in ACTIVE), None)
+        speed = re.search(r"[\d.]+ MB/s", running.message) if running else None
+        self.speed_lbl.setText(f"⚡ {speed.group()}" if speed else "")
+
+    # ── Worker threads ──────────────────────────────────────────────────────
+
     def _post(self, func, *args):
-        self._ui_queue.put((func, args))
+        self._call_on_main.emit(func, args)
+
+    def _call(self, func, args):
+        try:
+            func(*args)
+        except Exception:
+            self.report_error(*sys.exc_info())
 
     def _start_worker(self, target, *args):
         self._active_workers += 1
-        if self._after_id is None:
-            self._after_id = self.after(50, self._poll_ui_queue)
         threading.Thread(target=self._run_worker, args=(target, *args),
                          daemon=True).start()
 
@@ -1109,21 +1240,21 @@ class YouTubeDownloader(tk.Tk):
         finally:
             self._post(self._worker_finished)
 
+    def _worker_finished(self):
+        self._active_workers -= 1
+
     def _worker_crashed(self, details):
-        self._log("✘ Unexpected error: " + details.strip().splitlines()[-1])
+        self._log("✘ Unexpected error: " + details.strip().splitlines()[-1], show=True)
         if sys.stderr:   # a console (from source): the full traceback too
             print(details, file=sys.stderr)
 
-    # Tk's default prints the error to stderr, which the windowed .exe doesn't
-    # have; show it in the log as well.
-    def report_callback_exception(self, exc, val, tb):
-        try:
-            self._log("✘ Unexpected error: "
-                      + "".join(traceback.format_exception_only(exc, val)).strip())
-        except tk.TclError:   # the window is already gone
-            pass
+    # An error in a call on the main thread (see also main's excepthook): the
+    # windowed .exe has no console, so it goes to the log.
+    def report_error(self, exc, val, tb):
+        self._log("✘ Unexpected error: "
+                  + "".join(traceback.format_exception_only(exc, val)).strip(), show=True)
         if sys.stderr:
-            super().report_callback_exception(exc, val, tb)
+            traceback.print_exception(exc, val, tb)
 
     # Runs on a worker thread.
     def _find_js_runtime_thread(self):
@@ -1133,75 +1264,13 @@ class YouTubeDownloader(tk.Tk):
     def _js_runtime_found(self, runtime, solver):
         self._js_runtime = runtime
         if runtime is None:
-            self._log(js_runtime_help())
+            self._log(js_runtime_help(), show=True)
         elif solver is None:
-            self._log(js_solver_help())
+            self._log(js_solver_help(), show=True)
 
-    def _worker_finished(self):
-        self._active_workers -= 1
-
-    def _poll_ui_queue(self):
-        self._after_id = None
-        progress = self._latest_progress
-        if progress is not None and progress is not self._shown_progress:
-            self._shown_progress = progress
-            # One that arrives after Cancel mustn't overwrite "Canceling…".
-            if not (self.is_running and self._queue.canceled):
-                self._set_progress(*progress)
-
-        while not self._closing:
-            try:
-                func, args = self._ui_queue.get_nowait()
-            except queue.Empty:
-                break
-            try:
-                func(*args)
-            except Exception:
-                self.report_callback_exception(*sys.exc_info())
-
-        if not self._closing and (self._active_workers or not self._ui_queue.empty()):
-            self._after_id = self.after(50, self._poll_ui_queue)
-
-    def _on_close(self):
-        # During a download, ask first, then cancel it and close once it has
-        # stopped, so its partial files are removed. Closing again while that
-        # runs (e.g. stuck on a slow network request) closes right away.
-        if self.is_running and not self._close_when_stopped:
-            if not messagebox.askyesno(
-                    "Download in progress",
-                    "A download is still running.\n\n"
-                    "Cancel it and close the app?"):
-                return
-            # The download may have finished while the question was open
-            # (Tk keeps running timers meanwhile); then just close.
-            if self.is_running:
-                self._close_when_stopped = True
-                self._preview_cancel.set()
-                if not self._queue.canceled:
-                    self._cancel_download()
-                self._set_status("Canceling… the app closes when it has stopped.",
-                                 WARNING)
-                return
-        self._preview_cancel.set()
-        self._save_settings()
-        self._closing = True
-        for pending in (self._after_id, self._preview_after):
-            if pending is not None:
-                self.after_cancel(pending)
-        self._after_id = self._preview_after = None
-        self.destroy()
-
-    def _set_progress(self, pct, msg, color):
-        self.progress_var.set(pct)
-        self._set_status(msg, color)
-
-    # ── Downloading (the work itself is engine.DownloadQueue) ───────────────
+    # ── Adding links ────────────────────────────────────────────────────────
 
     def _start_download(self):
-        if self.is_running:
-            messagebox.showinfo("Busy", "A download is already in progress.")
-            return
-
         if not engine.YT_DLP_AVAILABLE:
             if self._installing:
                 self._set_status("Installing yt-dlp, please wait…", WARNING)
@@ -1212,234 +1281,305 @@ class YouTubeDownloader(tk.Tk):
         ffmpeg = engine.find_ffmpeg()
         self._ffmpeg_missing = not ffmpeg
         if self._ffmpeg_missing:
-            messagebox.showerror("ffmpeg not found", ffmpeg_help())
+            QMessageBox.critical(self, "ffmpeg not found", ffmpeg_help())
             return
+        self._ffmpeg = ffmpeg
 
-        urls = self._urls()
-        if not urls:
-            messagebox.showwarning("No URL", "Please enter a YouTube URL.")
+        links, not_links = split_links(self.url.text())
+        if not links:
+            QMessageBox.warning(self, "No URL", "Please enter a YouTube URL.")
             return
 
         # A relative folder would save next to wherever the app was started.
-        folder = os.path.expanduser(self.download_path.get().strip())
+        folder = os.path.expanduser(self.path.text().strip())
         if not folder or not os.path.isabs(folder):
-            messagebox.showwarning("Choose a folder",
-                                   "Please choose the folder to save to (Browse).")
+            QMessageBox.warning(self, "Choose a folder",
+                                "Please choose the folder to save to (Browse).")
             return
         folder = os.path.normpath(folder)
-        self.download_path.set(folder)
-
-        # Tk variables are read here, on the main thread; the queue gets values.
-        self._queue = engine.DownloadQueue(
-            urls, fmt=self.format_var.get(), folder=folder,
-            ffmpeg=ffmpeg, whole_playlist=self.playlist_var.get(),
-            js_runtime=self._js_runtime,
-            on_progress=self._job_progress, on_log=self._job_log,
-            ask=self._job_ask)
+        self.path.setText(folder)
         self._save_settings()
-        self.is_running = True
-        self.dl_btn.config(state="normal", text="✖  Cancel", command=self._cancel_download)
-        self.progress_var.set(0)
-        self._set_status("Starting download…", WARNING)
-        self._log(f"▶ {urls[0]}" if len(urls) == 1 else f"▶ {len(urls)} links")
-        not_links = self._not_links()
+
+        fmt = self._chosen_format()
+        thumb = self._thumb_pixels()   # read here: workers mustn't touch widgets
+        added = 0
+        for url in links:
+            if any(r.url == url and r.fmt == fmt and r.state not in FINISHED
+                   for r in self.model.rows):
+                continue   # already waiting or downloading
+            row = Row(url, fmt, folder, self.whole_playlist.isChecked())
+            self.model.add(row)
+            self._start_worker(self._look_up, row, thumb, self._js_runtime)
+            added += 1
         if not_links:
             self._log("• Not links, so left out: " + " ".join(not_links))
-        self._latest_progress = self._shown_progress = None
-        self._last_file = None
-        self.open_btn.grid_remove()
-        self._start_worker(self._run_queue, self._queue)
+        self.url.clear()
+        self.view.scrollToBottom()
+        if added:
+            self._run_next()
+        else:
+            self._set_status("Those links are already in the list.")
 
-    # The queue's callbacks run on the download thread: they only hand things
-    # to the main thread (see _post and _poll_ui_queue).
-    def _job_progress(self, pct, message):
-        self._latest_progress = (pct, message, WARNING)
+    def _thumb_pixels(self):
+        ratio = self.devicePixelRatioF()
+        return round(THUMB.width() * ratio), round(THUMB.height() * ratio)
 
-    def _job_log(self, message):
-        self._post(self._log, message)
+    # Runs on a worker thread: the title, length, channel and thumbnail for
+    # the row, a few links at a time.
+    def _look_up(self, row, thumb, js_runtime):
+        with self._lookup_slots:
+            if row.cancel_event.is_set() or self._closing:
+                return
+            self._post(self._looked_up, row, None)   # "Looking up…"
+            result = engine.preview_link(row.url, row.whole_playlist, row.cancel_event,
+                                         js_runtime, thumb)
+        if result is not None:   # None: canceled
+            text, image, found = result
+            self._post(self._looked_up, row, (text, image and to_qimage(image), found))
 
-    def _job_ask(self, question):
-        return self._ask_on_main("Playlist", question)
+    def _looked_up(self, row, result):
+        if result is None:
+            if row.state == "waiting":
+                row.state = "looking"
+        else:
+            text, image, found = result
+            if row.state == "looking":
+                row.state = "waiting"
+            if found:
+                row.title, _, details = text.partition("\n")
+                row.details = row.details or details
+            elif not row.title:
+                row.details = text
+            if image is not None:
+                row.thumb = QPixmap.fromImage(image)
+        self.model.changed(row)
 
-    # Runs on the download thread. The window hears that the download ended
-    # even if it crashed, after the error is in the log.
-    def _run_queue(self, download):
+    # ── Downloading, one link at a time ─────────────────────────────────────
+
+    def _run_next(self):
+        if self._running is not None or self._closing or self._close_when_stopped:
+            return
+        row = next((r for r in self.model.rows if r.state in ("waiting", "looking")), None)
+        if row is None:
+            self._queue_finished()
+            return
+        self._running = row
+        row.state, row.pct, row.message = "downloading", 0, "Starting…"
+        self.model.changed(row)
+        self._set_status(f"Downloading {self._position(row)}…", WARNING)
+        self._log(f"▶ {row.url}")
+        self._progress_timer.start()
+        self._start_worker(self._run_row, row, self._ffmpeg, self._js_runtime)
+
+    def _position(self, row):
+        """e.g. "2 of 3": where row is among those not finished yet."""
+        todo = [r for r in self.model.rows if r.state not in FINISHED]
+        return f"{todo.index(row) + 1} of {len(todo)}" if len(todo) > 1 else "1 link"
+
+    # Runs on the download thread. The window hears that the row ended even
+    # if it crashed, after the error is in the log.
+    def _run_row(self, row, ffmpeg, js_runtime):
+        job = None
         try:
-            if download.job_options.get("js_runtime") is None:   # installed since startup?
-                download.job_options["js_runtime"] = engine.find_js_runtime()
-            download.run()
+            if js_runtime is None:   # installed since startup?
+                js_runtime = engine.find_js_runtime()
+            job = engine.DownloadJob(
+                row.url, fmt=row.fmt, folder=row.folder, ffmpeg=ffmpeg,
+                whole_playlist=row.whole_playlist,
+                on_progress=lambda pct, msg: setattr(row, "latest", (pct, msg)),
+                on_log=lambda msg: self._post(self._job_log, row, msg),
+                ask=lambda question: self._ask_on_main(row, "Playlist", question),
+                cancel_event=row.cancel_event, js_runtime=js_runtime)
+            row.job = job
+            if not row.cancel_event.is_set():
+                job.run()
         except Exception:
             self._post(self._worker_crashed, traceback.format_exc())
+            job = None
         finally:
-            self._post(self._download_finished, download)
+            self._post(self._download_finished, row, job)
+
+    def _job_log(self, row, msg):
+        row.log.append(msg)
+        self._log(msg)
+
+    # Progress comes often; the newest is shown 10 times a second.
+    def _show_progress(self):
+        row = self._running
+        if row is None or row.latest is None or row.cancel_event.is_set():
+            return   # after Cancel, "Canceling…" stays
+        pct, message = row.latest
+        row.latest = None
+        row.pct = pct
+        row.state = "processing" if "Processing" in message else "downloading"
+        # "Video 2/5 · Downloading… 42.0%  3.4 MB/s · ETA 0:07": the bar and
+        # the percentage show the rest.
+        row.message = re.sub(r"(Downloading… [\d.]+%|Processing…)\s*", "", message).strip(" ·")
+        self.model.changed(row)
+
+    def _download_finished(self, row, job):
+        self._running = None
+        self._progress_timer.stop()
+        row.file = job.last_file if job else None
+        if job is None or job.outcome is None:   # it crashed, or never started
+            if row.cancel_event.is_set():
+                row.state, row.message = "canceled", ""
+            else:   # the error is in the log
+                row.state, row.message = "failed", "An unexpected error (see the log)"
+        elif job.outcome == "canceled":
+            row.state, row.message = "canceled", ""
+            self._log(f"✘ {job.summary()}")
+        elif job.outcome == "failed":
+            row.state, row.message = "failed", job.error or "See the log."
+            if not job.error_logged:
+                self._log(f"✘ {job.summary()}")
+        elif job.outcome == "declined":
+            row.state, row.message = "declined", ""
+            self._log(f"✘ {job.summary()}")
+        else:
+            summary = job.summary()
+            if summary == engine.NOTHING_TO_DOWNLOAD:   # e.g. an empty playlist
+                row.state, row.message = "empty", summary
+                self._log(f"• {summary}")
+            else:
+                row.state, row.message = "done", ""
+                if summary != "Download complete!":   # a playlist: how it went
+                    row.details = summary
+                self._log("✔ Done!" if summary == "Download complete!" else f"✔ {summary}")
+        self.model.changed(row)
+        if self._close_when_stopped:   # the user is closing the app
+            self.close()
+            return
+        self._run_next()
+
+    # Says how the downloads went, once the last one has finished.
+    def _queue_finished(self):
+        finished = [r for r in self.model.rows if r.state in FINISHED]
+        if not finished:
+            return
+        done = sum(r.state == "done" for r in finished)
+        failed = sum(r.state == "failed" for r in finished)
+        if failed and done:
+            self._set_status(f"✔ Done, but {failed} link{'s' * (failed != 1)} failed.",
+                             WARNING)
+        elif failed:
+            self._set_status("✘ The download failed (the row says why).", ERROR)
+        elif done:
+            self._set_status("✔ All downloads complete.", SUCCESS)
+        else:
+            self._set_status("Nothing downloaded.")
+        QApplication.alert(self)   # flashes the taskbar if the window isn't in front
 
     # Runs on the download thread; blocks it until the user answers.
-    def _ask_on_main(self, title, question):
+    def _ask_on_main(self, row, title, question):
         answer, done = [], threading.Event()
 
-        # If the dialog fails, the error goes to the log (the windowed .exe has
-        # no stderr for Tk's report) and the answer is No; either way the
-        # download thread stops waiting.
+        # If the dialog fails, the error goes to the log and the answer is
+        # No; either way the download thread stops waiting.
         def ask():
             try:
-                if self._queue is not None and self._queue.canceled:
+                if row.cancel_event.is_set():
                     answer.append(False)   # canceled before the question showed
                     return
-                answer.append(messagebox.askyesno(title, question))
+                answer.append(QMessageBox.question(self, title, question)
+                              == QMessageBox.Yes)
             except Exception as exc:
-                self._log(f"✘ Couldn't ask about the playlist: {exc}")
+                self._log(f"✘ Couldn't ask about the playlist: {exc}", show=True)
                 raise
             finally:
                 done.set()
 
         self._post(ask)
         while not done.wait(0.1):
-            if self._closing:
+            if self._closing or row.cancel_event.is_set():
                 return False
         return bool(answer and answer[0])
 
-    # The Download button turns into Cancel while a download runs. yt-dlp
-    # stops at its next progress update or status message (also while it
-    # reads a playlist), and a running ffmpeg conversion or merge is stopped.
-    def _cancel_download(self):
-        self._queue.cancel()
-        # A progress update set just before must not overwrite "Canceling…".
-        self._shown_progress = self._latest_progress
-        self.dl_btn.config(state="disabled", text="Canceling…")
-        self._set_status("Canceling…", WARNING)
+    # ── Row actions ─────────────────────────────────────────────────────────
 
-    def _end_download(self):
-        self.is_running = False
-        self.dl_btn.config(state="normal", text="⬇  Download",
-                           command=self._start_download)
+    def _row_action(self, row, action):
+        if action == "cancel":
+            self._cancel_row(row)
+        elif action == "folder":
+            self._open_folder(row)
+        elif action == "remove" and row.state in FINISHED:
+            self.model.remove(row)
 
-    def _download_finished(self, job):   # job: the DownloadQueue
-        self._end_download()
-        if self._close_when_stopped:   # the user is closing the app
-            return self._on_close()
-        self._last_file = job.last_file
-        if job.outcome is None:   # it crashed; the error is in the log
-            self.progress_var.set(0)
-            self._set_status("✘ The download stopped because of an unexpected "
-                             "error (see the log).", ERROR)
-            self._offer_open_folder()
+    # yt-dlp stops at its next progress update or status message (also while
+    # it reads a playlist), and a running ffmpeg conversion or merge is
+    # stopped; the row's partial file is removed.
+    def _cancel_row(self, row):
+        if row.state in FINISHED:
             return
-        summary = job.summary()
-        if job.outcome == "failed":
-            self.progress_var.set(0)
-            self._set_status(f"✘ {summary}", ERROR)
-            if not job.error_logged:
-                self._log(f"✘ {summary}\n")
-            messagebox.showerror("Download Failed", job.error or "See the log for details.")
-        elif job.outcome in ("canceled", "declined"):
-            self.progress_var.set(0)
-            self._set_status(summary)
-            self._log(f"✘ {summary}\n")
-            self._offer_open_folder()
-        else:
-            self.progress_var.set(100)
-            self._set_status(f"✔ {summary}", WARNING if job.had_problems else SUCCESS)
-            self._log("✔ Done!\n" if summary == "Download complete!"
-                      else f"✔ {summary}\n")
-            self._offer_open_folder()
+        row.cancel_event.set()
+        if row is self._running:
+            if row.job is not None:
+                row.job.stop_processes()
+            row.message = "Canceling…"
+        else:   # still waiting: nothing to stop
+            row.state, row.message = "canceled", ""
+        self.model.changed(row)
 
-    # Instead of a "Done" pop-up after every download, the status line says
-    # how it went and offers a button to open the folder.
-    def _offer_open_folder(self):
-        if self._last_file:
-            self.open_btn.grid()
-
-    def _open_folder(self):
-        path = self._last_file
+    def _open_folder(self, row):
+        path = row.file
         if not path or not os.path.isdir(os.path.dirname(path)):
-            messagebox.showerror("Folder not found",
+            QMessageBox.critical(self, "Folder not found",
                                  "The download folder doesn't exist anymore.")
             return
         try:
             reveal_in_file_manager(path)
         except OSError as exc:
-            messagebox.showerror("Couldn't open the folder", str(exc))
+            QMessageBox.critical(self, "Couldn't open the folder", str(exc))
 
-    # ── Link preview ─────────────────────────────────────────────────────────
+    def _clear_finished(self):
+        for row in [r for r in self.model.rows if r.state in FINISHED]:
+            self.model.remove(row)
 
-    # Waits until typing pauses, so not every keystroke starts a lookup.
-    def _schedule_preview(self, _e=None, delay=600):
-        if self._preview_after is not None:
-            self.after_cancel(self._preview_after)
-        self._preview_after = self.after(delay, self._start_preview)
+    # ── Closing ─────────────────────────────────────────────────────────────
 
-    def _start_preview(self):
-        self._preview_after = None
-        urls = self._urls()
-        url = urls[0] if urls else ""
-        key = (tuple(urls), self.playlist_var.get())
-        if key == self._preview_key:
-            return
-        self._preview_key = key
-        self._preview_token += 1
-        self._preview_cancel.set()
-        self._preview_cancel = threading.Event()
-        if not url:
-            text = "That doesn't look like a link." if self._not_links() else PREVIEW_HINT
-            return self._set_preview(text, dim=True)
-        if not url.startswith(("https://", "http://")) or not engine.YT_DLP_AVAILABLE:
-            return self._set_preview("No preview for this link.", dim=True)
-        self._set_preview("Loading preview…", dim=True)
-        self._start_worker(self._preview_thread, url, self.playlist_var.get(),
-                           self._preview_token, len(urls) - 1, self._preview_cancel,
-                           self._js_runtime)
+    def closeEvent(self, event):
+        # During a download, ask first, then cancel it and close once it has
+        # stopped, so its partial file is removed. Closing again while that
+        # runs (e.g. stuck on a slow network request) closes right away.
+        if self._running is not None and not self._close_when_stopped:
+            if QMessageBox.question(self, "Download in progress",
+                                    "A download is still running.\n\n"
+                                    "Cancel it and close the app?") != QMessageBox.Yes:
+                event.ignore()
+                return
+            # The download may have finished while the question was open.
+            if self._running is not None:
+                self._close_when_stopped = True
+                for row in self.model.rows:
+                    self._cancel_row(row)
+                self._set_status("Canceling… the app closes when it has stopped.",
+                                 WARNING)
+                event.ignore()
+                return
+        self._closing = True
+        for row in self.model.rows:
+            row.cancel_event.set()   # stops lookups, and questions waiting
+        self._progress_timer.stop()
+        self._save_settings()
+        event.accept()
 
-    # Runs on a worker thread.
-    def _preview_thread(self, url, whole_playlist, token, more, cancel, js_runtime=None):
-        thumb = tuple(self._px(n) for n in engine.THUMB_SIZE)
-        result = engine.preview_link(url, whole_playlist, cancel, js_runtime, thumb)
-        if result is None:   # a newer link replaced this one
-            return
-        text, image, found = result
-        if more:   # several links: the preview shows the first one
-            text += f"\n+ {more} more link{'s' * (more != 1)}"
-        self._post(self._preview_done, text, image, found, token)
+    def changeEvent(self, event):
+        super().changeEvent(event)
+        if event.type() == QEvent.ActivationChange and self.isActiveWindow():
+            self._recheck_ffmpeg()
 
-    def _preview_done(self, text, image, found, token):
-        if token == self._preview_token:   # drop answers for an older link
-            self._set_preview(text, image, dim=not found)
-
-    # The first line of text is the title; the rest goes under it, dimmer.
-    def _set_preview(self, text, image=None, dim=False):
-        self.preview_text.set(text)
-        title, _, details = text.partition("\n")
-        self.preview_title.set(title)
-        self.preview_details.set(details)
-        self._preview_dim = dim
-        # Some Linux distributions package Pillow's ImageTk separately.
-        show = image is not None and ImageTk is not None
-        self._preview_image = (ImageTk.PhotoImage(rounded(image, self._px(8)), master=self)
-                               if show else None)
-        self._paint_preview()
-
-    def _paint_preview(self):
-        self.preview_lbl.config(fg=self.colors[TEXT_DIM if self._preview_dim else TEXT],
-                                font=(UI_FONT, 10) if self._preview_dim
-                                else (UI_FONT, 11, "bold"))
-        if ImageTk is not None and self._preview_image is None:
-            # An empty thumbnail, in this theme's color.
-            self._thumb_placeholder = ImageTk.PhotoImage(pill_image(
-                *(self._px(n) for n in engine.THUMB_SIZE), self.colors["surface"],
-                self._px(8)), master=self)
-        self.preview_img.config(image=self._preview_image or self._thumb_placeholder or "")
-
-    def _recheck_ffmpeg(self, event=None):
-        # The root's <FocusIn> binding also fires for each child widget.
-        if not self._ffmpeg_missing or (event is not None and event.widget is not self):
+    # Coming back to the window (e.g. after installing ffmpeg) checks again.
+    def _recheck_ffmpeg(self):
+        if not self._ffmpeg_missing:
             return
         ffmpeg = engine.find_ffmpeg()
         if ffmpeg:
             self._ffmpeg_missing = False
             self._log(f"✔ ffmpeg found: {ffmpeg}")
-            if self.status_var.get() == FFMPEG_MISSING_STATUS:
+            if self.status_lbl.text() == FFMPEG_MISSING_STATUS:
                 self._set_status("Ready")
 
-    # ── yt-dlp version and install ───────────────────────────────────────────
+    # ── yt-dlp version, update check and install ────────────────────────────
 
     def _powered_by_text(self):
         version = engine.yt_dlp_version()
@@ -1449,9 +1589,9 @@ class YouTubeDownloader(tk.Tk):
         return f"v{app} · {text}" if app else text
 
     # A release .exe asks GitHub (api.github.com) for its latest release, at
-    # most once a day, while "Check for updates at startup" is ticked.
+    # most once a day, while "Check for updates at startup" is on.
     def _maybe_check_for_update(self):
-        if engine.app_version() is None or not self.update_check_var.get():
+        if engine.app_version() is None or not self._check_updates:
             return
         last = load_settings().get("last_update_check")
         if isinstance(last, (int, float)) and 0 <= time.time() - last < UPDATE_CHECK_INTERVAL:
@@ -1471,7 +1611,7 @@ class YouTubeDownloader(tk.Tk):
         if asked:
             save_settings({**load_settings(), "last_update_check": time.time()})
         if notice:
-            self._log(notice)
+            self._log(notice, show=True)
 
     # The app is tested with the version pinned in requirements.txt; say so
     # if another one is installed (yt-dlp often needs updates for YouTube).
@@ -1484,17 +1624,16 @@ class YouTubeDownloader(tk.Tk):
     def _prompt_install(self):
         if getattr(sys, "frozen", False):
             # The .exe has yt-dlp built in and no pip to install it with.
-            messagebox.showerror(
-                "yt-dlp not found",
+            QMessageBox.critical(
+                self, "yt-dlp not found",
                 "This copy of the app is missing yt-dlp. Please download it again.")
             return
-        ans = messagebox.askyesno(
-            "yt-dlp not found",
+        ans = QMessageBox.question(
+            self, "yt-dlp not found",
             "yt-dlp is required but not installed.\n\n"
             "Install it now with pip?\n\n"
-            f"(You can also run:  {pip_install_command()})"
-        )
-        if ans:
+            f"(You can also run:  {pip_install_command()})")
+        if ans == QMessageBox.Yes:
             self._install_ytdlp()
 
     def _install_ytdlp(self):
@@ -1526,22 +1665,19 @@ class YouTubeDownloader(tk.Tk):
     def _install_done(self, ok, err=None, loaded=False):
         self._installing = False
         if ok and loaded:
-            self.powered_lbl.config(text=self._powered_by_text())
+            self.powered_lbl.setText(self._powered_by_text())
             self._log(f"✔ yt-dlp {engine.yt_dlp_version()} installed and ready.")
             self._set_status("✔ yt-dlp installed. You can download now.", SUCCESS)
-            # What startup skipped without yt-dlp: the JavaScript runtime
-            # check, and the preview of a link that's already entered.
+            # What startup skipped without yt-dlp: the JavaScript runtime check.
             self._start_worker(self._find_js_runtime_thread)
-            self._preview_key = None
-            self._schedule_preview(delay=100)
         elif ok:   # installed, but this Python can't import it until a restart
             self._log("✔ yt-dlp installed! Please restart the app.")
             self._set_status("✔ yt-dlp installed — please restart.", SUCCESS)
-            messagebox.showinfo("Installed",
-                                "yt-dlp was installed successfully.\n"
-                                "Please restart the application.")
+            QMessageBox.information(self, "Installed",
+                                    "yt-dlp was installed successfully.\n"
+                                    "Please restart the application.")
         else:
-            self._log(f"✘ Install failed: {err}")
+            self._log(f"✘ Install failed: {err}", show=True)
             self._set_status(f"Install failed. Try: {pip_install_command()}", ERROR)
 
 
@@ -1549,6 +1685,7 @@ def self_check(path):
     """Writes what this build found to a JSON file, then exits. Used to test
     the one-file .exe (packaging/build_exe.py --check), where there's no
     console to print to."""
+    application()   # Qt finds its plugins (e.g. SVG) through the application
     ffmpeg = engine.find_ffmpeg()
     ffmpeg_version = None
     if ffmpeg:
@@ -1572,23 +1709,49 @@ def self_check(path):
               "deno_bundled": engine.bundled_deno() is not None,
               "js_solver": engine.js_solver_version(),
               "yt_dlp_extras_missing": engine.missing_yt_dlp_extras(),
-              "thumbnails": ImageTk is not None and engine.Image is not None}
+              "thumbnails": engine.Image is not None,
+              # The style sheet's switches and arrows are SVG images.
+              "svg_images": b"svg" in [bytes(f) for f in
+                                       QImageReader.supportedImageFormats()]}
     try:
-        app = YouTubeDownloader(update_check=False)   # also checks that Tk works
-        app.update()
-        result["window"] = app.title()
-        app.destroy()
-    except tk.TclError as exc:
+        window = YouTubeDownloader(update_check=False)   # also checks that Qt works
+        window.show()
+        application().processEvents()
+        result["window"] = window.windowTitle()
+        window.hide()   # not close(): that would save the settings
+    except Exception as exc:
         result["window"] = f"failed: {exc}"
     with open(path, "w", encoding="utf-8") as f:
         json.dump(result, f, indent=2)
 
 
 # ── Entry point ─────────────────────────────────────────────────────────────
+def main():
+    if sys.platform == "win32":
+        # The taskbar shows the app's own icon, not Python's.
+        try:
+            ctypes.windll.shell32.SetCurrentProcessExplicitAppUserModelID(
+                "lifeupnorth.YTDownloader")
+        except (AttributeError, OSError):
+            pass
+    app = application(sys.argv)
+    window = YouTubeDownloader()
+
+    # An error in a Qt callback ends up here: the windowed .exe has no
+    # console, so it goes to the log as well.
+    def excepthook(exc, val, tb):
+        try:
+            window.report_error(exc, val, tb)
+        except RuntimeError:   # the window is already gone
+            sys.__excepthook__(exc, val, tb)
+
+    sys.excepthook = excepthook
+    window.show()
+    return app.exec()
+
+
 if __name__ == "__main__":
     if len(sys.argv) == 3 and sys.argv[1] == "--self-check":
         self_check(sys.argv[2])
     else:
-        enable_dpi_awareness()
-        app = YouTubeDownloader()
-        app.mainloop()
+        sys.exit(main())

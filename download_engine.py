@@ -1,9 +1,9 @@
 """Downloading with yt-dlp, without any UI.
 
-DownloadJob downloads one link (a video, playlist or channel) and
-DownloadQueue runs several in a row. They run on a worker thread and report
-through plain callbacks, so they can be used and tested without Tk. The
-window (youtube_downloader.py) turns those callbacks into screen updates.
+DownloadJob downloads one link (a video, playlist or channel). It runs on a
+worker thread and reports through plain callbacks, so it can be used and
+tested without Qt. The window (youtube_downloader.py) runs one job per link
+in its Downloads list and turns the callbacks into screen updates.
 """
 
 import functools
@@ -29,8 +29,8 @@ except ImportError:
     yt_dlp = None   # load_yt_dlp() can import it later, after an install
     YT_DLP_AVAILABLE = False
 
-# Optional: without Pillow, link previews show text but no thumbnail
-# (YouTube thumbnails are JPEG/WebP, which Tk can't show by itself).
+# Optional: Pillow reads YouTube's thumbnails (JPEG or WebP) and shrinks them;
+# without it the Downloads list shows titles but no thumbnails.
 try:
     from PIL import Image
 except ImportError:
@@ -430,7 +430,7 @@ def _follow_url_results(ydl, info):
 
 # ── Link preview ─────────────────────────────────────────────────────────────
 
-THUMB_SIZE = (160, 90)
+THUMB_SIZE = (128, 72)   # in the Downloads list, at 96 DPI
 
 
 def describe_info(info):
@@ -450,10 +450,11 @@ def describe_info(info):
     return f"{title}\n{details}" if details else title
 
 
-def thumbnail_url(info):
-    """The smallest thumbnail at least 160 px wide, else the default one."""
+def thumbnail_url(info, width=160):
+    """The smallest thumbnail at least width px wide (more on a high-DPI
+    screen), else the default one."""
     thumbs = [t for t in info.get("thumbnails") or ()
-              if t.get("url") and (t.get("width") or 0) >= 160]
+              if t.get("url") and (t.get("width") or 0) >= width]
     if thumbs:
         return min(thumbs, key=lambda t: t["width"])["url"]
     return info.get("thumbnail")
@@ -514,7 +515,8 @@ def preview_link(url, whole_playlist, cancel_event=None, js_runtime=None,
         return None
     if not info:
         return "Couldn't load a preview for this link.", None, False
-    image = fetch_thumbnail(thumbnail_url(info), canceled, thumb_size)
+    image = fetch_thumbnail(thumbnail_url(info, max(160, thumb_size[0])), canceled,
+                            thumb_size)
     if canceled():
         return None
     return describe_info(info), image, True
@@ -802,139 +804,3 @@ class DownloadJob:
         if self.skipped:
             parts.append(f"{len(self.skipped)} skipped")
         return "Done: " + ", ".join(parts)
-
-
-class DownloadQueue:
-    """Downloads several links one after the other (also used for just one).
-
-    A link that fails, or whose playlist isn't confirmed, doesn't stop the
-    others; cancel() stops the current link and skips the rest. It takes the
-    same callbacks and options as DownloadJob, and with several links its
-    progress messages start with "Link 2/3 · ". Its result has the same
-    shape as a job's: outcome, summary(), counts, error, last_file.
-    """
-
-    def __init__(self, urls, *, on_progress, on_log, **job_options):
-        self.urls = list(urls)
-        self.jobs = []
-        self._on_progress, self._on_log = on_progress, on_log
-        self.job_options = job_options   # passed to each DownloadJob
-        self._cancel = threading.Event()
-
-    def cancel(self):
-        self._cancel.set()
-        for job in self.jobs[-1:]:   # the running one
-            job.stop_processes()
-
-    @property
-    def canceled(self):
-        return self._cancel.is_set()
-
-    def run(self):
-        total = len(self.urls)
-        for number, url in enumerate(self.urls, 1):
-            if self.canceled:
-                break
-            prefix = f"Link {number}/{total} · " if total > 1 else ""
-            if total > 1:
-                self._on_log(f"▶ Link {number}/{total}: {url}")
-            job = DownloadJob(
-                url, cancel_event=self._cancel, on_log=self._on_log,
-                on_progress=lambda pct, msg, prefix=prefix: self._on_progress(
-                    pct, prefix + msg),
-                **self.job_options)
-            self.jobs.append(job)
-            try:
-                job.run()
-            except Exception as exc:   # a bug, not a download problem
-                job.outcome = "failed"
-                job.error = f"Unexpected error: {type(exc).__name__}: {exc}"
-            if total > 1 and job.outcome == "failed" and not job.error_logged:
-                self._on_log(f"✘ {job.summary()}")
-        return self.outcome
-
-    # ── The combined result ──
-
-    @property
-    def outcome(self):
-        # A cancel only counts if it stopped something: clicked just as the
-        # last link finished, the result is that link's.
-        if self.canceled and (len(self.jobs) < len(self.urls)
-                              or self.jobs[-1].outcome == "canceled"):
-            return "canceled"
-        outcomes = [job.outcome for job in self.jobs]
-        if not outcomes:   # it never ran, or crashed before the first link
-            return None
-        if len(outcomes) == 1:
-            return outcomes[0]
-        if "done" in outcomes:
-            return "done"
-        return "declined" if set(outcomes) == {"declined"} else "failed"
-
-    def _total(self, name):
-        return sum(getattr(job, name) for job in self.jobs)
-
-    @property
-    def saved(self):
-        return self._total("saved")
-
-    @property
-    def already(self):
-        return self._total("already")
-
-    @property
-    def removed(self):
-        return self._total("removed")
-
-    @property
-    def skipped(self):
-        # Entries skipped within links that worked. A link where nothing
-        # worked counts as a failed link instead, not also as skipped entries.
-        return [msg for job in self.jobs if job.outcome != "failed"
-                for msg in job.skipped]
-
-    @property
-    def last_file(self):
-        files = [job.last_file for job in self.jobs if job.last_file]
-        return files[-1] if files else None
-
-    def _with(self, outcome):
-        return [job for job in self.jobs if job.outcome == outcome]
-
-    @property
-    def error(self):
-        failed = self._with("failed")
-        return failed[0].error if failed else None
-
-    @property
-    def error_logged(self):
-        # With several links, each failure is logged as it happens.
-        if len(self.jobs) == 1:
-            return self.jobs[0].error_logged
-        return True
-
-    @property
-    def had_problems(self):
-        """Something didn't work, though the outcome may still be "done"."""
-        nothing = self.outcome == "done" and not (self.saved or self.already)
-        return bool(self.skipped or self._with("failed") or self._with("declined")
-                    or nothing)
-
-    def summary(self):
-        """How it went, for the status line, e.g. "Done: 3 saved, 1 link failed"."""
-        if len(self.urls) == 1 and self.jobs:
-            return self.jobs[0].summary()
-        if self.outcome == "canceled":
-            return _canceled_summary(self.saved, self.removed)
-        parts = [f"{self.saved} saved"] if self.saved or self.outcome == "done" else []
-        if self.already:
-            parts.append(f"{self.already} already downloaded")
-        if self.skipped:
-            parts.append(f"{len(self.skipped)} skipped")
-        for outcome, what in (("failed", "link{} failed"),
-                              ("declined", "playlist{} not downloaded")):
-            count = len(self._with(outcome))
-            if count:
-                parts.append(f"{count} " + what.format("s" * (count != 1)))
-        head = "Done" if self.outcome == "done" else "Nothing downloaded"
-        return f"{head}: " + ", ".join(parts)
