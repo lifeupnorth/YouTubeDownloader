@@ -3,10 +3,10 @@
 <details>
 <summary>Relevant source files</summary>
 
-- [download_engine.py](https://github.com/lifeupnorth/YouTubeDownloader/blob/b369bd269cac691e2563e27391dbd3702c986e50/download_engine.py)
-- [youtube_downloader.py](https://github.com/lifeupnorth/YouTubeDownloader/blob/b369bd269cac691e2563e27391dbd3702c986e50/youtube_downloader.py)
-- [tests/test_engine.py](https://github.com/lifeupnorth/YouTubeDownloader/blob/b369bd269cac691e2563e27391dbd3702c986e50/tests/test_engine.py)
-- [packaging/build_exe.py](https://github.com/lifeupnorth/YouTubeDownloader/blob/b369bd269cac691e2563e27391dbd3702c986e50/packaging/build_exe.py)
+- [download_engine.py](https://github.com/lifeupnorth/YouTubeDownloader/blob/47e016f109accff408446b290ced9684d980c667/download_engine.py)
+- [youtube_downloader.py](https://github.com/lifeupnorth/YouTubeDownloader/blob/47e016f109accff408446b290ced9684d980c667/youtube_downloader.py)
+- [tests/test_engine.py](https://github.com/lifeupnorth/YouTubeDownloader/blob/47e016f109accff408446b290ced9684d980c667/tests/test_engine.py)
+- [packaging/build_exe.py](https://github.com/lifeupnorth/YouTubeDownloader/blob/47e016f109accff408446b290ced9684d980c667/packaging/build_exe.py)
 
 </details>
 
@@ -31,7 +31,7 @@ The window has two drop-downs: **Format** (`FORMATS`: MP4 video, MP3 audio, M4A 
 
 Any other value raises `ValueError`.
 
-Sources: [download_engine.py:164-210](https://github.com/lifeupnorth/YouTubeDownloader/blob/b369bd269cac691e2563e27391dbd3702c986e50/download_engine.py#L164-L210), [download_engine.py:592-593](https://github.com/lifeupnorth/YouTubeDownloader/blob/b369bd269cac691e2563e27391dbd3702c986e50/download_engine.py#L592-L593), [youtube_downloader.py:51-59](https://github.com/lifeupnorth/YouTubeDownloader/blob/b369bd269cac691e2563e27391dbd3702c986e50/youtube_downloader.py#L51-L59), [youtube_downloader.py:675-680](https://github.com/lifeupnorth/YouTubeDownloader/blob/b369bd269cac691e2563e27391dbd3702c986e50/youtube_downloader.py#L675-L680)
+Sources: [download_engine.py:173-221](https://github.com/lifeupnorth/YouTubeDownloader/blob/47e016f109accff408446b290ced9684d980c667/download_engine.py#L173-L221), [download_engine.py:717](https://github.com/lifeupnorth/YouTubeDownloader/blob/47e016f109accff408446b290ced9684d980c667/download_engine.py#L717), [youtube_downloader.py:150-156](https://github.com/lifeupnorth/YouTubeDownloader/blob/47e016f109accff408446b290ced9684d980c667/youtube_downloader.py#L150-L156), [youtube_downloader.py:402](https://github.com/lifeupnorth/YouTubeDownloader/blob/47e016f109accff408446b290ced9684d980c667/youtube_downloader.py#L402), [youtube_downloader.py:1178-1185](https://github.com/lifeupnorth/YouTubeDownloader/blob/47e016f109accff408446b290ced9684d980c667/youtube_downloader.py#L1178-L1185), [youtube_downloader.py:1315-1330](https://github.com/lifeupnorth/YouTubeDownloader/blob/47e016f109accff408446b290ced9684d980c667/youtube_downloader.py#L1315-L1330), [youtube_downloader.py:1678-1700](https://github.com/lifeupnorth/YouTubeDownloader/blob/47e016f109accff408446b290ced9684d980c667/youtube_downloader.py#L1678-L1700)
 
 ### Why sort instead of filter
 
@@ -54,7 +54,7 @@ flowchart LR
     isM4a -- no --> err["ValueError"]
 ```
 
-Sources: [download_engine.py:166-190](https://github.com/lifeupnorth/YouTubeDownloader/blob/b369bd269cac691e2563e27391dbd3702c986e50/download_engine.py#L166-L190), [tests/test_engine.py:85-134](https://github.com/lifeupnorth/YouTubeDownloader/blob/b369bd269cac691e2563e27391dbd3702c986e50/tests/test_engine.py#L85-L134)
+Sources: [download_engine.py:173-177](https://github.com/lifeupnorth/YouTubeDownloader/blob/47e016f109accff408446b290ced9684d980c667/download_engine.py#L173-L177), [download_engine.py:180-221](https://github.com/lifeupnorth/YouTubeDownloader/blob/47e016f109accff408446b290ced9684d980c667/download_engine.py#L180-L221), [tests/test_engine.py:85-152](https://github.com/lifeupnorth/YouTubeDownloader/blob/47e016f109accff408446b290ced9684d980c667/tests/test_engine.py#L85-L152)
 
 ## Finding ffmpeg: `find_ffmpeg`
 
@@ -66,7 +66,7 @@ Sources: [download_engine.py:166-190](https://github.com/lifeupnorth/YouTubeDown
 
 Steps 2 and 3 are `_which()`, which `find_js_runtime()` also uses for deno, node and bun. The third step matters because installers such as winget, Chocolatey or Scoop update the saved `Path`, but a running process keeps its old copy; without it, the user would have to restart the app after installing ffmpeg. `winreg` is imported inside `_registry_path()`, so the module still imports on macOS and Linux. The path that's found becomes yt-dlp's `ffmpeg_location`.
 
-Sources: [download_engine.py:220-265](https://github.com/lifeupnorth/YouTubeDownloader/blob/b369bd269cac691e2563e27391dbd3702c986e50/download_engine.py#L220-L265), [download_engine.py:593](https://github.com/lifeupnorth/YouTubeDownloader/blob/b369bd269cac691e2563e27391dbd3702c986e50/download_engine.py#L593), [packaging/build_exe.py:126-130](https://github.com/lifeupnorth/YouTubeDownloader/blob/b369bd269cac691e2563e27391dbd3702c986e50/packaging/build_exe.py#L126-L130), [tests/test_engine.py:197-229](https://github.com/lifeupnorth/YouTubeDownloader/blob/b369bd269cac691e2563e27391dbd3702c986e50/tests/test_engine.py#L197-L229)
+Sources: [download_engine.py:233-247](https://github.com/lifeupnorth/YouTubeDownloader/blob/47e016f109accff408446b290ced9684d980c667/download_engine.py#L233-L247), [download_engine.py:250-276](https://github.com/lifeupnorth/YouTubeDownloader/blob/47e016f109accff408446b290ced9684d980c667/download_engine.py#L250-L276), [download_engine.py:306-313](https://github.com/lifeupnorth/YouTubeDownloader/blob/47e016f109accff408446b290ced9684d980c667/download_engine.py#L306-L313), [download_engine.py:718](https://github.com/lifeupnorth/YouTubeDownloader/blob/47e016f109accff408446b290ced9684d980c667/download_engine.py#L718), [packaging/build_exe.py:117-122](https://github.com/lifeupnorth/YouTubeDownloader/blob/47e016f109accff408446b290ced9684d980c667/packaging/build_exe.py#L117-L122), [tests/test_engine.py:215-247](https://github.com/lifeupnorth/YouTubeDownloader/blob/47e016f109accff408446b290ced9684d980c667/tests/test_engine.py#L215-L247), [tests/test_engine.py:279-283](https://github.com/lifeupnorth/YouTubeDownloader/blob/47e016f109accff408446b290ced9684d980c667/tests/test_engine.py#L279-L283)
 
 ## When ffmpeg is missing
 
@@ -74,8 +74,8 @@ Sources: [download_engine.py:220-265](https://github.com/lifeupnorth/YouTubeDown
 |---|---|
 | Startup | The status line shows `FFMPEG_MISSING_STATUS` ("ffmpeg not found: see the log"), and the log opens with `ffmpeg_help(startup=True)`. There's no modal dialog, so it can't stack with the yt-dlp install prompt. |
 | Window activated | `changeEvent` calls `_recheck_ffmpeg` whenever the window becomes the active one (`QEvent.ActivationChange`), which checks again while ffmpeg is missing. Once found, it logs `✔ ffmpeg found: <path>` and resets the status to "Ready" if the warning is still showing. |
-| Download clicked | `_start_download` shows an error dialog with `ffmpeg_help()` and doesn't start. |
+| Download clicked, or links dropped | `_can_download` shows an error dialog with `ffmpeg_help()`, and nothing is added. |
 
 In the .exe the bundled ffmpeg is found first, so this normally only comes up when running from source. `ffmpeg_help` takes the install command from `_ffmpeg_install_hint()`, which picks it from `sys.platform`: `winget install ffmpeg` on Windows, `brew install ffmpeg` on macOS, otherwise e.g. `sudo apt install ffmpeg`. Its last sentence differs for startup and for a Download click.
 
-Sources: [youtube_downloader.py:49](https://github.com/lifeupnorth/YouTubeDownloader/blob/b369bd269cac691e2563e27391dbd3702c986e50/youtube_downloader.py#L49), [youtube_downloader.py:142-147](https://github.com/lifeupnorth/YouTubeDownloader/blob/b369bd269cac691e2563e27391dbd3702c986e50/youtube_downloader.py#L142-L147), [youtube_downloader.py:168-173](https://github.com/lifeupnorth/YouTubeDownloader/blob/b369bd269cac691e2563e27391dbd3702c986e50/youtube_downloader.py#L168-L173), [youtube_downloader.py:215-218](https://github.com/lifeupnorth/YouTubeDownloader/blob/b369bd269cac691e2563e27391dbd3702c986e50/youtube_downloader.py#L215-L218), [youtube_downloader.py:225](https://github.com/lifeupnorth/YouTubeDownloader/blob/b369bd269cac691e2563e27391dbd3702c986e50/youtube_downloader.py#L225), [youtube_downloader.py:663-667](https://github.com/lifeupnorth/YouTubeDownloader/blob/b369bd269cac691e2563e27391dbd3702c986e50/youtube_downloader.py#L663-L667), [youtube_downloader.py:849-858](https://github.com/lifeupnorth/YouTubeDownloader/blob/b369bd269cac691e2563e27391dbd3702c986e50/youtube_downloader.py#L849-L858)
+Sources: [youtube_downloader.py:148](https://github.com/lifeupnorth/YouTubeDownloader/blob/47e016f109accff408446b290ced9684d980c667/youtube_downloader.py#L148), [youtube_downloader.py:274-279](https://github.com/lifeupnorth/YouTubeDownloader/blob/47e016f109accff408446b290ced9684d980c667/youtube_downloader.py#L274-L279), [youtube_downloader.py:300-305](https://github.com/lifeupnorth/YouTubeDownloader/blob/47e016f109accff408446b290ced9684d980c667/youtube_downloader.py#L300-L305), [youtube_downloader.py:1084-1087](https://github.com/lifeupnorth/YouTubeDownloader/blob/47e016f109accff408446b290ced9684d980c667/youtube_downloader.py#L1084-L1087), [youtube_downloader.py:1487-1513](https://github.com/lifeupnorth/YouTubeDownloader/blob/47e016f109accff408446b290ced9684d980c667/youtube_downloader.py#L1487-L1513), [youtube_downloader.py:1949-1963](https://github.com/lifeupnorth/YouTubeDownloader/blob/47e016f109accff408446b290ced9684d980c667/youtube_downloader.py#L1949-L1963)
