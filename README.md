@@ -1,6 +1,11 @@
 # YouTubeDownloader
 A small app to download YouTube videos written in Python.
 
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="docs/images/window-dark.png">
+  <img src="docs/images/window-light.png" width="800" alt="The YT Downloader window: links go in at the top, and the Downloads list below shows each video with its thumbnail, format, quality, progress and status (one completed, two downloading, one paused, one waiting).">
+</picture>
+
 ## Requirements
 
 - **Python 3.12 or newer**. On older versions, Qt for Python (PySide6) makes Python crash on Linux a few minutes into a download. The .exe includes Python.
