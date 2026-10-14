@@ -54,9 +54,8 @@ class CheckPinsTest(unittest.TestCase):
     def test_deno_versions_compare_without_the_v(self):
         found = self.run_updates(release(build_exe.FFMPEG_VERSION),
                                  release("v2.10.0", [(build_exe.DENO_ZIP, "ef" * 32)]))
+        # Compared as numbers: as text, "2.10.0" would come before "2.9.7".
         self.assertEqual([(u["name"], u["latest"]) for u in found], [("deno", "2.10.0")])
-        self.assertTrue(check_pins.newer("2.10.0", "2.9.7"), "not compared as text")
-        self.assertFalse(check_pins.newer("2.9.7", "2.9.7"))
 
     def test_an_issue_is_opened_once(self):
         update = self.run_updates(

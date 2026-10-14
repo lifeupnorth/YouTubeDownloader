@@ -9,13 +9,16 @@ week and opens an issue for each update:
 """
 import json
 import os
-import re
 import subprocess
 import sys
 import urllib.request
 
+# build_exe next to this file, and the app's download_engine above it.
+sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import build_exe
+
+from download_engine import newer_version
 
 # name: (GitHub repository, pinned version, the zip build_exe.py downloads,
 #        where the trustworthy checksum is published)
@@ -39,12 +42,6 @@ def _get_json(url):
         return json.load(response)
 
 
-def newer(latest, pinned):
-    def parts(version):
-        return tuple(int(p) for p in re.findall("[0-9]+", version))
-    return parts(latest) > parts(pinned)
-
-
 def updates():
     """[{name, pinned, latest, url, sha256, ...}] for each program with a
     newer release."""
@@ -52,7 +49,7 @@ def updates():
     for name, (repo, pinned, zip_name, checksum_source, constants) in PROGRAMS.items():
         release = _get_json(f"https://api.github.com/repos/{repo}/releases/latest")
         latest = release["tag_name"].removeprefix("v")
-        if not newer(latest, pinned):
+        if not newer_version(latest, pinned):
             continue
         wanted = zip_name.format(version=latest)
         asset = next((a for a in release.get("assets", []) if a["name"] == wanted), {})

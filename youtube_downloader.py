@@ -369,6 +369,20 @@ for _name, (_text, _key, _keys) in ROW_ACTIONS.items():
         ACTION_KEYS.setdefault(_qt_key, []).append(_name)
 
 
+def progress_text(progress):
+    """A downloading row's message, e.g. "Video 2/5 · 3.4 MB/s · ETA 0:07":
+    the bar, its percentage and the Status column show the rest."""
+    parts = []
+    if progress.video and progress.videos:
+        parts.append(f"Video {progress.video}/{progress.videos}")
+    if not progress.processing:
+        if progress.speed > 0:
+            parts.append(f"{progress.speed / 1024 / 1024:.1f} MB/s")
+        if progress.eta > 0:
+            parts.append(f"ETA {engine.format_eta(progress.eta)}")
+    return " · ".join(parts)
+
+
 def bar_percent(row):
     """How full a row's progress bar is, or None for an empty bar with no
     percentage: only a download in progress, paused partway or done shows
@@ -411,6 +425,7 @@ class Row:
     state: str = "waiting"
     pct: float = 0
     message: str = ""        # speed and ETA, or why it failed
+    speed: float = 0         # bytes a second while it downloads
     file: str | None = None  # the last file it saved (or found already there)
     restored: bool = False   # from the list saved by an earlier run
     partial_files: list[str] = field(default_factory=list)   # kept by a pause
@@ -418,8 +433,8 @@ class Row:
     cancel_event: threading.Event = field(default_factory=threading.Event)
     pause_event: threading.Event = field(default_factory=threading.Event)
     job: engine.DownloadJob | None = None
-    latest: tuple[float, str] | None = None
-    shown: tuple[float, str] | None = None   # the `latest` on screen now
+    latest: engine.Progress | None = None
+    shown: engine.Progress | None = None   # the `latest` on screen now
 
     @property
     def format_label(self):
@@ -1483,9 +1498,8 @@ class YouTubeDownloader(QMainWindow):
         done = sum(r.state == "done" for r in rows)
         self.count_lbl.setText(f"{len(rows)} · {done} completed" if rows else "")
         # The downloads running now, together.
-        speeds = [float(m.group(1)) for r in rows if r.state in ACTIVE
-                  for m in [re.search(r"([\d.]+) MB/s", r.message)] if m]
-        self.speed_lbl.setText(f"⚡ {sum(speeds):.1f} MB/s" if speeds else "")
+        speed = sum(r.speed for r in rows if r.state in ACTIVE)
+        self.speed_lbl.setText(f"⚡ {speed / 1024 / 1024:.1f} MB/s" if speed > 0 else "")
 
     # ── Worker threads ──────────────────────────────────────────────────────
 
@@ -1754,7 +1768,7 @@ class YouTubeDownloader(QMainWindow):
             job = engine.DownloadJob(
                 row.url, fmt=row.fmt, folder=row.folder, ffmpeg=ffmpeg,
                 whole_playlist=row.whole_playlist,
-                on_progress=lambda pct, msg: setattr(row, "latest", (pct, msg)),
+                on_progress=lambda progress: setattr(row, "latest", progress),
                 on_log=lambda msg: self._post(self._job_log, row, msg),
                 ask=lambda question: self._ask_on_main(row, "Playlist", question),
                 cancel_event=row.cancel_event, pause_event=row.pause_event,
@@ -1782,17 +1796,15 @@ class YouTubeDownloader(QMainWindow):
                     or row.pause_event.is_set()):
                 continue   # after Cancel or Pause, "Canceling…" or "Pausing…" stays
             row.shown = latest
-            pct, message = latest
-            row.pct = pct
-            row.state = "processing" if "Processing" in message else "downloading"
-            # "Video 2/5 · Downloading… 42.0%  3.4 MB/s · ETA 0:07": the bar and
-            # the percentage show the rest.
-            row.message = re.sub(r"(Downloading… [\d.]+%|Processing…)\s*", "",
-                                 message).strip(" ·")
+            row.pct = latest.percent
+            row.state = "processing" if latest.processing else "downloading"
+            row.speed = 0 if latest.processing else latest.speed
+            row.message = progress_text(latest)
             self.model.changed(row)
 
     def _download_finished(self, row, job):
         self._running.discard(row)
+        row.speed = 0
         if not self._running:
             self._progress_timer.stop()
         # (A resumed download that saves nothing new keeps an earlier file.)
@@ -1813,7 +1825,7 @@ class YouTubeDownloader(QMainWindow):
         elif job.outcome == "paused":
             row.state, row.message = "paused", ""
             if row.latest:   # where it stopped, if the timer hadn't shown it yet
-                row.pct = row.latest[0]
+                row.pct = row.latest.percent
             row.partial_files = job.partial_files
             self._log(f"• {job.summary()}")
         elif job.outcome == "failed":
@@ -1922,7 +1934,7 @@ class YouTubeDownloader(QMainWindow):
         if row in self._running:
             if row.job is not None:
                 row.job.stop_processes()
-            row.message = "Canceling…"
+            row.message, row.speed = "Canceling…", 0
         else:   # waiting or paused: nothing to stop
             row.state, row.message = "canceled", ""
             if row.partial_files:
@@ -1941,7 +1953,7 @@ class YouTubeDownloader(QMainWindow):
         if row in self._running:
             if row.job is not None:
                 row.job.stop_processes()
-            row.message = "Pausing…"
+            row.message, row.speed = "Pausing…", 0
         else:
             row.state, row.message = "paused", ""
             self._history_changed()
