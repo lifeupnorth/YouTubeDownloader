@@ -820,6 +820,23 @@ class DownloadJobTest(unittest.TestCase):
         job._file_done({"filepath": "v.mp4", "__real_download": True})
         self.assertEqual(job._earlier_files, set())
 
+    def test_a_conversion_of_a_kept_stream_is_saved(self):
+        # Paused while ffmpeg made the MP3: the .webm was kept. yt-dlp then
+        # finds it there, says it wasn't downloaded, and converts it.
+        with tempfile.TemporaryDirectory() as tmp:
+            stream = os.path.join(tmp, "v.webm")
+            open(stream, "wb").close()
+            job = make_job(folder=tmp, fmt="mp3", partial_files=[stream, stream + ".part"])
+            job._file_done({"filepath": os.path.join(tmp, "old.mp3"),
+                            "__real_download": False})
+            self.assertEqual((job.saved, job.already), (0, 1), "its stream is still there")
+            os.remove(stream)   # what the conversion does once it's done
+            job._file_done({"filepath": os.path.join(tmp, "v.mp3"),
+                            "__real_download": False})
+        self.assertEqual((job.saved, job.already), (1, 1))
+        self.assertEqual(job._earlier_files, set())
+        self.assertIn(f"✔ Saved: {os.path.join(tmp, 'v.mp3')}", job.log)
+
     def test_a_question_cut_short_by_pause_isnt_a_no(self):
         job = make_job(ask=lambda question: job.pause() or False)
         self.run_job(make_fake_ydl(streams=1, probe=("playlist",)), job=job)

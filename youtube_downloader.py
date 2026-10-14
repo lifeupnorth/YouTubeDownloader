@@ -230,9 +230,10 @@ def save_history(entries):
 UPDATE_CHECK_INTERVAL = 24 * 60 * 60   # seconds
 
 
-# A word that looks like a link without "https://": a host name and,
-# optionally, a path ("youtu.be/abc", "www.youtube.com/watch?v=abc").
-_BARE_LINK = re.compile(r"(?:[\w-]+\.)+[a-z]{2,}(?::\d+)?(?:[/?#]\S*)?", re.IGNORECASE)
+# A word that looks like a link without "https://": a host name and a path
+# ("youtu.be/abc", "www.youtube.com/watch?v=abc"). Without the path, file
+# and product names ("readme.md", "Node.js") would pass for host names.
+_BARE_LINK = re.compile(r"(?:[\w-]+\.)+[a-z]{2,}(?::\d+)?[/?#]\S*", re.IGNORECASE)
 
 
 def split_links(text):
@@ -418,6 +419,7 @@ class Row:
     pause_event: threading.Event = field(default_factory=threading.Event)
     job: engine.DownloadJob | None = None
     latest: tuple[float, str] | None = None
+    shown: tuple[float, str] | None = None   # the `latest` on screen now
 
     @property
     def format_label(self):
@@ -1399,7 +1401,10 @@ class YouTubeDownloader(QMainWindow):
     def _parallel_changed(self):
         self._parallel = self.parallel.currentData()
         self._save_settings()
-        self._run_next()
+        # With none running, none waits either: _run_next would only say
+        # again how the last downloads went (and flash the taskbar).
+        if self._running:
+            self._run_next()
 
     # ── Themes ──────────────────────────────────────────────────────────────
 
@@ -1770,11 +1775,14 @@ class YouTubeDownloader(QMainWindow):
     # Progress comes often; the newest is shown 10 times a second.
     def _show_progress(self):
         for row in list(self._running):
-            if (row.latest is None or row.cancel_event.is_set()
+            # Read once and never cleared here: the download thread may set
+            # a newer one at any moment, which clearing could wipe out.
+            latest = row.latest
+            if (latest is None or latest is row.shown or row.cancel_event.is_set()
                     or row.pause_event.is_set()):
                 continue   # after Cancel or Pause, "Canceling…" or "Pausing…" stays
-            pct, message = row.latest
-            row.latest = None
+            row.shown = latest
+            pct, message = latest
             row.pct = pct
             row.state = "processing" if "Processing" in message else "downloading"
             # "Video 2/5 · Downloading… 42.0%  3.4 MB/s · ETA 0:07": the bar and
@@ -1792,6 +1800,9 @@ class YouTubeDownloader(QMainWindow):
         if job is None or job.outcome is None:   # it crashed, or never started
             if row.cancel_event.is_set():
                 row.state, row.message = "canceled", ""
+                if row.partial_files:   # a resumed row, canceled before it ran
+                    removed = engine.remove_partial_files(row.partial_files, self._log)
+                    self._log(f"✘ {engine.canceled_summary(0, removed)}")
             elif row.pause_event.is_set():
                 row.state, row.message = "paused", ""
             else:   # the error is in the log
@@ -1824,6 +1835,8 @@ class YouTubeDownloader(QMainWindow):
                 self._log("✔ Done!" if summary == "Download complete!" else f"✔ {summary}")
         if row.state != "paused":   # removed, continued, or of no use now
             row.partial_files = []
+        # The job is over: its last progress mustn't show when it's resumed.
+        row.latest = row.shown = None
         self.model.changed(row)
         self._history_changed()
         if self._close_when_stopped:   # the user is closing the app
@@ -1853,16 +1866,17 @@ class YouTubeDownloader(QMainWindow):
         while not self._question_lock.acquire(timeout=0.1):
             if stopped():
                 return False
-        try:
-            return self._ask(row, title, question, stopped)
-        finally:
-            self._question_lock.release()
+        # Released by the dialog once it has closed, not when this returns:
+        # a download stopped while its question shows stops waiting for the
+        # answer, and the next question must still wait for the dialog.
+        return self._ask(row, title, question, stopped)
 
     def _ask(self, row, title, question, stopped):
         answer, done = [], threading.Event()
 
         # If the dialog fails, the error goes to the log and the answer is
-        # No; either way the download thread stops waiting.
+        # No; either way the download thread stops waiting, and the next
+        # question can show.
         def ask():
             try:
                 if row.cancel_event.is_set() or row.pause_event.is_set():
@@ -1875,6 +1889,7 @@ class YouTubeDownloader(QMainWindow):
                 raise
             finally:
                 done.set()
+                self._question_lock.release()
 
         self._post(ask)
         while not done.wait(0.1):

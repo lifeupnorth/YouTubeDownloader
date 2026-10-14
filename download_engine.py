@@ -640,6 +640,9 @@ class DownloadJob:
         # An earlier, paused job's partial files. A stream that finished then
         # gets no "downloading" event now, so it's only known from there.
         self._earlier_files = set(partial_files)
+        # Those still on disk now. One gone later was used up by this run
+        # (see _file_done).
+        self._earlier_present = {p for p in self._earlier_files if os.path.exists(p)}
         self._stream_index = 0      # which stream of the current video
         self._stream_count = 1      # how many it has (video + audio = 2)
         self._entry_files = set()   # files written for the unfinished video
@@ -832,11 +835,17 @@ class DownloadJob:
         self._entry_files.clear()   # finished: nothing for cancel to remove
         path = info.get("filepath", "")
         self.last_file = path
-        if info.get("__real_download"):
+        # yt-dlp says a video was converted from a stream that's already
+        # there (an MP3 from the .webm a pause kept) wasn't downloaded, but
+        # its file is new: the conversion used up (deleted) a kept stream.
+        made_now = info.get("__real_download") or any(
+            not os.path.exists(p) for p in self._earlier_present)
+        if made_now:
             # The paused video is the first one this run downloads (those
             # before it are already there), so its earlier files are done
             # with: the final file may even be one of them.
             self._earlier_files.clear()
+            self._earlier_present.clear()
             self.saved += 1
             self.on_log(f"✔ Saved: {path}")
         else:

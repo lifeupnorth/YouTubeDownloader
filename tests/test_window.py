@@ -563,6 +563,85 @@ class WindowTest(unittest.TestCase):
         self.assertEqual(answers, [False])
         self.assertEqual(self.dialogs, [], "the question still showed")
 
+    def test_the_next_question_waits_for_a_stopped_rows_dialog(self):
+        a = ytd.Row("https://e.com/a", "mp4_best", "f", False)
+        b = ytd.Row("https://e.com/b", "mp4_best", "f", False)
+        answers, shown, while_a_showed = {}, [], []
+
+        def ask(row, text):
+            return threading.Thread(target=lambda: answers.__setitem__(
+                text, self.app._ask_on_main(row, "Playlist", text)))
+        worker_a, worker_b = ask(a, "A?"), ask(b, "B?")
+
+        def question(parent, title, text, *args, **kwargs):
+            shown.append(text)
+            if text == "A?":
+                # A is canceled while its dialog shows, and B asks meanwhile.
+                a.cancel_event.set()
+                worker_b.start()
+                self.wait(lambda: not worker_a.is_alive())
+                deadline = time.monotonic() + 0.3
+                while time.monotonic() < deadline:
+                    QApplication.processEvents()
+                    time.sleep(0.005)
+                while_a_showed.extend(shown)
+            return QMessageBox.Yes
+
+        with mock.patch.object(ytd.QMessageBox, "question", side_effect=question):
+            worker_a.start()
+            self.wait(lambda: not worker_a.is_alive() and worker_b.ident
+                      and not worker_b.is_alive())
+        self.assertEqual(while_a_showed, ["A?"], "B's dialog opened over A's")
+        self.assertEqual(shown, ["A?", "B?"])
+        self.assertEqual(answers, {"A?": False, "B?": True})
+
+    def test_progress_set_while_showing_isnt_lost(self):
+        row = ytd.Row(VIDEO, "mp4_best", "f", False, state="downloading")
+        self.app.model.add(row)
+        self.app._running = {row}
+        try:
+            row.latest = (50, "Downloading… 50.0%  1.0 MB/s")
+            self.app._show_progress()
+            self.assertEqual((row.pct, row.message), (50, "1.0 MB/s"))
+            self.assertIsNotNone(row.latest, "the window cleared the download's progress")
+            row.message = "unchanged"
+            self.app._show_progress()   # nothing newer: shown already
+            self.assertEqual(row.message, "unchanged")
+            row.latest = (99, "Processing…")
+            self.app._show_progress()
+            self.assertEqual((row.state, row.pct), ("processing", 99))
+        finally:
+            self.app._running = set()
+
+    def test_a_resumed_row_doesnt_show_the_old_progress(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            self.app.path.setText(tmp)
+            self.run_download(make_fake_ydl(streams=2, files_dir=tmp,
+                                            on_progress=self.pause_at((0, 1, 50))))
+            row, = self.rows()
+            self.assertGreater(row.pct, 70)
+            self.assertEqual((row.latest, row.shown), (None, None))
+
+    def test_cancel_before_a_resumed_download_runs_removes_its_files(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            self.app.path.setText(tmp)
+            self.run_download(make_fake_ydl(streams=2, files_dir=tmp,
+                                            on_progress=self.pause_at((0, 1, 50))))
+            row, = self.rows()
+            real_job = engine.DownloadJob
+
+            def canceled_job(*args, **kwargs):   # Cancel clicked before it runs
+                kwargs["cancel_event"].set()
+                return real_job(*args, **kwargs)
+
+            with mock.patch.object(engine, "DownloadJob", side_effect=canceled_job), \
+                    mock.patch.object(engine, "yt_dlp", fake_yt_dlp(make_fake_ydl(streams=2))):
+                self.app._row_action(row, "resume")
+                self.wait(self.idle)
+            self.assertEqual(self.files(tmp), [])
+        self.assertEqual((row.state, row.partial_files), ("canceled", []))
+        self.assertIn("✘ Download canceled (2 partial files removed).", self.log())
+
     # ── Closing ──
 
     def test_close_during_download_asks_then_pauses_and_closes(self):
@@ -1329,6 +1408,14 @@ class WindowTest(unittest.TestCase):
             self.wait(self.idle)
         self.assertEqual(self.states(), ["done"] * 2)
         self.assertEqual(self.new_window().parallel.currentText(), "1 at a time")
+
+    def test_at_a_time_while_idle_keeps_the_status(self):
+        self.run_download(make_fake_ydl(streams=1))
+        self.app._set_status("The clipboard has no link to paste.")
+        with mock.patch.object(ytd.QApplication, "alert") as alert:
+            self.at_a_time(3)
+        self.assertEqual(self.app.status_lbl.text(), "The clipboard has no link to paste.")
+        alert.assert_not_called()
 
     def test_pausing_one_download_leaves_the_other(self):
         self.at_a_time(2)

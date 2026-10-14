@@ -232,6 +232,9 @@ class SplitLinksTest(unittest.TestCase):
                 (["https://youtu.be/abc"], ["Watch", "this:", "thanks!"]),
             "(https://a.com/x) https://a.com/x": (["https://a.com/x"], []),
             "hello world": ([], ["hello", "world"]),
+            # File and product names aren't host names.
+            "Node.js readme.md youtu.be/abc":
+                (["https://youtu.be/abc"], ["Node.js", "readme.md"]),
             "   ": ([], []),
         }
         for text, expected in cases.items():
