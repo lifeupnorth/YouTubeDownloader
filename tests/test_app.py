@@ -60,6 +60,12 @@ class SettingsFileTest(unittest.TestCase):
         entries = [{"url": f"https://e.com/{n}"} for n in range(ytd.HISTORY_LIMIT + 5)]
         ytd.save_history(entries)
         self.assertEqual(ytd.load_history(), entries[5:], "the newest are kept")
+        # Past the limit the oldest finished rows go, never an unfinished one.
+        paused = {"url": "https://e.com/p", "state": "paused", "partial_files": ["p.part"]}
+        done = [{"url": f"https://e.com/{n}", "state": "done"}
+                for n in range(ytd.HISTORY_LIMIT)]
+        ytd.save_history([paused, *done])
+        self.assertEqual(ytd.load_history(), [paused, *done[1:]])
         with open(ytd.history_path(), encoding="utf-8") as f:
             self.assertEqual(json.load(f)["version"], 1)
         for content in ("not json", "[1, 2]", '{"downloads": 5}'):

@@ -473,7 +473,7 @@ def fetch_thumbnail(url, canceled=lambda: False, size=THUMB_SIZE):
     if Image is None or not url or not url.startswith(("https://", "http://")):
         return None
     try:
-        data = b""
+        data = bytearray()   # grows in place, unlike bytes
         with urllib.request.urlopen(url, timeout=10) as response:
             while chunk := response.read(64 * 1024):
                 data += chunk

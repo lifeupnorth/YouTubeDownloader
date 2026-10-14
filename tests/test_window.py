@@ -1551,6 +1551,15 @@ class WindowTest(unittest.TestCase):
         restored = self.new_window().model.rows
         self.assertEqual([r.url for r in restored], [r.url for r in self.rows()[3:]])
 
+    def test_the_limit_never_drops_a_paused_row(self):
+        # Its partial files would stay on disk with no row to resume them.
+        rows = self.add_rows("paused", "downloading", *["done"] * ytd.HISTORY_LIMIT)
+        self.app._save_history()
+        restored = self.new_window().model.rows
+        self.assertEqual([r.url for r in restored],
+                         [r.url for r in rows[:2]] + [r.url for r in rows[4:]])
+        self.assertEqual([r.state for r in restored[:2]], ["paused", "paused"])
+
     def test_bad_saved_entries_are_left_out(self):
         good = {"url": VIDEO, "fmt": "720p", "folder": "f", "state": "done"}
         ytd.save_history([

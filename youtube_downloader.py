@@ -206,8 +206,24 @@ def save_settings(data):
     _write_json(settings_path(), data)
 
 
-# The Downloads list is kept between runs, newest rows last, up to this many.
+# The Downloads list is kept between runs, newest rows last, up to this many
+# (more only while more than that haven't finished: see within_limit).
 HISTORY_LIMIT = 200
+
+
+def within_limit(items, unfinished):
+    """items (rows, or the saved list's entries) without the oldest ones past
+    HISTORY_LIMIT. Those unfinished(item) says haven't finished always stay:
+    a paused row's partial files would be left on disk, with no row to
+    resume or remove them."""
+    extra = len(items) - HISTORY_LIMIT
+    kept = []
+    for item in items:
+        if extra > 0 and not unfinished(item):
+            extra -= 1
+        else:
+            kept.append(item)
+    return kept
 
 
 def history_path():
@@ -223,8 +239,9 @@ def load_history():
 
 def save_history(entries):
     # On one line: with thumbnails it's up to a few MB, written often.
-    _write_json(history_path(), {"version": 1, "downloads": entries[-HISTORY_LIMIT:]},
-                indent=None)
+    entries = within_limit(entries, lambda entry: isinstance(entry, dict)
+                           and entry.get("state") in set(STATES) - FINISHED)
+    _write_json(history_path(), {"version": 1, "downloads": entries}, indent=None)
 
 
 UPDATE_CHECK_INTERVAL = 24 * 60 * 60   # seconds
@@ -1989,10 +2006,9 @@ class YouTubeDownloader(QMainWindow):
 
     # The rows of the last run come back as they ended (see restored_row).
     def _load_history(self):
-        for entry in load_history()[-HISTORY_LIMIT:]:
-            row = restored_row(entry)
-            if row is not None:
-                self.model.add(row)
+        rows = [row for row in map(restored_row, load_history()) if row is not None]
+        for row in within_limit(rows, lambda row: row.state not in FINISHED):
+            self.model.add(row)
         self.view.scrollToBottom()
 
     def _history_changed(self):
