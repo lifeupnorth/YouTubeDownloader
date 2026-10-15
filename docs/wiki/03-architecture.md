@@ -21,7 +21,7 @@ flowchart LR
     subgraph engine ["download_engine.py (no Qt, worker threads)"]
         job["DownloadJob (one per row)"]
         preview["preview_link"]
-        helpers["format_opts, find_ffmpeg, find_js_runtime, load_yt_dlp, check_for_update"]
+        helpers["format_opts, find_ffmpeg, find_js_runtime, load_yt_dlp, fetch_update_notice"]
     end
     ui -->|"a row's link, format, folder, playlist setting"| job
     job -->|"on_log, ask"| plumbing
@@ -35,7 +35,7 @@ flowchart LR
 | Module | Part | Lines | Role |
 |---|---|---|---|
 | `download_engine.py` | yt-dlp loading and version | 24–110 | Optional `yt_dlp` and Pillow imports, the pin from `requirements.txt`, `missing_yt_dlp_extras`, `load_yt_dlp`, version helpers |
-| | Update check | 113–168 | `app_version` (from the .exe's bundled `VERSION` file), `newer_version`, `check_for_update`, `fetch_update_notice` |
+| | Update check | 113–168 | `app_version` (from the .exe's bundled `VERSION` file), `newer_version` (also used by `packaging/check_pins.py`), `fetch_update_notice` |
 | | Formats, ffmpeg | 171–276 | `VIDEO_MAX_RES`, `format_opts`, `format_eta`, `bundled_ffmpeg`, `find_ffmpeg` (see [Formats and ffmpeg](05-formats-ffmpeg.md)) |
 | | JavaScript runtime | 279–313 | `JS_RUNTIMES`, `js_solver_version`, `find_js_runtime` |
 | | yt-dlp plumbing | 316–439 | `_YdlLogger`, `_callback_pp_class`, `_current` and `_tracked_popen_class` and `_track_processes` (tracking ffmpeg runs, under `_track_lock`), `_follow_url_results` |
@@ -64,7 +64,7 @@ Every worker runs inside `_run_worker`. If the target raises, it posts `_worker_
 Workers reach the main thread in two ways:
 
 1. **Discrete events** go through `_post(func, *args)`, which emits the window's `_call_on_main` signal. The signal is connected with `Qt.QueuedConnection`, so Qt adds the call to the main thread's event queue and runs `_call(func, args)` there, in the order they were posted. `_call` catches any exception and hands it to `report_error`, which logs "✘ Unexpected error: …" (and prints the traceback when there is a console), so one failing call doesn't stop the others. Log lines, a lookup's result, "download finished" and a yes/no question all go this way.
-2. **Progress** is coalesced: the engine's `on_progress` callback only sets the row's `latest` to `(pct, message)`. Only the newest value matters, so nothing is posted per progress event. While a download runs, a `QTimer` (`_progress_timer`, every 100 ms) runs `_show_progress` on the main thread, which, for each running row, takes `latest` (and sets it back to `None`), updates the row's percentage, state (`processing` when the message says "Processing…") and message, and tells the model the row changed. After a Cancel or Pause it leaves the row alone, so "Canceling…" or "Pausing…" stays. `_run_next` starts the timer, and `_download_finished` takes the row out of `_running` (and stops the timer once none is left) before setting the row's final state, so a late progress value can't overwrite that state.
+2. **Progress** is coalesced: the engine's `on_progress` callback only sets the row's `latest` to an `engine.Progress` (percentage, whether ffmpeg is processing, speed, time left, and which playlist entry). Only the newest value matters, so nothing is posted per progress event. While a download runs, a `QTimer` (`_progress_timer`, every 100 ms) runs `_show_progress` on the main thread, which, for each running row, reads `latest` once (it never clears it, so a newer value the download thread sets meanwhile isn't lost; `shown` remembers the one on screen), updates the row's percentage, state (`processing` while ffmpeg merges or converts), speed and message (worded by `progress_text`), and tells the model the row changed. After a Cancel or Pause it leaves the row alone, so "Canceling…" or "Pausing…" stays. `_run_next` starts the timer, and `_download_finished` takes the row out of `_running` (and stops the timer once none is left) before setting the row's final state, so a late progress value can't overwrite that state.
 
 `_run_row` has its own `try`/`finally`. If no JavaScript runtime was found at startup it looks again (one may have been installed since) and posts one it finds to `_js_runtime_installed`, which keeps it so later downloads and lookups don't look again; it then creates the row's `DownloadJob` (with the row's cancel and pause events, and the partial files an earlier pause kept), stores it in `row.job`, and runs it unless the row was already canceled or paused. It always posts `_download_finished(row, job)`, so the queue can't get stuck. If it crashed, the error goes to the log first and `job` is `None`, which `_download_finished` shows as a Failed row with "An unexpected error (see the log)", or a Canceled or Paused one if the row was canceled or paused.
 

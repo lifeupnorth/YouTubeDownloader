@@ -20,6 +20,7 @@ import site
 import sys
 import threading
 import urllib.request
+from dataclasses import dataclass
 
 # ── yt-dlp: optional at import time, the app offers to install it ──────────
 try:
@@ -143,24 +144,19 @@ def _get_json(url):
         return json.load(response)
 
 
-def check_for_update():
-    """A one-line notice when a newer release of the app is out, else None.
-    Asks api.github.com; None without a network. Only a release .exe checks
-    (each release bundles a newer yt-dlp). From source it never does: the
-    app notes a yt-dlp that doesn't match the pin in requirements.txt."""
-    try:
-        return fetch_update_notice()
-    except Exception:
-        return None
-
-
 def fetch_update_notice():
-    """Like check_for_update(), but raises when GitHub can't be asked (e.g.
-    offline), so the caller can tell that apart from "nothing newer"."""
+    """A one-line notice when a newer release of the app is out, else None.
+    Asks api.github.com, and raises when it can't (e.g. offline, or an
+    answer that isn't a release), so the caller can tell that apart from
+    "nothing newer". Only a release .exe checks (each release bundles a
+    newer yt-dlp). From source it never does: the app notes a yt-dlp that
+    doesn't match the pin in requirements.txt."""
     current = app_version()
     if current is None:   # from source, or a test build
         return None
     release = _get_json(LATEST_RELEASE_API)
+    if not isinstance(release, dict):
+        raise ValueError(f"not a release: {release!r}")
     latest = release.get("tag_name") or ""
     if latest and newer_version(latest, current):
         return (f"• YT Downloader {latest.removeprefix('v')} is out (this is "
@@ -477,7 +473,7 @@ def fetch_thumbnail(url, canceled=lambda: False, size=THUMB_SIZE):
     if Image is None or not url or not url.startswith(("https://", "http://")):
         return None
     try:
-        data = b""
+        data = bytearray()   # grows in place, unlike bytes
         with urllib.request.urlopen(url, timeout=10) as response:
             while chunk := response.read(64 * 1024):
                 data += chunk
@@ -564,6 +560,17 @@ def preview_link(url, whole_playlist, cancel_event=None, js_runtime=None,
 NOTHING_TO_DOWNLOAD = "Nothing to download: the link has no videos."
 
 
+@dataclass(frozen=True)
+class Progress:
+    """How far a download is, for on_progress. The window words it."""
+    percent: float             # of the video and all its streams; 99 at most
+    processing: bool = False   # downloaded; ffmpeg merges or converts it now
+    speed: float = 0           # bytes a second while downloading, 0 if unknown
+    eta: float = 0             # seconds left while downloading, 0 if unknown
+    video: int | None = None   # which entry of a playlist, from 1
+    videos: int | None = None  # how many the playlist has
+
+
 def _remove(path):
     """Removes a file; False if it's still there."""
     try:
@@ -612,7 +619,7 @@ class DownloadJob:
     job's partial_files, a canceled job removes those too.
     The job reports through callbacks, which also run on the worker thread:
 
-    on_progress(percent, message): often; only the newest call matters.
+    on_progress(progress): a Progress, often; only the newest call matters.
     on_log(message): a line for the log.
     ask(question): returns True or False; used to confirm a playlist.
     """
@@ -640,6 +647,9 @@ class DownloadJob:
         # An earlier, paused job's partial files. A stream that finished then
         # gets no "downloading" event now, so it's only known from there.
         self._earlier_files = set(partial_files)
+        # Those still on disk now. One gone later was used up by this run
+        # (see _file_done).
+        self._earlier_present = {p for p in self._earlier_files if os.path.exists(p)}
         self._stream_index = 0      # which stream of the current video
         self._stream_count = 1      # how many it has (video + audio = 2)
         self._entry_files = set()   # files written for the unfinished video
@@ -807,24 +817,20 @@ class DownloadJob:
         streams = self._stream_count
         entry = d.get("info_dict") or {}
         index, count = entry.get("playlist_index"), entry.get("n_entries")
-        video = f"Video {index}/{count} · " if index and count else ""
+        video = {"video": index, "videos": count} if index and count else {}
         if d["status"] == "downloading":
             total = d.get("total_bytes") or d.get("total_bytes_estimate", 0)
             downloaded = d.get("downloaded_bytes", 0)
-            speed = d.get("speed", 0) or 0
-            eta = d.get("eta", 0) or 0
 
             pct = min(downloaded / total * 100, 100) if total else 0
             # The streams share one bar, which tops out at 99 until the end.
             pct = (min(self._stream_index, streams - 1) * 100 + pct) / streams * 0.99
-            speed_str = f"{speed/1024/1024:.1f} MB/s" if speed > 0 else ""
-            eta_str = f"ETA {format_eta(eta)}" if eta > 0 else ""
-            info = " · ".join(filter(None, [speed_str, eta_str]))
-            self.on_progress(pct, f"{video}Downloading… {pct:.1f}%  {info}")
+            self.on_progress(Progress(pct, speed=max(d.get("speed") or 0, 0),
+                                      eta=max(d.get("eta") or 0, 0), **video))
         elif d["status"] == "finished":
             self._stream_index += 1
             if self._stream_index >= streams:
-                self.on_progress(99, f"{video}Processing…")
+                self.on_progress(Progress(99, processing=True, **video))
 
     # after_move post-processor: once per video, with its final file (the
     # progress hook only sees the temporary per-stream files).
@@ -832,11 +838,17 @@ class DownloadJob:
         self._entry_files.clear()   # finished: nothing for cancel to remove
         path = info.get("filepath", "")
         self.last_file = path
-        if info.get("__real_download"):
+        # yt-dlp says a video was converted from a stream that's already
+        # there (an MP3 from the .webm a pause kept) wasn't downloaded, but
+        # its file is new: the conversion used up (deleted) a kept stream.
+        made_now = info.get("__real_download") or any(
+            not os.path.exists(p) for p in self._earlier_present)
+        if made_now:
             # The paused video is the first one this run downloads (those
             # before it are already there), so its earlier files are done
             # with: the final file may even be one of them.
             self._earlier_files.clear()
+            self._earlier_present.clear()
             self.saved += 1
             self.on_log(f"✔ Saved: {path}")
         else:

@@ -91,7 +91,7 @@ class WindowTest(unittest.TestCase):
                 mock.patch.object(engine, "YT_DLP_AVAILABLE", True),
                 mock.patch.object(engine, "find_ffmpeg", return_value="ffmpeg"),
                 mock.patch.object(engine, "find_js_runtime", return_value=("deno", "deno")),
-                mock.patch.object(engine, "check_for_update", return_value=None),
+                mock.patch.object(engine, "fetch_update_notice", return_value=None),
                 mock.patch.object(engine, "preview_link", side_effect=fake_preview),
                 mock.patch.object(ytd, "settings_path", return_value=self.settings_file)):
             patcher.start()
@@ -459,7 +459,7 @@ class WindowTest(unittest.TestCase):
             self.app._row_action(row, "pause")
             self.assertEqual((row.state, row.message), ("downloading", "Pausing…"))
             self.assertEqual(ytd.row_actions(row), ["cancel"], "Pause twice")
-            row.latest = (50, "Downloading… 50.0%  1.0 MB/s")
+            row.latest = engine.Progress(50, speed=1024 * 1024)
             self.app._show_progress()
             self.assertEqual(row.message, "Pausing…")
         finally:
@@ -546,7 +546,7 @@ class WindowTest(unittest.TestCase):
         try:
             self.app._cancel_row(row)
             self.assertEqual(row.message, "Canceling…")
-            row.latest = (50, "Downloading… 50.0%  1.0 MB/s")
+            row.latest = engine.Progress(50, speed=1024 * 1024)
             self.app._show_progress()
             self.assertEqual(row.message, "Canceling…")
         finally:
@@ -562,6 +562,85 @@ class WindowTest(unittest.TestCase):
         self.wait(lambda: not worker.is_alive())
         self.assertEqual(answers, [False])
         self.assertEqual(self.dialogs, [], "the question still showed")
+
+    def test_the_next_question_waits_for_a_stopped_rows_dialog(self):
+        a = ytd.Row("https://e.com/a", "mp4_best", "f", False)
+        b = ytd.Row("https://e.com/b", "mp4_best", "f", False)
+        answers, shown, while_a_showed = {}, [], []
+
+        def ask(row, text):
+            return threading.Thread(target=lambda: answers.__setitem__(
+                text, self.app._ask_on_main(row, "Playlist", text)))
+        worker_a, worker_b = ask(a, "A?"), ask(b, "B?")
+
+        def question(parent, title, text, *args, **kwargs):
+            shown.append(text)
+            if text == "A?":
+                # A is canceled while its dialog shows, and B asks meanwhile.
+                a.cancel_event.set()
+                worker_b.start()
+                self.wait(lambda: not worker_a.is_alive())
+                deadline = time.monotonic() + 0.3
+                while time.monotonic() < deadline:
+                    QApplication.processEvents()
+                    time.sleep(0.005)
+                while_a_showed.extend(shown)
+            return QMessageBox.Yes
+
+        with mock.patch.object(ytd.QMessageBox, "question", side_effect=question):
+            worker_a.start()
+            self.wait(lambda: not worker_a.is_alive() and worker_b.ident
+                      and not worker_b.is_alive())
+        self.assertEqual(while_a_showed, ["A?"], "B's dialog opened over A's")
+        self.assertEqual(shown, ["A?", "B?"])
+        self.assertEqual(answers, {"A?": False, "B?": True})
+
+    def test_progress_set_while_showing_isnt_lost(self):
+        row = ytd.Row(VIDEO, "mp4_best", "f", False, state="downloading")
+        self.app.model.add(row)
+        self.app._running = {row}
+        try:
+            row.latest = engine.Progress(50, speed=1024 * 1024)
+            self.app._show_progress()
+            self.assertEqual((row.pct, row.message), (50, "1.0 MB/s"))
+            self.assertIsNotNone(row.latest, "the window cleared the download's progress")
+            row.message = "unchanged"
+            self.app._show_progress()   # nothing newer: shown already
+            self.assertEqual(row.message, "unchanged")
+            row.latest = engine.Progress(99, processing=True)
+            self.app._show_progress()
+            self.assertEqual((row.state, row.pct, row.speed), ("processing", 99, 0))
+        finally:
+            self.app._running = set()
+
+    def test_a_resumed_row_doesnt_show_the_old_progress(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            self.app.path.setText(tmp)
+            self.run_download(make_fake_ydl(streams=2, files_dir=tmp,
+                                            on_progress=self.pause_at((0, 1, 50))))
+            row, = self.rows()
+            self.assertGreater(row.pct, 70)
+            self.assertEqual((row.latest, row.shown), (None, None))
+
+    def test_cancel_before_a_resumed_download_runs_removes_its_files(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            self.app.path.setText(tmp)
+            self.run_download(make_fake_ydl(streams=2, files_dir=tmp,
+                                            on_progress=self.pause_at((0, 1, 50))))
+            row, = self.rows()
+            real_job = engine.DownloadJob
+
+            def canceled_job(*args, **kwargs):   # Cancel clicked before it runs
+                kwargs["cancel_event"].set()
+                return real_job(*args, **kwargs)
+
+            with mock.patch.object(engine, "DownloadJob", side_effect=canceled_job), \
+                    mock.patch.object(engine, "yt_dlp", fake_yt_dlp(make_fake_ydl(streams=2))):
+                self.app._row_action(row, "resume")
+                self.wait(self.idle)
+            self.assertEqual(self.files(tmp), [])
+        self.assertEqual((row.state, row.partial_files), ("canceled", []))
+        self.assertIn("✘ Download canceled (2 partial files removed).", self.log())
 
     # ── Closing ──
 
@@ -1277,10 +1356,27 @@ class WindowTest(unittest.TestCase):
         self.assertFalse(self.app._progress_timer.isActive())
 
     def test_the_speeds_add_up(self):
-        a, b, _done = self.add_rows("downloading", "processing", "done")
-        a.message, b.message = "1.5 MB/s · ETA 0:07", "Video 2/5 · 2.0 MB/s"
+        a, b, _processing, done = self.add_rows("downloading", "downloading",
+                                                "processing", "done")
+        a.speed, b.speed, done.speed = 1.5 * 1024 * 1024, 2 * 1024 * 1024, 9e9
         self.app._update_counts()
         self.assertEqual(self.app.speed_lbl.text(), "⚡ 3.5 MB/s")
+        a.speed = b.speed = 0   # e.g. both canceling
+        self.app._update_counts()
+        self.assertEqual(self.app.speed_lbl.text(), "")
+
+    def test_progress_text(self):
+        mb = 1024 * 1024
+        cases = [
+            (engine.Progress(42, speed=3.4 * mb, eta=7, video=2, videos=5),
+             "Video 2/5 · 3.4 MB/s · ETA 0:07"),
+            (engine.Progress(42, speed=3.4 * mb), "3.4 MB/s"),
+            (engine.Progress(0), ""),
+            (engine.Progress(99, processing=True, video=2, videos=5), "Video 2/5"),
+        ]
+        for progress, text in cases:
+            with self.subTest(progress=progress):
+                self.assertEqual(ytd.progress_text(progress), text)
 
     def test_a_link_doesnt_download_twice_at_once(self):
         # MP4 and MP3 of one link, into one folder, would write the same files.
@@ -1329,6 +1425,14 @@ class WindowTest(unittest.TestCase):
             self.wait(self.idle)
         self.assertEqual(self.states(), ["done"] * 2)
         self.assertEqual(self.new_window().parallel.currentText(), "1 at a time")
+
+    def test_at_a_time_while_idle_keeps_the_status(self):
+        self.run_download(make_fake_ydl(streams=1))
+        self.app._set_status("The clipboard has no link to paste.")
+        with mock.patch.object(ytd.QApplication, "alert") as alert:
+            self.at_a_time(3)
+        self.assertEqual(self.app.status_lbl.text(), "The clipboard has no link to paste.")
+        alert.assert_not_called()
 
     def test_pausing_one_download_leaves_the_other(self):
         self.at_a_time(2)
@@ -1446,6 +1550,15 @@ class WindowTest(unittest.TestCase):
         self.assertEqual(len(self.rows()), ytd.HISTORY_LIMIT + 3, "this run's list is whole")
         restored = self.new_window().model.rows
         self.assertEqual([r.url for r in restored], [r.url for r in self.rows()[3:]])
+
+    def test_the_limit_never_drops_a_paused_row(self):
+        # Its partial files would stay on disk with no row to resume them.
+        rows = self.add_rows("paused", "downloading", *["done"] * ytd.HISTORY_LIMIT)
+        self.app._save_history()
+        restored = self.new_window().model.rows
+        self.assertEqual([r.url for r in restored],
+                         [r.url for r in rows[:2]] + [r.url for r in rows[4:]])
+        self.assertEqual([r.state for r in restored[:2]], ["paused", "paused"])
 
     def test_bad_saved_entries_are_left_out(self):
         good = {"url": VIDEO, "fmt": "720p", "folder": "f", "state": "done"}

@@ -78,7 +78,7 @@ class RealYtDlpTest(unittest.TestCase):
         log = []
         job = engine.DownloadJob(
             url, fmt=fmt, folder=self.folder, ffmpeg=FFMPEG, whole_playlist=False,
-            on_progress=on_progress or (lambda pct, message: None),
+            on_progress=on_progress or (lambda progress: None),
             on_log=log.append, ask=lambda question: True)
         job.run()
         job.log = log
@@ -122,8 +122,8 @@ class RealYtDlpTest(unittest.TestCase):
         url = self.serve("big.mp4", os.urandom(2_000_000))
         job = None
 
-        def on_progress(pct, message):
-            if pct > 5:   # some of it is on disk
+        def on_progress(progress):
+            if progress.percent > 5:   # some of it is on disk
                 job.cancel()
 
         log = []

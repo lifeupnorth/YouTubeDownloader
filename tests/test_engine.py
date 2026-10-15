@@ -178,38 +178,45 @@ class UpdateCheckTest(unittest.TestCase):
         with (mock.patch.object(engine.sys, "frozen", True, create=True),
               mock.patch.object(engine, "app_version", return_value="1.0.3"),
               mock.patch.object(engine, "_get_json", return_value=release) as get):
-            notice = engine.check_for_update()
+            notice = engine.fetch_update_notice()
             self.assertIn("1.0.4 is out (this is 1.0.3)", notice)
             self.assertIn("https://github.com/r/v1.0.4", notice)
             get.assert_called_once_with(engine.LATEST_RELEASE_API)
             release["tag_name"] = "v1.0.3"
-            self.assertIsNone(engine.check_for_update())
+            self.assertIsNone(engine.fetch_update_notice())
         with (mock.patch.object(engine.sys, "frozen", True, create=True),
               mock.patch.object(engine, "app_version", return_value=None),
               mock.patch.object(engine, "_get_json") as get):
-            self.assertIsNone(engine.check_for_update())   # a test build
+            self.assertIsNone(engine.fetch_update_notice())   # a test build
         get.assert_not_called()
 
     def test_source_never_checks(self):
         with mock.patch.object(engine, "_get_json") as get:
-            self.assertIsNone(engine.check_for_update())
+            self.assertIsNone(engine.fetch_update_notice())
         get.assert_not_called()
 
-    def test_no_network_no_notice(self):
-        # As a release .exe (from source it never asks, see above).
+    def test_no_network_raises(self):
+        # As a release .exe (from source it never asks, see above). The
+        # window then asks again at the next start (see _update_thread).
         with (mock.patch.object(engine, "app_version", return_value="1.0.3"),
               mock.patch.object(engine.urllib.request, "urlopen",
-                                side_effect=OSError("offline")) as urlopen):
-            self.assertIsNone(engine.check_for_update())
+                                side_effect=OSError("offline")) as urlopen,
+              self.assertRaises(OSError)):
+            engine.fetch_update_notice()
         urlopen.assert_called_once()
 
-    def test_unexpected_answer_no_notice(self):
-        for body in (b"<html>rate limited</html>", b"[]", b'{"tag_name": null}'):
+    def test_unexpected_answer_raises_or_says_nothing(self):
+        for body in (b"<html>rate limited</html>", b"[]"):
             with (self.subTest(body=body),
                   mock.patch.object(engine, "app_version", return_value="1.0.3"),
                   mock.patch.object(engine.urllib.request, "urlopen",
-                                    return_value=io.BytesIO(body))):
-                self.assertIsNone(engine.check_for_update())
+                                    return_value=io.BytesIO(body)),
+                  self.assertRaises(ValueError)):
+                engine.fetch_update_notice()
+        with (mock.patch.object(engine, "app_version", return_value="1.0.3"),
+              mock.patch.object(engine.urllib.request, "urlopen",
+                                return_value=io.BytesIO(b'{"tag_name": null}'))):
+            self.assertIsNone(engine.fetch_update_notice())
 
 
 class FindFfmpegTest(unittest.TestCase):
@@ -477,7 +484,7 @@ def make_job(url="https://www.youtube.com/watch?v=x", *, whole_playlist=False,
     progress, log = [], []
     job = engine.DownloadJob(
         url, fmt=fmt, folder=folder, ffmpeg="ffmpeg", whole_playlist=whole_playlist,
-        on_progress=lambda pct, message: progress.append((pct, message)),
+        on_progress=progress.append,
         on_log=log.append, ask=ask or (lambda question: True),
         partial_files=partial_files)
     job.progress, job.log = progress, log
@@ -500,7 +507,7 @@ class DownloadJobTest(unittest.TestCase):
         self.assertEqual(job.last_file, "v0.mp4")
         self.assertEqual(job.summary(), "Download complete!")
         self.assertIn("✔ Saved: v0.mp4", job.log)
-        percents = [pct for pct, _ in job.progress]
+        percents = [p.percent for p in job.progress]
         self.assertEqual(percents, sorted(percents), "went backwards between streams")
         self.assertEqual(percents[-1], 99, "100 only once the window says done")
 
@@ -516,8 +523,8 @@ class DownloadJobTest(unittest.TestCase):
         job = self.run_job(make_fake_ydl(streams=2, videos=2, overshoot=15),
                            whole_playlist=True)
         per_video = {}
-        for pct, message in job.progress:
-            per_video.setdefault(message.split(" · ")[0], []).append(pct)
+        for p in job.progress:
+            per_video.setdefault(f"Video {p.video}/{p.videos}", []).append(p.percent)
         self.assertEqual(sorted(per_video), ["Video 1/2", "Video 2/2"])
         for video, values in per_video.items():
             self.assertEqual(values, sorted(values), f"{video} went backwards")
@@ -531,10 +538,13 @@ class DownloadJobTest(unittest.TestCase):
         job._progress_hook({"status": "downloading", "total_bytes": 100,
                             "downloaded_bytes": 45, "speed": 1e6, "eta": 138,
                             "info_dict": entry})
-        self.assertEqual(job.progress[-1][1],
-                         "Video 3/30 · Downloading… 44.5%  1.0 MB/s · ETA 2:18")
+        downloading = job.progress[-1]
+        self.assertAlmostEqual(downloading.percent, 44.55)   # 45%, of 99
+        self.assertEqual(downloading, engine.Progress(
+            downloading.percent, speed=1e6, eta=138, video=3, videos=30))
         job._progress_hook({"status": "finished", "info_dict": entry})
-        self.assertEqual(job.progress[-1], (99, "Video 3/30 · Processing…"))
+        self.assertEqual(job.progress[-1],
+                         engine.Progress(99, processing=True, video=3, videos=30))
 
     def test_unavailable_entry_is_skipped(self):
         job = self.run_job(make_fake_ydl(streams=1, videos=3, fail=(1,)),
@@ -782,7 +792,7 @@ class DownloadJobTest(unittest.TestCase):
             self.assertEqual(again.fake.resumed, [(0, 1, 50)])
             self.assertEqual(sorted(os.listdir(tmp)), ["v0.mp4"])
         self.assertEqual((again.outcome, again.saved), ("done", 1))
-        percents = [pct for pct, _ in again.progress]
+        percents = [p.percent for p in again.progress]
         self.assertGreater(percents[0], 70, "the first stream counted again")
         self.assertEqual(percents, sorted(percents))
 
@@ -819,6 +829,23 @@ class DownloadJobTest(unittest.TestCase):
         self.assertEqual(job._earlier_files, {"v.mp4", "v.mp4.part"})
         job._file_done({"filepath": "v.mp4", "__real_download": True})
         self.assertEqual(job._earlier_files, set())
+
+    def test_a_conversion_of_a_kept_stream_is_saved(self):
+        # Paused while ffmpeg made the MP3: the .webm was kept. yt-dlp then
+        # finds it there, says it wasn't downloaded, and converts it.
+        with tempfile.TemporaryDirectory() as tmp:
+            stream = os.path.join(tmp, "v.webm")
+            open(stream, "wb").close()
+            job = make_job(folder=tmp, fmt="mp3", partial_files=[stream, stream + ".part"])
+            job._file_done({"filepath": os.path.join(tmp, "old.mp3"),
+                            "__real_download": False})
+            self.assertEqual((job.saved, job.already), (0, 1), "its stream is still there")
+            os.remove(stream)   # what the conversion does once it's done
+            job._file_done({"filepath": os.path.join(tmp, "v.mp3"),
+                            "__real_download": False})
+        self.assertEqual((job.saved, job.already), (1, 1))
+        self.assertEqual(job._earlier_files, set())
+        self.assertIn(f"✔ Saved: {os.path.join(tmp, 'v.mp3')}", job.log)
 
     def test_a_question_cut_short_by_pause_isnt_a_no(self):
         job = make_job(ask=lambda question: job.pause() or False)

@@ -206,8 +206,24 @@ def save_settings(data):
     _write_json(settings_path(), data)
 
 
-# The Downloads list is kept between runs, newest rows last, up to this many.
+# The Downloads list is kept between runs, newest rows last, up to this many
+# (more only while more than that haven't finished: see within_limit).
 HISTORY_LIMIT = 200
+
+
+def within_limit(items, unfinished):
+    """items (rows, or the saved list's entries) without the oldest ones past
+    HISTORY_LIMIT. Those unfinished(item) says haven't finished always stay:
+    a paused row's partial files would be left on disk, with no row to
+    resume or remove them."""
+    extra = len(items) - HISTORY_LIMIT
+    kept = []
+    for item in items:
+        if extra > 0 and not unfinished(item):
+            extra -= 1
+        else:
+            kept.append(item)
+    return kept
 
 
 def history_path():
@@ -223,16 +239,18 @@ def load_history():
 
 def save_history(entries):
     # On one line: with thumbnails it's up to a few MB, written often.
-    _write_json(history_path(), {"version": 1, "downloads": entries[-HISTORY_LIMIT:]},
-                indent=None)
+    entries = within_limit(entries, lambda entry: isinstance(entry, dict)
+                           and entry.get("state") in set(STATES) - FINISHED)
+    _write_json(history_path(), {"version": 1, "downloads": entries}, indent=None)
 
 
 UPDATE_CHECK_INTERVAL = 24 * 60 * 60   # seconds
 
 
-# A word that looks like a link without "https://": a host name and,
-# optionally, a path ("youtu.be/abc", "www.youtube.com/watch?v=abc").
-_BARE_LINK = re.compile(r"(?:[\w-]+\.)+[a-z]{2,}(?::\d+)?(?:[/?#]\S*)?", re.IGNORECASE)
+# A word that looks like a link without "https://": a host name and a path
+# ("youtu.be/abc", "www.youtube.com/watch?v=abc"). Without the path, file
+# and product names ("readme.md", "Node.js") would pass for host names.
+_BARE_LINK = re.compile(r"(?:[\w-]+\.)+[a-z]{2,}(?::\d+)?[/?#]\S*", re.IGNORECASE)
 
 
 def split_links(text):
@@ -368,6 +386,20 @@ for _name, (_text, _key, _keys) in ROW_ACTIONS.items():
         ACTION_KEYS.setdefault(_qt_key, []).append(_name)
 
 
+def progress_text(progress):
+    """A downloading row's message, e.g. "Video 2/5 · 3.4 MB/s · ETA 0:07":
+    the bar, its percentage and the Status column show the rest."""
+    parts = []
+    if progress.video and progress.videos:
+        parts.append(f"Video {progress.video}/{progress.videos}")
+    if not progress.processing:
+        if progress.speed > 0:
+            parts.append(f"{progress.speed / 1024 / 1024:.1f} MB/s")
+        if progress.eta > 0:
+            parts.append(f"ETA {engine.format_eta(progress.eta)}")
+    return " · ".join(parts)
+
+
 def bar_percent(row):
     """How full a row's progress bar is, or None for an empty bar with no
     percentage: only a download in progress, paused partway or done shows
@@ -410,6 +442,7 @@ class Row:
     state: str = "waiting"
     pct: float = 0
     message: str = ""        # speed and ETA, or why it failed
+    speed: float = 0         # bytes a second while it downloads
     file: str | None = None  # the last file it saved (or found already there)
     restored: bool = False   # from the list saved by an earlier run
     partial_files: list[str] = field(default_factory=list)   # kept by a pause
@@ -417,7 +450,8 @@ class Row:
     cancel_event: threading.Event = field(default_factory=threading.Event)
     pause_event: threading.Event = field(default_factory=threading.Event)
     job: engine.DownloadJob | None = None
-    latest: tuple[float, str] | None = None
+    latest: engine.Progress | None = None
+    shown: engine.Progress | None = None   # the `latest` on screen now
 
     @property
     def format_label(self):
@@ -1399,7 +1433,10 @@ class YouTubeDownloader(QMainWindow):
     def _parallel_changed(self):
         self._parallel = self.parallel.currentData()
         self._save_settings()
-        self._run_next()
+        # With none running, none waits either: _run_next would only say
+        # again how the last downloads went (and flash the taskbar).
+        if self._running:
+            self._run_next()
 
     # ── Themes ──────────────────────────────────────────────────────────────
 
@@ -1478,9 +1515,8 @@ class YouTubeDownloader(QMainWindow):
         done = sum(r.state == "done" for r in rows)
         self.count_lbl.setText(f"{len(rows)} · {done} completed" if rows else "")
         # The downloads running now, together.
-        speeds = [float(m.group(1)) for r in rows if r.state in ACTIVE
-                  for m in [re.search(r"([\d.]+) MB/s", r.message)] if m]
-        self.speed_lbl.setText(f"⚡ {sum(speeds):.1f} MB/s" if speeds else "")
+        speed = sum(r.speed for r in rows if r.state in ACTIVE)
+        self.speed_lbl.setText(f"⚡ {speed / 1024 / 1024:.1f} MB/s" if speed > 0 else "")
 
     # ── Worker threads ──────────────────────────────────────────────────────
 
@@ -1749,7 +1785,7 @@ class YouTubeDownloader(QMainWindow):
             job = engine.DownloadJob(
                 row.url, fmt=row.fmt, folder=row.folder, ffmpeg=ffmpeg,
                 whole_playlist=row.whole_playlist,
-                on_progress=lambda pct, msg: setattr(row, "latest", (pct, msg)),
+                on_progress=lambda progress: setattr(row, "latest", progress),
                 on_log=lambda msg: self._post(self._job_log, row, msg),
                 ask=lambda question: self._ask_on_main(row, "Playlist", question),
                 cancel_event=row.cancel_event, pause_event=row.pause_event,
@@ -1770,21 +1806,22 @@ class YouTubeDownloader(QMainWindow):
     # Progress comes often; the newest is shown 10 times a second.
     def _show_progress(self):
         for row in list(self._running):
-            if (row.latest is None or row.cancel_event.is_set()
+            # Read once and never cleared here: the download thread may set
+            # a newer one at any moment, which clearing could wipe out.
+            latest = row.latest
+            if (latest is None or latest is row.shown or row.cancel_event.is_set()
                     or row.pause_event.is_set()):
                 continue   # after Cancel or Pause, "Canceling…" or "Pausing…" stays
-            pct, message = row.latest
-            row.latest = None
-            row.pct = pct
-            row.state = "processing" if "Processing" in message else "downloading"
-            # "Video 2/5 · Downloading… 42.0%  3.4 MB/s · ETA 0:07": the bar and
-            # the percentage show the rest.
-            row.message = re.sub(r"(Downloading… [\d.]+%|Processing…)\s*", "",
-                                 message).strip(" ·")
+            row.shown = latest
+            row.pct = latest.percent
+            row.state = "processing" if latest.processing else "downloading"
+            row.speed = 0 if latest.processing else latest.speed
+            row.message = progress_text(latest)
             self.model.changed(row)
 
     def _download_finished(self, row, job):
         self._running.discard(row)
+        row.speed = 0
         if not self._running:
             self._progress_timer.stop()
         # (A resumed download that saves nothing new keeps an earlier file.)
@@ -1792,6 +1829,9 @@ class YouTubeDownloader(QMainWindow):
         if job is None or job.outcome is None:   # it crashed, or never started
             if row.cancel_event.is_set():
                 row.state, row.message = "canceled", ""
+                if row.partial_files:   # a resumed row, canceled before it ran
+                    removed = engine.remove_partial_files(row.partial_files, self._log)
+                    self._log(f"✘ {engine.canceled_summary(0, removed)}")
             elif row.pause_event.is_set():
                 row.state, row.message = "paused", ""
             else:   # the error is in the log
@@ -1802,7 +1842,7 @@ class YouTubeDownloader(QMainWindow):
         elif job.outcome == "paused":
             row.state, row.message = "paused", ""
             if row.latest:   # where it stopped, if the timer hadn't shown it yet
-                row.pct = row.latest[0]
+                row.pct = row.latest.percent
             row.partial_files = job.partial_files
             self._log(f"• {job.summary()}")
         elif job.outcome == "failed":
@@ -1824,6 +1864,8 @@ class YouTubeDownloader(QMainWindow):
                 self._log("✔ Done!" if summary == "Download complete!" else f"✔ {summary}")
         if row.state != "paused":   # removed, continued, or of no use now
             row.partial_files = []
+        # The job is over: its last progress mustn't show when it's resumed.
+        row.latest = row.shown = None
         self.model.changed(row)
         self._history_changed()
         if self._close_when_stopped:   # the user is closing the app
@@ -1853,16 +1895,17 @@ class YouTubeDownloader(QMainWindow):
         while not self._question_lock.acquire(timeout=0.1):
             if stopped():
                 return False
-        try:
-            return self._ask(row, title, question, stopped)
-        finally:
-            self._question_lock.release()
+        # Released by the dialog once it has closed, not when this returns:
+        # a download stopped while its question shows stops waiting for the
+        # answer, and the next question must still wait for the dialog.
+        return self._ask(row, title, question, stopped)
 
     def _ask(self, row, title, question, stopped):
         answer, done = [], threading.Event()
 
         # If the dialog fails, the error goes to the log and the answer is
-        # No; either way the download thread stops waiting.
+        # No; either way the download thread stops waiting, and the next
+        # question can show.
         def ask():
             try:
                 if row.cancel_event.is_set() or row.pause_event.is_set():
@@ -1875,6 +1918,7 @@ class YouTubeDownloader(QMainWindow):
                 raise
             finally:
                 done.set()
+                self._question_lock.release()
 
         self._post(ask)
         while not done.wait(0.1):
@@ -1907,7 +1951,7 @@ class YouTubeDownloader(QMainWindow):
         if row in self._running:
             if row.job is not None:
                 row.job.stop_processes()
-            row.message = "Canceling…"
+            row.message, row.speed = "Canceling…", 0
         else:   # waiting or paused: nothing to stop
             row.state, row.message = "canceled", ""
             if row.partial_files:
@@ -1926,7 +1970,7 @@ class YouTubeDownloader(QMainWindow):
         if row in self._running:
             if row.job is not None:
                 row.job.stop_processes()
-            row.message = "Pausing…"
+            row.message, row.speed = "Pausing…", 0
         else:
             row.state, row.message = "paused", ""
             self._history_changed()
@@ -1962,10 +2006,9 @@ class YouTubeDownloader(QMainWindow):
 
     # The rows of the last run come back as they ended (see restored_row).
     def _load_history(self):
-        for entry in load_history()[-HISTORY_LIMIT:]:
-            row = restored_row(entry)
-            if row is not None:
-                self.model.add(row)
+        rows = [row for row in map(restored_row, load_history()) if row is not None]
+        for row in within_limit(rows, lambda row: row.state not in FINISHED):
+            self.model.add(row)
         self.view.scrollToBottom()
 
     def _history_changed(self):
