@@ -22,19 +22,18 @@ sequenceDiagram
     participant Y as yt_dlp.YoutubeDL
     U->>M: click Download or press Enter
     M->>M: _start_download checks, adds a Row per link
-    M->>L: _look_up(row) for each row, three at a time
-    L->>M: _post(_looked_up, row, ...): title, details, thumbnail
     loop each waiting row, up to 2 at a time by default (_run_next)
         M->>D: _start_worker(_run_row, row, ...)
         D->>J: DownloadJob(row.url, ...).run()
         J->>Y: YoutubeDL(options), add before_dl and after_move hooks
-        alt Whole playlist on
-            J->>Y: download([url])
-        else off
-            J->>Y: extract_info(process=False), follow url results
-            J->>M: ask(...) if it is a playlist
-            J->>Y: process_ie_result(info, download=True)
-        end
+        J->>Y: extract_info(process=False), follow url results
+        J->>M: on_info(info): title and thumbnail for a row without them
+        J->>M: ask(...) if it is a playlist and Whole playlist is off
+        J->>Y: process_ie_result(info, download=True)
+    end
+    M->>L: _look_up(row) for each row still waiting, three at a time
+    L->>M: _post(_looked_up, row, ...): title, details, thumbnail
+    loop the rest of the queue
         Y-->>J: _progress_hook, _file_done, logger
         D->>M: _post(_download_finished, row, job)
     end
@@ -66,7 +65,7 @@ Sources: [youtube_downloader.py:159-161](https://github.com/lifeupnorth/YouTubeD
 
 | Option | Value | Why |
 |---|---|---|
-| `outtmpl` | `<folder>/%(playlist_title\|)s/%(playlist_index&{:03d} - \|)s%(title)s.%(ext)s` | Playlist entries go to a folder named after the playlist, with a 3-digit index that keeps same-title videos apart. For a single video both fields are empty and the path collapses to `<folder>/<title>.<ext>`. A `%` in the folder's name is doubled, so yt-dlp doesn't read it as a field. |
+| `outtmpl` | `<folder>/%(playlist_title\|)s/%(playlist_index&{:03d} - \|)s%(title)s [%(id)s].%(ext)s` | Playlist entries go to a folder named after the playlist, with a 3-digit index. The video's id keeps different videos with the same title apart (yt-dlp would skip the second as already downloaded). For a single video both playlist fields are empty and the path collapses to `<folder>/<title> [<id>].<ext>`. A `%` in the folder's name is doubled, so yt-dlp doesn't read it as a field. |
 | `progress_hooks` | `[_progress_hook]` | Progress reporting |
 | `noplaylist` | `not whole_playlist` | Only affects `watch?v=…&list=…` links: off means just that video |
 | `quiet`, `no_warnings` | `True`, `False` | Nothing goes to the console; warnings still reach the logger |
@@ -83,16 +82,19 @@ Sources: [download_engine.py:180-221](https://github.com/lifeupnorth/YouTubeDown
 
 The **Whole playlist** box decides whether the app may download many videos without asking. A playlist is detected from what yt-dlp extracts, not from the URL text, so playlists, channels and channel tabs are all recognized.
 
-- **Box ticked:** `run` calls `ydl.download([url])` directly, with no probe and no question.
-- **Box unticked:** `_download_unless_declined` calls `extract_info(url, download=False, process=False)`, then `_follow_url_results` follows any `url`/`url_transparent` results to their target (at most 3 hops, so a link that keeps redirecting can't loop), and it checks the target's `_type`. If it's `playlist`, it asks *"\<title\>" is a playlist or channel. Download all its videos?* through the `ask` callback. No makes the job's outcome `"declined"`. To avoid extracting twice, it then calls `process_ie_result` on the result it already has (except for `url_transparent`, which is passed through so yt-dlp can merge its fields). If extraction returned nothing, yt-dlp has already logged the error and nothing is processed; with nothing saved, the job ends as failed.
+Either way, `_download_unless_declined` calls `extract_info(url, download=False, process=False)`, then `_follow_url_results` follows any `url`/`url_transparent` results, and the job reports the target to `on_info` (the window shows its title and thumbnail if the row has none yet), before anything downloads. That is what `ydl.download([url])` does inside, split in two.
+
+- **Box ticked:** no question.
+- **Box unticked:** it checks the target's `_type` (`_follow_url_results` takes at most 3 hops, so a link that keeps redirecting can't loop). If it's `playlist`, it asks *"\<title\>" is a playlist or channel. Download all its videos?* through the `ask` callback. No makes the job's outcome `"declined"`. To avoid extracting twice, it then calls `process_ie_result` on the result it already has (except for `url_transparent`, which is passed through so yt-dlp can merge its fields). If extraction returned nothing, yt-dlp has already logged the error and nothing is processed; with nothing saved, the job ends as failed.
 
 ```mermaid
 flowchart TD
-    start["DownloadJob.run"] --> ticked{"Whole playlist ticked?"}
-    ticked -- yes --> dl["ydl.download([url])"]
-    ticked -- no --> probe["extract_info(process=False)"]
+    start["DownloadJob.run"] --> probe["extract_info(process=False)"]
     probe --> follow["_follow_url_results (at most 3 hops)"]
-    follow --> isList{"_type == playlist?"}
+    follow --> info["on_info(target)"]
+    info --> ticked{"Whole playlist ticked?"}
+    ticked -- yes --> proc
+    ticked -- no --> isList{"_type == playlist?"}
     isList -- no --> proc["process_ie_result(info)"]
     isList -- yes --> ask["ask: download all?"]
     ask -- yes --> proc
@@ -184,7 +186,7 @@ Sources: [download_engine.py:578-582](https://github.com/lifeupnorth/YouTubeDown
 
 ## Limitations
 
-- At most three downloads run at a time (`PARALLEL_CHOICES`), and up to three lookups alongside them. The same link into the same folder never downloads twice at once; two different links whose videos have the same title, into the same folder, could still write the same file.
+- At most three downloads run at a time (`PARALLEL_CHOICES`), and up to three lookups alongside them. The same link into the same folder never downloads twice at once (`_clashes`). The same video through two different links (`youtu.be/…` and `youtube.com/watch?v=…`) does start twice, but the second job waits in its `before_dl` step while the first writes that file name (`_wait_to_write`), then finds the file already downloaded.
 - Closing the window during a download asks first; Yes pauses the downloads and the waiting rows, and the window closes once every download has stopped (the lookups are canceled then); the next run lists them as Paused. Closing again while it stops, or a crash, leaves its partial files without the list of them (the row comes back Paused all the same, and Resume continues them, but Cancel can't remove them). If that happens during an MP3 or M4A conversion, the half-converted file stays, and a resumed download takes it for a finished one.
 - yt-dlp extracts a resumed download's formats again, and after a restart YouTube may offer other ones; if yt-dlp then picks another format, it downloads it from the start and the earlier partial file stays.
 - An ffmpeg that is a `.bat`/`.cmd` wrapper runs under `cmd.exe /C`, so Cancel stops only `cmd.exe`.

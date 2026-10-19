@@ -91,9 +91,9 @@ class RealYtDlpTest(unittest.TestCase):
         url = self.serve("clip.mp4", os.urandom(300_000))
         job = self.download(url)
         self.assertEqual((job.outcome, job.saved, job.already), ("done", 1, 0), job.log)
-        self.assertEqual(job.last_file, os.path.join(self.folder, "clip.mp4"))
+        self.assertEqual(job.last_file, os.path.join(self.folder, "clip [clip].mp4"))
         self.assertEqual(os.path.getsize(job.last_file), 300_000)
-        self.assertEqual(self.files(), ["clip.mp4"], "no .part or temporary files left")
+        self.assertEqual(self.files(), ["clip [clip].mp4"], "no .part or temporary files left")
 
         again = self.download(url)
         self.assertEqual((again.outcome, again.saved, again.already), ("done", 0, 1))
@@ -108,14 +108,14 @@ class RealYtDlpTest(unittest.TestCase):
         url = f"http://127.0.0.1:{self.server.server_port}/tone.webm"
         job = self.download(url, fmt="mp3")
         self.assertEqual((job.outcome, job.saved), ("done", 1), job.log)
-        self.assertEqual(self.files(), ["tone.mp3"], "the WebM is deleted after converting")
+        self.assertEqual(self.files(), ["tone [tone].mp3"], "the WebM is deleted after converting")
 
         # The second run must see the MP3 (yt-dlp's final_ext), not download
         # and convert again.
         again = self.download(url, fmt="mp3")
         self.assertEqual((again.outcome, again.saved, again.already), ("done", 0, 1),
                          again.log)
-        self.assertEqual(self.files(), ["tone.mp3"])
+        self.assertEqual(self.files(), ["tone [tone].mp3"])
 
     def test_cancel_removes_the_partial_file(self):
         self.handler.slow = True

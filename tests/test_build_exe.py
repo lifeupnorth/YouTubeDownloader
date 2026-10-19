@@ -177,6 +177,7 @@ class IconTest(unittest.TestCase):
 
         import youtube_downloader as ytd
         ico = Image.open(self.icon)
+        self.addCleanup(ico.close)
         self.assertEqual(sorted(ico.info["sizes"]), [(s, s) for s in ytd.ICON_SIZES])
         for size in ytd.ICON_SIZES:
             with self.subTest(size=size):

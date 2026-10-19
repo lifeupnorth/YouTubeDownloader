@@ -23,7 +23,7 @@ os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 TESTS = os.path.dirname(os.path.abspath(__file__))
 sys.path[:0] = [os.path.dirname(TESTS), TESTS]   # the app, and tests/fakes.py
 from fakes import fake_yt_dlp, make_fake_ydl  # noqa: E402
-from PySide6.QtCore import QEvent, QMimeData, QPoint, QPointF, QUrl  # noqa: E402
+from PySide6.QtCore import QEvent, QMimeData, QPointF, QUrl  # noqa: E402
 from PySide6.QtGui import (  # noqa: E402
     QDragEnterEvent,
     QDragLeaveEvent,
@@ -46,7 +46,7 @@ GUARDED = [
     (ytd.YouTubeDownloader, "_log"), (ytd.YouTubeDownloader, "_set_status"),
     (ytd.YouTubeDownloader, "_looked_up"), (ytd.YouTubeDownloader, "_download_finished"),
     (ytd.YouTubeDownloader, "_show_progress"), (ytd.YouTubeDownloader, "_run_next"),
-    (ytd.YouTubeDownloader, "_js_runtime_installed"),
+    (ytd.YouTubeDownloader, "_js_runtime_installed"), (ytd.YouTubeDownloader, "_job_found"),
     (ytd.DownloadsModel, "add"), (ytd.DownloadsModel, "changed"),
     (ytd.DownloadsModel, "remove"),
 ]
@@ -220,7 +220,9 @@ class WindowTest(unittest.TestCase):
         row, = self.rows()
         self.assertEqual(row.state, "done")
         self.assertEqual(row.file, os.path.join(tmp, "v0.mp4"))
-        self.assertEqual((row.title, row.details), ("Title of watch?v=test", "0:42 · Channel"))
+        # It started at once, so it wasn't looked up: its download said what it is.
+        self.assertEqual(engine.preview_link.call_count, 0)
+        self.assertEqual(row.title, "Fake list")
         self.assertEqual(seen, sorted(seen), "progress went backwards between streams")
         self.assertLessEqual(max(seen), 99, "the bar reached 100 before the end")
         self.assertIn("Saved: ", self.log())
@@ -253,7 +255,7 @@ class WindowTest(unittest.TestCase):
         self.app.whole_playlist.setChecked(True)
         fake = make_fake_ydl(streams=2, videos=3)
         self.run_download(fake, "https://www.youtube.com/watch?v=test&list=x")
-        self.assertEqual(fake.calls, ["download"], "Whole playlist shouldn't ask")
+        self.assertEqual(fake.calls, ["probe", "download"])
         self.assertEqual(self.dialogs, [])
         for video in range(3):
             self.assertEqual(self.log().count(f"Saved: v{video}.mp4"), 1)
@@ -302,6 +304,9 @@ class WindowTest(unittest.TestCase):
         self.assertLess(log.index("▶ https://e.com/a"), log.index("▶ https://e.com/b"))
         self.assertLess(log.index("▶ https://e.com/b"), log.index("▶ https://e.com/c"))
         self.assertIn("Downloading 1 of 3…", self.statuses)
+        self.assertEqual([c.args[0] for c in engine.preview_link.call_args_list],
+                         ["https://e.com/b", "https://e.com/c"],
+                         "only the links left waiting are looked up")
         self.assertEqual(self.app.url.text(), "", "the box isn't emptied")
         self.assertEqual(self.dialogs, [])
 
@@ -309,10 +314,10 @@ class WindowTest(unittest.TestCase):
         fake = make_fake_ydl(streams=1)
 
         class FailsOnB(fake):
-            def download(self, urls):
-                if urls == ["https://e.com/b"]:
+            def extract_info(self, url, *args, **kwargs):
+                if url == "https://e.com/b":
                     raise RuntimeError("no such video")
-                super().download(urls)
+                return super().extract_info(url, *args, **kwargs)
 
         self.app.whole_playlist.setChecked(True)
         self.run_download(FailsOnB, "https://e.com/a https://e.com/b https://e.com/c")
@@ -702,6 +707,30 @@ class WindowTest(unittest.TestCase):
         self.assertFalse(row.cancel_event.is_set())
         self.assertTrue(waiting.cancel_event.is_set(), "its lookup goes on")
 
+    def test_closing_again_keeps_a_running_downloads_partial_files(self):
+        # The list is saved before the download has stopped; at the next
+        # start, Cancel must still find and remove its partial file.
+        with tempfile.TemporaryDirectory() as tmp:
+            part = os.path.join(tmp, "v0.f0.webm.part")
+            open(part, "wb").close()
+            row = ytd.Row(VIDEO, "mp4_best", tmp, False, state="downloading")
+            row.job = engine.DownloadJob(
+                VIDEO, fmt="mp4_best", folder=tmp, ffmpeg=None, whole_playlist=False,
+                on_progress=None, on_log=None, ask=None)
+            row.job._entry_files.add(part)   # what its progress hook noted
+            self.app.model.add(row)
+            self.app._running = {row}
+            self.app._close_when_stopped = True
+            try:
+                self.app.close()
+            finally:
+                self.app._running = set()
+            again = self.new_window()
+            restored, = again.model.rows
+            self.assertEqual((restored.state, restored.partial_files), ("paused", [part]))
+            again._row_action(restored, "cancel")
+            self.assertFalse(os.path.exists(part), "the partial file is left behind")
+
     def test_close_after_the_download_finished_during_the_question(self):
         # The download can end while the question is open; Yes must then
         # close, not wait for a stop that already happened.
@@ -918,7 +947,7 @@ class WindowTest(unittest.TestCase):
         for state, icons in (("waiting", ["pause", "cancel"]),
                              ("downloading", ["pause", "cancel"]),
                              ("paused", ["resume", "cancel"]),
-                             ("failed", ["remove"]), ("canceled", ["remove"])):
+                             ("failed", ["retry", "remove"]), ("canceled", ["remove"])):
             row = ytd.Row(VIDEO, "mp4_best", "f", False, state=state)
             self.assertEqual([n for n, _ in self.app.delegate.icons(rect, row)], icons)
 
@@ -933,7 +962,7 @@ class WindowTest(unittest.TestCase):
         return data
 
     def drag(self, data):
-        event = QDragEnterEvent(QPoint(10, 10), ytd.Qt.CopyAction, data,
+        event = QDragEnterEvent(QPointF(10, 10), ytd.Qt.CopyAction, data,
                                 ytd.Qt.LeftButton, ytd.Qt.NoModifier)
         self.app.dragEnterEvent(event)
         return event
@@ -1074,9 +1103,10 @@ class WindowTest(unittest.TestCase):
         items = menu.actions()
         self.assertEqual([(item.text(), item.isEnabled()) for item in items],
                          [("Pause\tSpace", False), ("Resume\tSpace", False),
-                          ("Cancel\tEsc", False), ("Show in folder\tEnter", True),
+                          ("Retry\tSpace", False), ("Cancel\tEsc", False),
+                          ("Show in folder\tEnter", True),
                           ("Remove from the list (the file stays)\tDelete", True)])
-        items[4].trigger()
+        items[5].trigger()
         self.assertEqual(self.rows(), [])
 
     def test_double_click_shows_the_file(self):
@@ -1091,7 +1121,7 @@ class WindowTest(unittest.TestCase):
 
     def test_tooltips_name_the_keys(self):
         self.assertEqual([key for _, key, _ in ytd.ROW_ACTIONS.values()],
-                         ["Space", "Space", "Esc", "Enter", "Delete"])
+                         ["Space", "Space", "Space", "Esc", "Enter", "Delete"])
         for name, (_, _, keys) in ytd.ROW_ACTIONS.items():
             for key in keys:
                 self.assertIn(name, ytd.ACTION_KEYS[key])
@@ -1108,6 +1138,58 @@ class WindowTest(unittest.TestCase):
             self.select(done)
             self.key(ytd.Qt.Key_Space)   # nothing to pause
         self.assertEqual(done.state, "done")
+
+    def test_space_retries_a_failed_download_where_it_stopped(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            with open(os.path.join(tmp, "v0.f0.webm.part"), "wb") as f:
+                f.write(b"x" * 8)   # 40% (the fake writes a byte per 5%)
+            row = ytd.Row(VIDEO, "mp4_best", tmp, False, state="failed", message="timed out")
+            self.app.model.add(row)
+            self.select(row)
+            fake = make_fake_ydl(streams=1, files_dir=tmp)
+            with mock.patch.object(engine, "yt_dlp", fake_yt_dlp(fake)):
+                self.key(ytd.Qt.Key_Space)
+                self.wait(self.idle)
+            self.assertEqual(fake.resumed, [(0, 0, 40)], "it started over")
+            self.assertEqual(self.files(tmp), ["v0.mp4"])
+        self.assertEqual((row.state, row.message), ("done", ""))
+
+    def test_a_download_waiting_for_another_frees_its_slot(self):
+        running = ytd.Row(VIDEO, "mp4_best", "f", False, state="downloading")
+        waiting = ytd.Row("https://e.com/b", "mp4_best", "f", False)
+        self.app.model.add(running)
+        self.app.model.add(waiting)
+        self.app._running = {running}
+        try:
+            with mock.patch.object(self.app, "_start_worker") as start:
+                self.app._run_next()
+                start.assert_not_called()   # one at a time
+                running.latest = engine.Progress(0, waiting=True)
+                self.app._show_progress()
+            self.assertEqual(running.message, "Waiting for the other download of this video")
+            self.assertEqual(waiting.state, "downloading")
+            start.assert_called_once()
+        finally:
+            self.app._running = set()
+
+    def test_a_new_partial_file_is_saved_soon(self):
+        # Not only once the download ends: after a crash, the row must know it.
+        row = ytd.Row(VIDEO, "mp4_best", "f", False, state="downloading")
+        row.job = engine.DownloadJob(
+            VIDEO, fmt="mp4_best", folder="f", ffmpeg=None, whole_playlist=False,
+            on_progress=None, on_log=None, ask=None)
+        self.app.model.add(row)
+        self.app._running = {row}
+        try:
+            self.app._show_progress()
+            self.assertFalse(self.app._history_timer.isActive(), "saved, though nothing changed")
+            row.job._entry_files.add("v.f0.webm.part")
+            self.app._show_progress()
+            self.assertTrue(self.app._history_timer.isActive())
+            self.app._save_history()
+        finally:
+            self.app._running = set()
+        self.assertEqual(ytd.load_history()[-1]["partial_files"], ["v.f0.webm.part"])
 
     def test_a_running_row_cant_be_removed_and_clear_keeps_it(self):
         rows = [ytd.Row(VIDEO, "mp4_best", "f", False, state=s)
@@ -1499,10 +1581,10 @@ class WindowTest(unittest.TestCase):
         self.app.whole_playlist.setChecked(True)
         with tempfile.TemporaryDirectory() as tmp:
             class FailsOnB(make_fake_ydl(streams=1, files_dir=tmp)):
-                def download(self, urls):
-                    if urls == ["https://e.com/b"]:
+                def extract_info(self, url, *args, **kwargs):
+                    if url == "https://e.com/b":
                         raise RuntimeError("no such video")
-                    super().download(urls)
+                    return super().extract_info(url, *args, **kwargs)
 
             self.app.path.setText(tmp)
             self.run_download(FailsOnB, "https://e.com/a https://e.com/b")

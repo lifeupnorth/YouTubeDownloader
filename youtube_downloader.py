@@ -370,11 +370,12 @@ ACTIVE = {"downloading", "processing"}
 FINISHED = {"done", "failed", "canceled", "declined", "empty"}
 
 # What can be done with a row: (what its icon's tooltip and the right-click
-# menu say, its key in the list, the Qt keys). A row has Pause or Resume,
-# never both, so they share Space.
+# menu say, its key in the list, the Qt keys). A row has one of Pause,
+# Resume and Retry at most, so they share Space.
 ROW_ACTIONS = {
     "pause": ("Pause", "Space", (Qt.Key_Space,)),
     "resume": ("Resume", "Space", (Qt.Key_Space,)),
+    "retry": ("Retry", "Space", (Qt.Key_Space,)),
     "cancel": ("Cancel", "Esc", (Qt.Key_Escape,)),
     "folder": ("Show in folder", "Enter", (Qt.Key_Return, Qt.Key_Enter)),
     "remove": ("Remove from the list (the file stays)", "Delete",
@@ -389,6 +390,8 @@ for _name, (_text, _key, _keys) in ROW_ACTIONS.items():
 def progress_text(progress):
     """A downloading row's message, e.g. "Video 2/5 · 3.4 MB/s · ETA 0:07":
     the bar, its percentage and the Status column show the rest."""
+    if progress.waiting:
+        return "Waiting for the other download of this video"
     parts = []
     if progress.video and progress.videos:
         parts.append(f"Video {progress.video}/{progress.videos}")
@@ -416,6 +419,8 @@ def row_actions(row):
     names = []
     if row.state == "paused":
         names.append("resume")
+    elif row.state == "failed":   # e.g. the network dropped: its .part file continues
+        names.append("retry")
     elif row.state not in FINISHED and not row.pause_event.is_set():   # not "Pausing…"
         names.append("pause")
     if row.state not in FINISHED:
@@ -452,6 +457,7 @@ class Row:
     job: engine.DownloadJob | None = None
     latest: engine.Progress | None = None
     shown: engine.Progress | None = None   # the `latest` on screen now
+    saved_files: list[str] = field(default_factory=list)   # its job's, when last saved
 
     @property
     def format_label(self):
@@ -468,11 +474,15 @@ INTERRUPTED = "Stopped when the app closed"
 
 def row_entry(row):
     """What the saved list keeps of a row (see restored_row)."""
+    # A download still running (the app closed without waiting for it to
+    # stop) knows its partial files only in its job.
+    files = (row.job.unfinished_files() if row.job and row.state in ACTIVE
+             else row.partial_files)
     entry = {"url": row.url, "fmt": row.fmt, "folder": row.folder,
              "whole_playlist": row.whole_playlist, "title": row.title,
              "details": row.details, "state": row.state, "pct": row.pct,
              "message": row.message, "file": row.file,
-             "partial_files": row.partial_files}
+             "partial_files": files}
     if row.thumb_jpeg:
         entry["thumb"] = base64.b64encode(row.thumb_jpeg).decode("ascii")
     return entry
@@ -894,6 +904,14 @@ def draw_icon(painter, name, area, color):
         path.lineTo(x - 4, y + 6.5)
         path.closeSubpath()
         painter.drawPath(path)
+    elif name == "retry":   # a circle open at the top right, its arrow going round
+        circle = QRectF(x - 6, y - 6, 12, 12)
+        path = QPainterPath()
+        path.arcMoveTo(circle, 90)
+        path.arcTo(circle, 90, 270)
+        painter.drawPath(path)
+        painter.drawPolyline([QPointF(x - 2, y - 9), QPointF(x + 1, y - 6),
+                              QPointF(x - 2, y - 3)])
     elif name == "cancel":
         painter.drawLine(QPointF(x - 5, y - 5), QPointF(x + 5, y + 5))
         painter.drawLine(QPointF(x - 5, y + 5), QPointF(x + 5, y - 5))
@@ -1461,7 +1479,7 @@ class YouTubeDownloader(QMainWindow):
         if wanted != self._requested_scheme:
             self._requested_scheme = wanted
             QGuiApplication.styleHints().setColorScheme(wanted)   # may call this again
-        self.shown_theme = name = self._theme_name()
+        name = self._theme_name()
         self.colors = self.model.colors = colors = THEMES[name]
         self.theme_chips[self.theme_mode].setChecked(True)
         folder = os.path.join(self._svg_dir.name, name)
@@ -1624,22 +1642,27 @@ class YouTubeDownloader(QMainWindow):
         self._save_settings()
 
         fmt = self._chosen_format()
-        thumb = self._thumb_pixels()   # read here: workers mustn't touch widgets
-        added = 0
+        added = []
         for url in links:
             if any(r.url == url and r.fmt == fmt and r.state not in FINISHED
                    for r in self.model.rows):
                 continue   # already waiting or downloading
             row = Row(url, fmt, folder, self.whole_playlist.isChecked())
             self.model.add(row)
-            self._start_worker(self._look_up, row, thumb, self._js_runtime)
-            added += 1
+            added.append(row)
         self.view.scrollToBottom()
         self._history_changed()
-        if added:
-            self._run_next()
-        else:
+        if not added:
             self._set_status("Those links are already in the list.")
+            return True
+        self._run_next()
+        # Only the rows left waiting are looked up: one that started already
+        # learns what it is from its download (_job_found), so YouTube isn't
+        # asked twice.
+        thumb = self._thumb_pixels()   # read here: workers mustn't touch widgets
+        for row in added:
+            if row.state == "waiting":
+                self._start_worker(self._look_up, row, thumb, self._js_runtime)
         return True
 
     # ── Drag and drop ───────────────────────────────────────────────────────
@@ -1699,15 +1722,30 @@ class YouTubeDownloader(QMainWindow):
     # the row, a few links at a time.
     def _look_up(self, row, thumb, js_runtime):
         with self._lookup_slots:
-            if row.cancel_event.is_set() or self._closing:
+            # (Started while this waited for a slot: see _job_found.)
+            if row.cancel_event.is_set() or self._closing or row.state in ACTIVE:
                 return
             self._post(self._looked_up, row, None)   # "Looking up…"
             result = engine.preview_link(row.url, row.whole_playlist, row.cancel_event,
                                          js_runtime, thumb)
         if result is not None:   # None: canceled
-            text, image, found = result
-            self._post(self._looked_up, row, (text, image and to_qimage(image), found,
-                                              engine.encode_thumbnail(image)))
+            self._show_preview(row, *result)
+
+    # Runs on a worker thread.
+    def _show_preview(self, row, text, image, found):
+        self._post(self._looked_up, row, (text, image and to_qimage(image), found,
+                                          engine.encode_thumbnail(image)))
+
+    # What a download found its link to be: the title and thumbnail for a
+    # row that has none yet (it started before a lookup, or that failed).
+    def _job_found(self, row, info):
+        if not row.title:
+            self._start_worker(self._describe, row, info, self._thumb_pixels())
+
+    # Runs on a worker thread, as the thumbnail is fetched from the web.
+    def _describe(self, row, info, thumb):
+        self._show_preview(row, *engine.preview_of(info, row.cancel_event.is_set, thumb),
+                           True)
 
     def _looked_up(self, row, result):
         if result is None:
@@ -1733,7 +1771,7 @@ class YouTubeDownloader(QMainWindow):
     def _run_next(self):
         if self._closing or self._close_when_stopped:
             return
-        while len(self._running) < self._parallel:
+        while self._busy() < self._parallel:
             row = next((r for r in self.model.rows if r.state in ("waiting", "looking")
                         and not self._clashes(r)), None)
             if row is None:
@@ -1748,6 +1786,12 @@ class YouTubeDownloader(QMainWindow):
             self._show_running()
         else:   # (a row only waits for one that's running: see _clashes)
             self._queue_finished()
+
+    def _busy(self):
+        """How many downloads take a slot: not one that waits for another
+        download of its video (it may then download, one over the limit,
+        but usually finds the file already there)."""
+        return sum(not (r.shown and r.shown.waiting) for r in self._running)
 
     def _clashes(self, row):
         """Whether row would write the files of a download running now: the
@@ -1788,6 +1832,7 @@ class YouTubeDownloader(QMainWindow):
                 on_progress=lambda progress: setattr(row, "latest", progress),
                 on_log=lambda msg: self._post(self._job_log, row, msg),
                 ask=lambda question: self._ask_on_main(row, "Playlist", question),
+                on_info=lambda info: self._post(self._job_found, row, info),
                 cancel_event=row.cancel_event, pause_event=row.pause_event,
                 partial_files=row.partial_files, js_runtime=js_runtime)
             row.job = job
@@ -1805,19 +1850,29 @@ class YouTubeDownloader(QMainWindow):
 
     # Progress comes often; the newest is shown 10 times a second.
     def _show_progress(self):
+        freed = False
         for row in list(self._running):
+            # A new partial file is saved with the list soon, so a crash
+            # doesn't leave it with no row to resume or remove it.
+            files = row.job.unfinished_files() if row.job else []
+            if files != row.saved_files:
+                row.saved_files = files
+                self._history_changed()
             # Read once and never cleared here: the download thread may set
             # a newer one at any moment, which clearing could wipe out.
             latest = row.latest
             if (latest is None or latest is row.shown or row.cancel_event.is_set()
                     or row.pause_event.is_set()):
                 continue   # after Cancel or Pause, "Canceling…" or "Pausing…" stays
+            freed |= latest.waiting and not (row.shown and row.shown.waiting)
             row.shown = latest
             row.pct = latest.percent
             row.state = "processing" if latest.processing else "downloading"
             row.speed = 0 if latest.processing else latest.speed
             row.message = progress_text(latest)
             self.model.changed(row)
+        if freed:   # a download waits for another: its slot can start the next
+            self._run_next()
 
     def _download_finished(self, row, job):
         self._running.discard(row)
@@ -1931,7 +1986,7 @@ class YouTubeDownloader(QMainWindow):
     def _row_action(self, row, action):
         if action == "pause":
             self._pause_row(row)
-        elif action == "resume":
+        elif action in ("resume", "retry"):
             self._resume_row(row)
         elif action == "cancel":
             self._cancel_row(row)
@@ -1976,9 +2031,10 @@ class YouTubeDownloader(QMainWindow):
             self._history_changed()
         self.model.changed(row)
 
-    # Back in the queue: its download continues the files the pause kept.
+    # Back in the queue: its download continues the files a pause kept, or
+    # the .part file a failed download left (yt-dlp continues those itself).
     def _resume_row(self, row):
-        if row.state != "paused":
+        if row.state not in ("paused", "failed"):
             return
         row.pause_event = threading.Event()   # the next job's
         row.state, row.message, row.restored = "waiting", "", False
