@@ -12,7 +12,8 @@ class FakeCancelled(Exception):
 def make_fake_ydl(streams=2, videos=1, overshoot=0, error=None, fail=(),
                   already=(), probe=("video",), files_dir=None, on_progress=None,
                   warn=None, delay=0, merge=None):
-    """probe: the _type returned by each extract_info(process=False) call.
+    """probe: the _type returned by each extract_info(process=False) call;
+    the last one again for any calls after that.
 
     files_dir: write real stream files there (.part while downloading, then
     renamed, then "merged" into v<N>.mp4), as yt-dlp does. Like yt-dlp, it
@@ -52,7 +53,7 @@ def make_fake_ydl(streams=2, videos=1, overshoot=0, error=None, fail=(),
 
         def extract_info(self, url, download=True, process=True, ie_key=None):
             FakeYDL.calls.append("probe")
-            kind = probes.pop(0)
+            kind = probes.pop(0) if len(probes) > 1 else probes[0]
             if kind is None:   # what yt-dlp returns once it has logged the error
                 self.opts["logger"].error(f"ERROR: [youtube] {url}: Video unavailable")
                 return None

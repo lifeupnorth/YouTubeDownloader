@@ -673,6 +673,14 @@ class DownloadJobTest(unittest.TestCase):
         with mock.patch.object(engine, "yt_dlp", fake_yt_dlp(make_fake_ydl())),                 self.assertRaises(FakeCancelled):
             second._video_starting({"_filename": "T [x].mp4"})
 
+    def test_the_job_says_what_the_link_is_before_downloading(self):
+        fake = make_fake_ydl(streams=1, probe=("url", "video"))
+        job, found = make_job(), []
+        job.on_info = lambda info: found.append((info["_type"], list(fake.calls)))
+        self.run_job(fake, job)
+        self.assertEqual(found, [("video", ["probe", "probe"])], "not the followed result")
+        self.assertEqual(fake.calls, ["probe", "probe", "download"])
+
     def test_an_empty_playlist_isnt_complete(self):
         job = self.run_job(make_fake_ydl(streams=1, videos=0), whole_playlist=True)
         self.assertEqual(job.outcome, "done")

@@ -46,7 +46,7 @@ GUARDED = [
     (ytd.YouTubeDownloader, "_log"), (ytd.YouTubeDownloader, "_set_status"),
     (ytd.YouTubeDownloader, "_looked_up"), (ytd.YouTubeDownloader, "_download_finished"),
     (ytd.YouTubeDownloader, "_show_progress"), (ytd.YouTubeDownloader, "_run_next"),
-    (ytd.YouTubeDownloader, "_js_runtime_installed"),
+    (ytd.YouTubeDownloader, "_js_runtime_installed"), (ytd.YouTubeDownloader, "_job_found"),
     (ytd.DownloadsModel, "add"), (ytd.DownloadsModel, "changed"),
     (ytd.DownloadsModel, "remove"),
 ]
@@ -220,7 +220,9 @@ class WindowTest(unittest.TestCase):
         row, = self.rows()
         self.assertEqual(row.state, "done")
         self.assertEqual(row.file, os.path.join(tmp, "v0.mp4"))
-        self.assertEqual((row.title, row.details), ("Title of watch?v=test", "0:42 · Channel"))
+        # It started at once, so it wasn't looked up: its download said what it is.
+        self.assertEqual(engine.preview_link.call_count, 0)
+        self.assertEqual(row.title, "Fake list")
         self.assertEqual(seen, sorted(seen), "progress went backwards between streams")
         self.assertLessEqual(max(seen), 99, "the bar reached 100 before the end")
         self.assertIn("Saved: ", self.log())
@@ -253,7 +255,7 @@ class WindowTest(unittest.TestCase):
         self.app.whole_playlist.setChecked(True)
         fake = make_fake_ydl(streams=2, videos=3)
         self.run_download(fake, "https://www.youtube.com/watch?v=test&list=x")
-        self.assertEqual(fake.calls, ["download"], "Whole playlist shouldn't ask")
+        self.assertEqual(fake.calls, ["probe", "download"])
         self.assertEqual(self.dialogs, [])
         for video in range(3):
             self.assertEqual(self.log().count(f"Saved: v{video}.mp4"), 1)
@@ -302,6 +304,9 @@ class WindowTest(unittest.TestCase):
         self.assertLess(log.index("▶ https://e.com/a"), log.index("▶ https://e.com/b"))
         self.assertLess(log.index("▶ https://e.com/b"), log.index("▶ https://e.com/c"))
         self.assertIn("Downloading 1 of 3…", self.statuses)
+        self.assertEqual([c.args[0] for c in engine.preview_link.call_args_list],
+                         ["https://e.com/b", "https://e.com/c"],
+                         "only the links left waiting are looked up")
         self.assertEqual(self.app.url.text(), "", "the box isn't emptied")
         self.assertEqual(self.dialogs, [])
 
@@ -309,10 +314,10 @@ class WindowTest(unittest.TestCase):
         fake = make_fake_ydl(streams=1)
 
         class FailsOnB(fake):
-            def download(self, urls):
-                if urls == ["https://e.com/b"]:
+            def extract_info(self, url, *args, **kwargs):
+                if url == "https://e.com/b":
                     raise RuntimeError("no such video")
-                super().download(urls)
+                return super().extract_info(url, *args, **kwargs)
 
         self.app.whole_playlist.setChecked(True)
         self.run_download(FailsOnB, "https://e.com/a https://e.com/b https://e.com/c")
@@ -1149,6 +1154,43 @@ class WindowTest(unittest.TestCase):
             self.assertEqual(self.files(tmp), ["v0.mp4"])
         self.assertEqual((row.state, row.message), ("done", ""))
 
+    def test_a_download_waiting_for_another_frees_its_slot(self):
+        running = ytd.Row(VIDEO, "mp4_best", "f", False, state="downloading")
+        waiting = ytd.Row("https://e.com/b", "mp4_best", "f", False)
+        self.app.model.add(running)
+        self.app.model.add(waiting)
+        self.app._running = {running}
+        try:
+            with mock.patch.object(self.app, "_start_worker") as start:
+                self.app._run_next()
+                start.assert_not_called()   # one at a time
+                running.latest = engine.Progress(0, waiting=True)
+                self.app._show_progress()
+            self.assertEqual(running.message, "Waiting for the other download of this video")
+            self.assertEqual(waiting.state, "downloading")
+            start.assert_called_once()
+        finally:
+            self.app._running = set()
+
+    def test_a_new_partial_file_is_saved_soon(self):
+        # Not only once the download ends: after a crash, the row must know it.
+        row = ytd.Row(VIDEO, "mp4_best", "f", False, state="downloading")
+        row.job = engine.DownloadJob(
+            VIDEO, fmt="mp4_best", folder="f", ffmpeg=None, whole_playlist=False,
+            on_progress=None, on_log=None, ask=None)
+        self.app.model.add(row)
+        self.app._running = {row}
+        try:
+            self.app._show_progress()
+            self.assertFalse(self.app._history_timer.isActive(), "saved, though nothing changed")
+            row.job._entry_files.add("v.f0.webm.part")
+            self.app._show_progress()
+            self.assertTrue(self.app._history_timer.isActive())
+            self.app._save_history()
+        finally:
+            self.app._running = set()
+        self.assertEqual(ytd.load_history()[-1]["partial_files"], ["v.f0.webm.part"])
+
     def test_a_running_row_cant_be_removed_and_clear_keeps_it(self):
         rows = [ytd.Row(VIDEO, "mp4_best", "f", False, state=s)
                 for s in ("downloading", "done", "failed", "waiting")]
@@ -1539,10 +1581,10 @@ class WindowTest(unittest.TestCase):
         self.app.whole_playlist.setChecked(True)
         with tempfile.TemporaryDirectory() as tmp:
             class FailsOnB(make_fake_ydl(streams=1, files_dir=tmp)):
-                def download(self, urls):
-                    if urls == ["https://e.com/b"]:
+                def extract_info(self, url, *args, **kwargs):
+                    if url == "https://e.com/b":
                         raise RuntimeError("no such video")
-                    super().download(urls)
+                    return super().extract_info(url, *args, **kwargs)
 
             self.app.path.setText(tmp)
             self.run_download(FailsOnB, "https://e.com/a https://e.com/b")

@@ -510,6 +510,14 @@ def decode_thumbnail(data):
         return None
 
 
+def preview_of(info, canceled=lambda: False, thumb_size=THUMB_SIZE):
+    """(text, PIL image or None) for yt-dlp's info about a link: describe_info's
+    two lines and the thumbnail, fitting thumb_size."""
+    image = fetch_thumbnail(thumbnail_url(info, max(160, thumb_size[0])), canceled,
+                            thumb_size)
+    return describe_info(info), image
+
+
 def preview_link(url, whole_playlist, cancel_event=None, js_runtime=None,
                  thumb_size=THUMB_SIZE):
     """Looks a link up without downloading: (text, PIL image or None, found).
@@ -546,11 +554,10 @@ def preview_link(url, whole_playlist, cancel_event=None, js_runtime=None,
         return None
     if not info:
         return "Couldn't load a preview for this link.", None, False
-    image = fetch_thumbnail(thumbnail_url(info, max(160, thumb_size[0])), canceled,
-                            thumb_size)
+    text, image = preview_of(info, canceled, thumb_size)
     if canceled():
         return None
-    return describe_info(info), image, True
+    return text, image, True
 
 
 # ── Downloading ──────────────────────────────────────────────────────────────
@@ -574,6 +581,7 @@ class Progress:
     eta: float = 0             # seconds left while downloading, 0 if unknown
     video: int | None = None   # which entry of a playlist, from 1
     videos: int | None = None  # how many the playlist has
+    waiting: bool = False      # for another job that downloads this video now
 
 
 def _remove(path):
@@ -625,18 +633,21 @@ class DownloadJob:
     The job reports through callbacks, which also run on the worker thread:
 
     on_progress(progress): a Progress, often; only the newest call matters.
+    on_info(info): what the link is (yt-dlp's info, not processed yet), once
+    it's known and before anything downloads.
     on_log(message): a line for the log.
     ask(question): returns True or False; used to confirm a playlist.
     """
 
     def __init__(self, url, *, fmt, folder, ffmpeg, whole_playlist,
                  on_progress, on_log, ask, cancel_event=None, pause_event=None,
-                 partial_files=(), js_runtime=None):
+                 partial_files=(), js_runtime=None, on_info=lambda info: None):
         self.url = url
         self.fmt, self.folder, self.ffmpeg = fmt, folder, ffmpeg
         self.js_runtime = js_runtime   # (name, path) from find_js_runtime()
         self.whole_playlist = whole_playlist
         self.on_progress, self.on_log, self.ask = on_progress, on_log, ask
+        self.on_info = on_info
         self._cancel = cancel_event or threading.Event()
         self._pause = pause_event or threading.Event()
 
@@ -749,9 +760,7 @@ class DownloadJob:
                                        when="before_dl")
                 ydl.add_post_processor(_callback_pp_class(base)(self._file_done),
                                        when="after_move")
-                if self.whole_playlist:
-                    ydl.download([self.url])
-                elif not self._download_unless_declined(ydl) and not self.stopping:
+                if not self._download_unless_declined(ydl) and not self.stopping:
                     # (A question cut short by Cancel or Pause isn't a No.)
                     self.outcome = "declined"
                     return self.outcome
@@ -789,8 +798,9 @@ class DownloadJob:
         if self.stopping:
             raise yt_dlp.utils.DownloadCancelled()
 
-    # With "whole playlist" off, ask before downloading a playlist, channel
-    # or tab (decided from what yt-dlp extracts, not from the URL).
+    # Extracts, then downloads what it found, as ydl.download() would. With
+    # "whole playlist" off, it asks before downloading a playlist, channel or
+    # tab (decided from what yt-dlp extracts, not from the URL).
     def _download_unless_declined(self, ydl):
         info = ydl.extract_info(self.url, download=False, process=False)
         target = _follow_url_results(ydl, info)   # at most 3 hops
@@ -798,7 +808,8 @@ class DownloadJob:
             info = target   # what process_ie_result would extract again
         if info is None:
             return True     # the extraction error is already logged
-        if target.get("_type") == "playlist":
+        self.on_info(target)
+        if target.get("_type") == "playlist" and not self.whole_playlist:
             title = target.get("title") or "This link"
             if not self.ask(f"\"{title}\" is a playlist or channel.\n\n"
                             "Download all its videos?"):
@@ -826,6 +837,7 @@ class DownloadJob:
         with _writing_changed:
             if name in _writing:
                 self.on_log("• Waiting for the other download of this video")
+                self.on_progress(Progress(0, waiting=True))
             while name in _writing:
                 _writing_changed.wait(0.1)
                 self._check_stop()
