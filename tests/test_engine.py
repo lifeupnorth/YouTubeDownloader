@@ -633,9 +633,19 @@ class DownloadJobTest(unittest.TestCase):
             entry = {**video, "playlist_title": "List", "playlist_index": 7}
             # (On Linux the empty playlist folder stays as "//"; same file.)
             self.assertEqual(os.path.normpath(ydl.prepare_filename(video)),
-                             os.path.join(folder, "T.mp3"))
+                             os.path.join(folder, "T [abc].mp3"))
             self.assertEqual(os.path.normpath(ydl.prepare_filename(entry)),
-                             os.path.join(folder, "List", "007 - T.mp3"))
+                             os.path.join(folder, "List", "007 - T [abc].mp3"))
+
+    @unittest.skipUnless(yt_dlp, "needs yt-dlp")
+    def test_videos_with_the_same_title_get_their_own_file(self):
+        # One file name for both would make yt-dlp skip the second video as
+        # already downloaded (or write both into one .part file at once).
+        opts = make_job(folder="dl").options()
+        with yt_dlp.YoutubeDL({"outtmpl": opts["outtmpl"], "quiet": True}) as ydl:
+            names = {ydl.prepare_filename({"id": video_id, "title": "Trailer", "ext": "mp4"})
+                     for video_id in ("abc", "xyz")}
+        self.assertEqual(len(names), 2)
 
     def test_an_empty_playlist_isnt_complete(self):
         job = self.run_job(make_fake_ydl(streams=1, videos=0), whole_playlist=True)

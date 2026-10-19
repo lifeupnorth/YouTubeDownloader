@@ -468,11 +468,15 @@ INTERRUPTED = "Stopped when the app closed"
 
 def row_entry(row):
     """What the saved list keeps of a row (see restored_row)."""
+    # A download still running (the app closed without waiting for it to
+    # stop) knows its partial files only in its job.
+    files = (row.job.unfinished_files() if row.job and row.state in ACTIVE
+             else row.partial_files)
     entry = {"url": row.url, "fmt": row.fmt, "folder": row.folder,
              "whole_playlist": row.whole_playlist, "title": row.title,
              "details": row.details, "state": row.state, "pct": row.pct,
              "message": row.message, "file": row.file,
-             "partial_files": row.partial_files}
+             "partial_files": files}
     if row.thumb_jpeg:
         entry["thumb"] = base64.b64encode(row.thumb_jpeg).decode("ascii")
     return entry

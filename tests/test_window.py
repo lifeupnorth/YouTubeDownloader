@@ -702,6 +702,30 @@ class WindowTest(unittest.TestCase):
         self.assertFalse(row.cancel_event.is_set())
         self.assertTrue(waiting.cancel_event.is_set(), "its lookup goes on")
 
+    def test_closing_again_keeps_a_running_downloads_partial_files(self):
+        # The list is saved before the download has stopped; at the next
+        # start, Cancel must still find and remove its partial file.
+        with tempfile.TemporaryDirectory() as tmp:
+            part = os.path.join(tmp, "v0.f0.webm.part")
+            open(part, "wb").close()
+            row = ytd.Row(VIDEO, "mp4_best", tmp, False, state="downloading")
+            row.job = engine.DownloadJob(
+                VIDEO, fmt="mp4_best", folder=tmp, ffmpeg=None, whole_playlist=False,
+                on_progress=None, on_log=None, ask=None)
+            row.job._entry_files.add(part)   # what its progress hook noted
+            self.app.model.add(row)
+            self.app._running = {row}
+            self.app._close_when_stopped = True
+            try:
+                self.app.close()
+            finally:
+                self.app._running = set()
+            again = self.new_window()
+            restored, = again.model.rows
+            self.assertEqual((restored.state, restored.partial_files), ("paused", [part]))
+            again._row_action(restored, "cancel")
+            self.assertFalse(os.path.exists(part), "the partial file is left behind")
+
     def test_close_after_the_download_finished_during_the_question(self):
         # The download can end while the question is open; Yes must then
         # close, not wait for a stop that already happened.

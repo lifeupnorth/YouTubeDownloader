@@ -66,7 +66,7 @@ Sources: [youtube_downloader.py:159-161](https://github.com/lifeupnorth/YouTubeD
 
 | Option | Value | Why |
 |---|---|---|
-| `outtmpl` | `<folder>/%(playlist_title\|)s/%(playlist_index&{:03d} - \|)s%(title)s.%(ext)s` | Playlist entries go to a folder named after the playlist, with a 3-digit index that keeps same-title videos apart. For a single video both fields are empty and the path collapses to `<folder>/<title>.<ext>`. A `%` in the folder's name is doubled, so yt-dlp doesn't read it as a field. |
+| `outtmpl` | `<folder>/%(playlist_title\|)s/%(playlist_index&{:03d} - \|)s%(title)s [%(id)s].%(ext)s` | Playlist entries go to a folder named after the playlist, with a 3-digit index. The video's id keeps different videos with the same title apart (yt-dlp would skip the second as already downloaded). For a single video both playlist fields are empty and the path collapses to `<folder>/<title> [<id>].<ext>`. A `%` in the folder's name is doubled, so yt-dlp doesn't read it as a field. |
 | `progress_hooks` | `[_progress_hook]` | Progress reporting |
 | `noplaylist` | `not whole_playlist` | Only affects `watch?v=…&list=…` links: off means just that video |
 | `quiet`, `no_warnings` | `True`, `False` | Nothing goes to the console; warnings still reach the logger |
@@ -184,7 +184,7 @@ Sources: [download_engine.py:578-582](https://github.com/lifeupnorth/YouTubeDown
 
 ## Limitations
 
-- At most three downloads run at a time (`PARALLEL_CHOICES`), and up to three lookups alongside them. The same link into the same folder never downloads twice at once; two different links whose videos have the same title, into the same folder, could still write the same file.
+- At most three downloads run at a time (`PARALLEL_CHOICES`), and up to three lookups alongside them. The same link into the same folder never downloads twice at once; the same video through two different links (`youtu.be/…` and `youtube.com/watch?v=…`) still could.
 - Closing the window during a download asks first; Yes pauses the downloads and the waiting rows, and the window closes once every download has stopped (the lookups are canceled then); the next run lists them as Paused. Closing again while it stops, or a crash, leaves its partial files without the list of them (the row comes back Paused all the same, and Resume continues them, but Cancel can't remove them). If that happens during an MP3 or M4A conversion, the half-converted file stays, and a resumed download takes it for a finished one.
 - yt-dlp extracts a resumed download's formats again, and after a restart YouTube may offer other ones; if yt-dlp then picks another format, it downloads it from the start and the earlier partial file stays.
 - An ffmpeg that is a `.bat`/`.cmd` wrapper runs under `cmd.exe /C`, so Cancel stops only `cmd.exe`.

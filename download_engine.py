@@ -705,13 +705,14 @@ class DownloadJob:
     def options(self):
         """The yt-dlp options for this download."""
         opts = {
-            # Playlist entries go to "<playlist>/<NNN> - <title>.<ext>" (the
-            # index keeps same-title videos apart); single videos to
-            # "<title>.<ext>", as an empty folder name collapses. A "%" in
-            # the download folder's name is doubled, or yt-dlp would read it
-            # as the start of a field.
+            # Playlist entries go to "<playlist>/<NNN> - <title> [<id>].<ext>";
+            # single videos to "<title> [<id>].<ext>", as an empty folder name
+            # collapses. The id keeps different videos with the same title
+            # apart: yt-dlp would take the second for already downloaded. A
+            # "%" in the download folder's name is doubled, or yt-dlp would
+            # read it as the start of a field.
             "outtmpl": os.path.join(self.folder.replace("%", "%%"), "%(playlist_title|)s",
-                                    "%(playlist_index&{:03d} - |)s%(title)s.%(ext)s"),
+                                    "%(playlist_index&{:03d} - |)s%(title)s [%(id)s].%(ext)s"),
             "progress_hooks": [self._progress_hook],
             # Only affects links to a video in a playlist (watch?v=…&list=…).
             "noplaylist": not self.whole_playlist,
@@ -885,7 +886,12 @@ class DownloadJob:
         with self._lock:
             killed = list(self._killed_outputs)
         self.removed = remove_partial_files(killed, self.on_log)
-        self.partial_files = sorted({*self._entry_files, *self._earlier_files})
+        self.partial_files = self.unfinished_files()
+
+    def unfinished_files(self):
+        """The unfinished video's files so far. Safe to call while it runs
+        (the window saves its list before a download has stopped)."""
+        return sorted(self._entry_files | self._earlier_files)
 
     def summary(self):
         """How it went, for the status line, e.g. "Done: 2 saved, 1 skipped"."""
