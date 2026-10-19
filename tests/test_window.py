@@ -23,7 +23,7 @@ os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 TESTS = os.path.dirname(os.path.abspath(__file__))
 sys.path[:0] = [os.path.dirname(TESTS), TESTS]   # the app, and tests/fakes.py
 from fakes import fake_yt_dlp, make_fake_ydl  # noqa: E402
-from PySide6.QtCore import QEvent, QMimeData, QPoint, QPointF, QUrl  # noqa: E402
+from PySide6.QtCore import QEvent, QMimeData, QPointF, QUrl  # noqa: E402
 from PySide6.QtGui import (  # noqa: E402
     QDragEnterEvent,
     QDragLeaveEvent,
@@ -957,7 +957,7 @@ class WindowTest(unittest.TestCase):
         return data
 
     def drag(self, data):
-        event = QDragEnterEvent(QPoint(10, 10), ytd.Qt.CopyAction, data,
+        event = QDragEnterEvent(QPointF(10, 10), ytd.Qt.CopyAction, data,
                                 ytd.Qt.LeftButton, ytd.Qt.NoModifier)
         self.app.dragEnterEvent(event)
         return event
