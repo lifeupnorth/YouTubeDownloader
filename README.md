@@ -119,11 +119,12 @@ SignPath project and policy aren't named `YouTubeDownloader` and
    drop-down next to **Clear finished**), and you can add more links while
    they do. If one link fails, the others still download, and the row says why.
 5. Each row has icons on the right: **Pause** and **Cancel** while it waits
-   or downloads, **Resume** once it's paused, then **Show in folder** and
-   **Remove from the list** (which never deletes the file). **Clear finished**
-   removes all finished rows.
+   or downloads, **Resume** once it's paused, **Retry** if it failed (it
+   continues where it stopped), then **Show in folder** and **Remove from the
+   list** (which never deletes the file). **Clear finished** removes all
+   finished rows.
 6. The same actions work from the keyboard on the selected row (arrow keys or
-   a click select one): **Space** pauses or resumes, **Esc** cancels, **Enter**
+   a click select one): **Space** pauses, resumes or retries, **Esc** cancels, **Enter**
    shows the file in its folder, and **Delete** removes the row. Right-click a
    row for a menu with all of them, or double-click it to show its file.
 

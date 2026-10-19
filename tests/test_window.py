@@ -942,7 +942,7 @@ class WindowTest(unittest.TestCase):
         for state, icons in (("waiting", ["pause", "cancel"]),
                              ("downloading", ["pause", "cancel"]),
                              ("paused", ["resume", "cancel"]),
-                             ("failed", ["remove"]), ("canceled", ["remove"])):
+                             ("failed", ["retry", "remove"]), ("canceled", ["remove"])):
             row = ytd.Row(VIDEO, "mp4_best", "f", False, state=state)
             self.assertEqual([n for n, _ in self.app.delegate.icons(rect, row)], icons)
 
@@ -1098,9 +1098,10 @@ class WindowTest(unittest.TestCase):
         items = menu.actions()
         self.assertEqual([(item.text(), item.isEnabled()) for item in items],
                          [("Pause\tSpace", False), ("Resume\tSpace", False),
-                          ("Cancel\tEsc", False), ("Show in folder\tEnter", True),
+                          ("Retry\tSpace", False), ("Cancel\tEsc", False),
+                          ("Show in folder\tEnter", True),
                           ("Remove from the list (the file stays)\tDelete", True)])
-        items[4].trigger()
+        items[5].trigger()
         self.assertEqual(self.rows(), [])
 
     def test_double_click_shows_the_file(self):
@@ -1115,7 +1116,7 @@ class WindowTest(unittest.TestCase):
 
     def test_tooltips_name_the_keys(self):
         self.assertEqual([key for _, key, _ in ytd.ROW_ACTIONS.values()],
-                         ["Space", "Space", "Esc", "Enter", "Delete"])
+                         ["Space", "Space", "Space", "Esc", "Enter", "Delete"])
         for name, (_, _, keys) in ytd.ROW_ACTIONS.items():
             for key in keys:
                 self.assertIn(name, ytd.ACTION_KEYS[key])
@@ -1132,6 +1133,21 @@ class WindowTest(unittest.TestCase):
             self.select(done)
             self.key(ytd.Qt.Key_Space)   # nothing to pause
         self.assertEqual(done.state, "done")
+
+    def test_space_retries_a_failed_download_where_it_stopped(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            with open(os.path.join(tmp, "v0.f0.webm.part"), "wb") as f:
+                f.write(b"x" * 8)   # 40% (the fake writes a byte per 5%)
+            row = ytd.Row(VIDEO, "mp4_best", tmp, False, state="failed", message="timed out")
+            self.app.model.add(row)
+            self.select(row)
+            fake = make_fake_ydl(streams=1, files_dir=tmp)
+            with mock.patch.object(engine, "yt_dlp", fake_yt_dlp(fake)):
+                self.key(ytd.Qt.Key_Space)
+                self.wait(self.idle)
+            self.assertEqual(fake.resumed, [(0, 0, 40)], "it started over")
+            self.assertEqual(self.files(tmp), ["v0.mp4"])
+        self.assertEqual((row.state, row.message), ("done", ""))
 
     def test_a_running_row_cant_be_removed_and_clear_keeps_it(self):
         rows = [ytd.Row(VIDEO, "mp4_best", "f", False, state=s)

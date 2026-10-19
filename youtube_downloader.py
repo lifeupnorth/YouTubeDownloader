@@ -370,11 +370,12 @@ ACTIVE = {"downloading", "processing"}
 FINISHED = {"done", "failed", "canceled", "declined", "empty"}
 
 # What can be done with a row: (what its icon's tooltip and the right-click
-# menu say, its key in the list, the Qt keys). A row has Pause or Resume,
-# never both, so they share Space.
+# menu say, its key in the list, the Qt keys). A row has one of Pause,
+# Resume and Retry at most, so they share Space.
 ROW_ACTIONS = {
     "pause": ("Pause", "Space", (Qt.Key_Space,)),
     "resume": ("Resume", "Space", (Qt.Key_Space,)),
+    "retry": ("Retry", "Space", (Qt.Key_Space,)),
     "cancel": ("Cancel", "Esc", (Qt.Key_Escape,)),
     "folder": ("Show in folder", "Enter", (Qt.Key_Return, Qt.Key_Enter)),
     "remove": ("Remove from the list (the file stays)", "Delete",
@@ -416,6 +417,8 @@ def row_actions(row):
     names = []
     if row.state == "paused":
         names.append("resume")
+    elif row.state == "failed":   # e.g. the network dropped: its .part file continues
+        names.append("retry")
     elif row.state not in FINISHED and not row.pause_event.is_set():   # not "Pausing…"
         names.append("pause")
     if row.state not in FINISHED:
@@ -898,6 +901,14 @@ def draw_icon(painter, name, area, color):
         path.lineTo(x - 4, y + 6.5)
         path.closeSubpath()
         painter.drawPath(path)
+    elif name == "retry":   # a circle open at the top right, its arrow going round
+        circle = QRectF(x - 6, y - 6, 12, 12)
+        path = QPainterPath()
+        path.arcMoveTo(circle, 90)
+        path.arcTo(circle, 90, 270)
+        painter.drawPath(path)
+        painter.drawPolyline([QPointF(x - 2, y - 9), QPointF(x + 1, y - 6),
+                              QPointF(x - 2, y - 3)])
     elif name == "cancel":
         painter.drawLine(QPointF(x - 5, y - 5), QPointF(x + 5, y + 5))
         painter.drawLine(QPointF(x - 5, y + 5), QPointF(x + 5, y - 5))
@@ -1465,7 +1476,7 @@ class YouTubeDownloader(QMainWindow):
         if wanted != self._requested_scheme:
             self._requested_scheme = wanted
             QGuiApplication.styleHints().setColorScheme(wanted)   # may call this again
-        self.shown_theme = name = self._theme_name()
+        name = self._theme_name()
         self.colors = self.model.colors = colors = THEMES[name]
         self.theme_chips[self.theme_mode].setChecked(True)
         folder = os.path.join(self._svg_dir.name, name)
@@ -1935,7 +1946,7 @@ class YouTubeDownloader(QMainWindow):
     def _row_action(self, row, action):
         if action == "pause":
             self._pause_row(row)
-        elif action == "resume":
+        elif action in ("resume", "retry"):
             self._resume_row(row)
         elif action == "cancel":
             self._cancel_row(row)
@@ -1980,9 +1991,10 @@ class YouTubeDownloader(QMainWindow):
             self._history_changed()
         self.model.changed(row)
 
-    # Back in the queue: its download continues the files the pause kept.
+    # Back in the queue: its download continues the files a pause kept, or
+    # the .part file a failed download left (yt-dlp continues those itself).
     def _resume_row(self, row):
-        if row.state != "paused":
+        if row.state not in ("paused", "failed"):
             return
         row.pause_event = threading.Event()   # the next job's
         row.state, row.message, row.restored = "waiting", "", False

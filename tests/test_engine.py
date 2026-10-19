@@ -14,7 +14,7 @@ from unittest import mock
 
 TESTS = os.path.dirname(os.path.abspath(__file__))
 sys.path[:0] = [os.path.dirname(TESTS), TESTS]   # the app, and tests/fakes.py
-from fakes import fake_yt_dlp, make_fake_ydl  # noqa: E402
+from fakes import FakeCancelled, fake_yt_dlp, make_fake_ydl  # noqa: E402
 
 import download_engine as engine  # noqa: E402
 
@@ -646,6 +646,32 @@ class DownloadJobTest(unittest.TestCase):
             names = {ydl.prepare_filename({"id": video_id, "title": "Trailer", "ext": "mp4"})
                      for video_id in ("abc", "xyz")}
         self.assertEqual(len(names), 2)
+
+    def test_a_video_another_job_is_writing_waits_for_it(self):
+        # The same video through two links: only one job writes its files.
+        first, second = make_job(), make_job(url="https://youtu.be/x")
+        first._video_starting({"_filename": os.path.join("dl", "T [x].mp4")})
+        self.addCleanup(first._done_writing)
+        started = threading.Event()
+
+        def start_second():
+            second._video_starting({"_filename": os.path.join("dl", "T [x].webm")})
+            second._done_writing()
+            started.set()
+
+        threading.Thread(target=start_second, daemon=True).start()
+        self.assertFalse(started.wait(0.3), "both wrote the same files at once")
+        self.assertEqual(second.log, ["• Waiting for the other download of this video"])
+        first._file_done({"filepath": os.path.join("dl", "T [x].mp4")})
+        self.assertTrue(started.wait(5), "it kept waiting after the first one finished")
+
+    def test_a_job_waiting_for_another_can_be_canceled(self):
+        first, second = make_job(), make_job()
+        first._video_starting({"_filename": "T [x].mp4"})
+        self.addCleanup(first._done_writing)
+        threading.Timer(0.2, second.cancel).start()
+        with mock.patch.object(engine, "yt_dlp", fake_yt_dlp(make_fake_ydl())),                 self.assertRaises(FakeCancelled):
+            second._video_starting({"_filename": "T [x].mp4"})
 
     def test_an_empty_playlist_isnt_complete(self):
         job = self.run_job(make_fake_ydl(streams=1, videos=0), whole_playlist=True)

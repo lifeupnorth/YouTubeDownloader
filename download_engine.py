@@ -106,9 +106,7 @@ def pinned_yt_dlp_version():
 
 def same_version(a, b):
     """yt-dlp calls itself "2026.08.19" where pip writes "2026.8.19"."""
-    def parts(version):
-        return tuple(int(p) if p.isdigit() else p for p in version.split("."))
-    return parts(a) == parts(b)
+    return not newer_version(a, b) and not newer_version(b, a)
 
 
 # ── Update check ─────────────────────────────────────────────────────────────
@@ -559,6 +557,13 @@ def preview_link(url, whole_playlist, cancel_event=None, js_runtime=None,
 
 NOTHING_TO_DOWNLOAD = "Nothing to download: the link has no videos."
 
+# The videos jobs are writing now, as their file name without the extension.
+# A job for a video another job is writing (the same video through another
+# link, e.g. youtu.be/... and youtube.com/watch?v=...) waits for it, rather
+# than both writing the same .part file.
+_writing = set()
+_writing_changed = threading.Condition()
+
 
 @dataclass(frozen=True)
 class Progress:
@@ -655,6 +660,7 @@ class DownloadJob:
         self._entry_files = set()   # files written for the unfinished video
         self._processes = []        # (process, file it creates or None)
         self._killed_outputs = []   # files the stopped ones were creating
+        self._writing = None        # this job's entry in _writing
         self._lock = threading.Lock()
 
     def cancel(self):
@@ -755,6 +761,7 @@ class DownloadJob:
                 return self.outcome
         finally:
             _current.job = None
+            self._done_writing()
         # Also after a normal return: a stopped ffmpeg is a failed
         # post-processing step for yt-dlp, which it only logs.
         if self.canceled:
@@ -804,9 +811,33 @@ class DownloadJob:
     # progress hook's info_dict doesn't list them, so count them here.
     def _video_starting(self, info):
         self._check_stop()   # also stops a playlist between two videos
+        self._wait_to_write(info.get("_filename"))
         self._stream_index = 0
         self._stream_count = len(info.get("requested_formats") or ()) or 1
         self._entry_files = set()
+
+    # yt-dlp names the file before before_dl and checks whether it's already
+    # there after it, so a job that waited here sees the other one's file.
+    def _wait_to_write(self, filename):
+        self._done_writing()   # the previous video, if it failed
+        if not filename:
+            return
+        name = os.path.normcase(os.path.splitext(os.path.abspath(filename))[0])
+        with _writing_changed:
+            if name in _writing:
+                self.on_log("• Waiting for the other download of this video")
+            while name in _writing:
+                _writing_changed.wait(0.1)
+                self._check_stop()
+            _writing.add(name)
+        self._writing = name
+
+    def _done_writing(self):
+        if self._writing:
+            with _writing_changed:
+                _writing.discard(self._writing)
+                _writing_changed.notify_all()
+            self._writing = None
 
     def _progress_hook(self, d):
         if d["status"] == "downloading":
@@ -837,6 +868,7 @@ class DownloadJob:
     # progress hook only sees the temporary per-stream files).
     def _file_done(self, info):
         self._entry_files.clear()   # finished: nothing for cancel to remove
+        self._done_writing()
         path = info.get("filepath", "")
         self.last_file = path
         # yt-dlp says a video was converted from a stream that's already

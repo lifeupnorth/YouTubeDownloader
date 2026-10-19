@@ -96,6 +96,7 @@ The action icons are drawn by `draw_icon` in the theme's colors, with a round ba
 |---|---|---|---|
 | Two bars, "Pause" | Space | While the row waits or downloads (not while it's pausing) | `_pause_row`: a waiting row is just marked Paused; the running one shows "Pausing…", stops like a cancel, and keeps its partial files (see [Download Pipeline](04-download-pipeline.md#pausing-and-resuming)) |
 | Play triangle, "Resume" | Space | While the row is paused | `_resume_row`: back to waiting; its download continues the partial files |
+| Circular arrow, "Retry" | Space | While the row has failed | `_resume_row`, as for Resume: yt-dlp continues the `.part` file the failed download left |
 | ✕ "Cancel" | Esc | While the row isn't finished | `_cancel_row`: a waiting row is just marked Canceled; the running one shows "Canceling…" and stops at yt-dlp's next status or progress update, and its partial files are removed, also those a pause kept (see [Download Pipeline](04-download-pipeline.md#7-canceling)) |
 | Folder, "Show in folder" | Enter (or a double-click on the row) | Once the row has a file | `_open_folder` → `reveal_in_file_manager`: Explorer with the file selected, Finder with it revealed, or the Linux file manager on its folder |
 | Trash can, "Remove from the list (the file stays)" | Delete (Backspace too: the Mac's Delete key) | Once the row is finished | Removes the row from the list; it turns red under the mouse. It never deletes files |

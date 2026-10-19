@@ -184,7 +184,7 @@ Sources: [download_engine.py:578-582](https://github.com/lifeupnorth/YouTubeDown
 
 ## Limitations
 
-- At most three downloads run at a time (`PARALLEL_CHOICES`), and up to three lookups alongside them. The same link into the same folder never downloads twice at once; the same video through two different links (`youtu.be/…` and `youtube.com/watch?v=…`) still could.
+- At most three downloads run at a time (`PARALLEL_CHOICES`), and up to three lookups alongside them. The same link into the same folder never downloads twice at once (`_clashes`). The same video through two different links (`youtu.be/…` and `youtube.com/watch?v=…`) does start twice, but the second job waits in its `before_dl` step while the first writes that file name (`_wait_to_write`), then finds the file already downloaded.
 - Closing the window during a download asks first; Yes pauses the downloads and the waiting rows, and the window closes once every download has stopped (the lookups are canceled then); the next run lists them as Paused. Closing again while it stops, or a crash, leaves its partial files without the list of them (the row comes back Paused all the same, and Resume continues them, but Cancel can't remove them). If that happens during an MP3 or M4A conversion, the half-converted file stays, and a resumed download takes it for a finished one.
 - yt-dlp extracts a resumed download's formats again, and after a restart YouTube may offer other ones; if yt-dlp then picks another format, it downloads it from the start and the earlier partial file stays.
 - An ffmpeg that is a `.bat`/`.cmd` wrapper runs under `cmd.exe /C`, so Cancel stops only `cmd.exe`.
