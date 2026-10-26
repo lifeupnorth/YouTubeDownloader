@@ -7,7 +7,7 @@
 # challenge solver, which runs in the JavaScript runtime), plus websockets,
 # requests, brotli, certifi, mutagen and pycryptodomex. yt-dlp pins the exact
 # yt-dlp-ejs version itself, so bumping this line keeps the two in step.
-yt-dlp[default]==2026.8.19
+yt-dlp[default]==2026.10.21
 
 # The window. "Essentials" is Qt's core modules (widgets, not QML or 3D),
 # which keeps the .exe smaller. LGPL-3.0; see packaging/THIRD-PARTY-NOTICES.txt.
